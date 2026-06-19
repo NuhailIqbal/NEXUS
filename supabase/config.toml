@@ -1,0 +1,7 @@
+project_id = "hwjnipdfhgvcwvilnzro"
+
+[functions.process-email-queue]
+verify_jwt = true
+
+[functions.agent-chat]
+verify_jwt = false

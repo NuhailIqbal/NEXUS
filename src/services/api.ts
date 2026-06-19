@@ -1,0 +1,154 @@
+import { supabase } from "@/integrations/supabase/client";
+
+const API_URL = "/api";
+
+async function getToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+async function request<T = any>(
+  path: string,
+  options: RequestInit = {},
+): Promise<{ data: T | null; error: string | null; meta?: any }> {
+  const token = await getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  try {
+    const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { data: null, error: body.detail || `Error ${res.status}` };
+    }
+    const body = await res.json();
+    return { data: body.data ?? body, error: body.error ?? null, meta: body.meta };
+  } catch (e: any) {
+    return { data: null, error: e.message || "Network error" };
+  }
+}
+
+function get<T = any>(path: string) {
+  return request<T>(path);
+}
+
+function post<T = any>(path: string, body?: any) {
+  return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+}
+
+function patch<T = any>(path: string, body: any) {
+  return request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+function del<T = any>(path: string) {
+  return request<T>(path, { method: "DELETE" });
+}
+
+export const api = {
+  // Agents
+  getAgents: () => get("/agents"),
+  createAgent: (data: any) => post("/agents", data),
+  updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
+  deleteAgent: (id: string) => del(`/agents/${id}`),
+
+  // Contacts
+  getContacts: () => get("/contacts"),
+  createContact: (data: any) => post("/contacts", data),
+  updateContact: (id: string, data: any) => patch(`/contacts/${id}`, data),
+  deleteContact: (id: string) => del(`/contacts/${id}`),
+
+  // Lists
+  getLists: () => get("/lists"),
+  createList: (data: any) => post("/lists", data),
+  updateList: (id: string, data: any) => patch(`/lists/${id}`, data),
+  deleteList: (id: string) => del(`/lists/${id}`),
+
+  // Custom Fields
+  getCustomFields: () => get("/custom-fields"),
+  createCustomField: (data: any) => post("/custom-fields", data),
+  updateCustomField: (id: string, data: any) => patch(`/custom-fields/${id}`, data),
+  deleteCustomField: (id: string) => del(`/custom-fields/${id}`),
+
+  // Tools
+  getTools: () => get("/tools"),
+  createTool: (data: any) => post("/tools", data),
+  updateTool: (id: string, data: any) => patch(`/tools/${id}`, data),
+  deleteTool: (id: string) => del(`/tools/${id}`),
+
+  // Conversations
+  getConversations: (params?: string) => get(`/conversations${params ? `?${params}` : ""}`),
+  getConversation: (id: string) => get(`/conversations/${id}`),
+  getConversationTranscript: (id: string) => get(`/conversations/${id}/transcript`),
+  getConversationStats: () => get("/conversations/stats"),
+  deleteConversation: (id: string) => del(`/conversations/${id}`),
+
+  // Telephony - Phone Numbers
+  getPhoneNumbers: () => get("/telephony/phone-numbers"),
+  createPhoneNumber: (data: any) => post("/telephony/phone-numbers", data),
+  updatePhoneNumber: (id: string, data: any) => patch(`/telephony/phone-numbers/${id}`, data),
+  deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
+
+  // Telephony - Campaigns
+  getCampaigns: () => get("/telephony/campaigns"),
+  createCampaign: (data: any) => post("/telephony/campaigns", data),
+  getCampaign: (id: string) => get(`/telephony/campaigns/${id}`),
+  updateCampaign: (id: string, data: any) => patch(`/telephony/campaigns/${id}`, data),
+  deleteCampaign: (id: string) => del(`/telephony/campaigns/${id}`),
+  startCampaign: (id: string) => post(`/telephony/campaigns/${id}/start`),
+  pauseCampaign: (id: string) => post(`/telephony/campaigns/${id}/pause`),
+  resumeCampaign: (id: string) => post(`/telephony/campaigns/${id}/resume`),
+
+  // Telephony - Call
+  makeCall: (data: any) => post("/telephony/call", data),
+
+  // Telephony - Inbound
+  getInboundQueues: () => get("/telephony/inbound"),
+  createInboundQueue: (data: any) => post("/telephony/inbound", data),
+  updateInboundQueue: (id: string, data: any) => patch(`/telephony/inbound/${id}`, data),
+  deleteInboundQueue: (id: string) => del(`/telephony/inbound/${id}`),
+
+  // Voice Widgets
+  getVoiceWidgets: () => get("/voice-widgets"),
+  createVoiceWidget: (data: any) => post("/voice-widgets", data),
+  updateVoiceWidget: (id: string, data: any) => patch(`/voice-widgets/${id}`, data),
+  deleteVoiceWidget: (id: string) => del(`/voice-widgets/${id}`),
+
+  // Integrations
+  getIntegrations: () => get("/integrations"),
+  createIntegration: (data: any) => post("/integrations", data),
+  updateIntegration: (id: string, data: any) => patch(`/integrations/${id}`, data),
+  deleteIntegration: (id: string) => del(`/integrations/${id}`),
+
+  // Analytics
+  getAnalyticsOverview: () => get("/analytics/overview"),
+  getAnalyticsChannel: () => get("/analytics/channel"),
+  getAnalyticsCampaign: () => get("/analytics/campaign"),
+  getAnalyticsAgent: () => get("/analytics/agent"),
+
+  // Automation
+  getFlows: () => get("/automation/flows"),
+  createFlow: (data: any) => post("/automation/flows", data),
+  getFlow: (id: string) => get(`/automation/flows/${id}`),
+  updateFlow: (id: string, data: any) => patch(`/automation/flows/${id}`, data),
+  deleteFlow: (id: string) => del(`/automation/flows/${id}`),
+  getRuns: (params?: string) => get(`/automation/runs${params ? `?${params}` : ""}`),
+  getRunsStats: () => get("/automation/runs/stats"),
+
+  // Team
+  getTeam: () => get("/team"),
+  inviteTeamMember: (data: any) => post("/team/invite", data),
+  updateTeamMember: (id: string, data: any) => patch(`/team/${id}`, data),
+  removeTeamMember: (id: string) => del(`/team/${id}`),
+
+  // Profile
+  getProfile: () => get("/profile"),
+  updateProfile: (data: any) => patch("/profile", data),
+
+  // Health
+  getHealth: () => get("/health"),
+};
