@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user
 from database import supabase
@@ -9,6 +10,8 @@ from models.schemas import (
 )
 from services import vapi_client
 from config import settings
+
+CAMPAIGN_BATCH_SIZE = 20
 
 router = APIRouter(prefix="/telephony", tags=["Telephony"])
 
@@ -253,9 +256,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         if pn.data:
             phone_number_id = pn.data.get("vapi_phone_id")
 
-    dialed = 0
-    errors = []
-    for contact in contacts.data:
+    async def dial_contact(contact):
         call_payload = {
             "assistantId": vapi_assistant_id,
             "customer": {"number": contact["phone"]},
@@ -264,9 +265,21 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             call_payload["phoneNumberId"] = phone_number_id
         try:
             await vapi_client.create_call(call_payload)
-            dialed += 1
+            return {"success": True, "phone": contact["phone"]}
         except Exception as e:
-            errors.append({"phone": contact["phone"], "error": str(e)})
+            return {"success": False, "phone": contact["phone"], "error": str(e)}
+
+    dialed = 0
+    errors = []
+    all_contacts = contacts.data
+    for i in range(0, len(all_contacts), CAMPAIGN_BATCH_SIZE):
+        batch = all_contacts[i:i + CAMPAIGN_BATCH_SIZE]
+        results = await asyncio.gather(*[dial_contact(c) for c in batch])
+        for r in results:
+            if r["success"]:
+                dialed += 1
+            else:
+                errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
 
     supabase.table("outbound_campaigns").update({
         "status": "Active",

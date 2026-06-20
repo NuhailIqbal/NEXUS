@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, Trash2, Save } from "lucide-react";
+import { X, Trash2, Save, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -37,19 +37,31 @@ export function NodeEditPanel({ node, onClose, onSave, onDelete }: Props) {
       case "sms":
         return (
           <>
+            <CredentialBanner
+              icon="📱"
+              text="Requires Twilio credentials"
+              hint="Add your Twilio SID + Token in"
+            />
             <Field label="Message">
-              <Textarea rows={4} value={config.message ?? ""} onChange={(e) => set("message", e.target.value)} placeholder="Hi {{name}}, ..." />
+              <Textarea rows={4} value={config.message ?? ""} onChange={(e) => set("message", e.target.value)} placeholder="Hi {{contact_name}}, thanks for your time today!" />
             </Field>
-            <Field label="From number">
-              <Input value={config.from ?? ""} onChange={(e) => set("from", e.target.value)} placeholder="+1 555 ..." />
+            <Field label="From number (Twilio)">
+              <Input value={config.from ?? ""} onChange={(e) => set("from", e.target.value)} placeholder="+15551234567" />
             </Field>
+            <p className="text-xs text-muted-foreground">Variables: <code>{"{{contact_name}}"}</code>, <code>{"{{phone}}"}</code>, <code>{"{{status}}"}</code></p>
           </>
         );
       case "email":
         return (
           <>
-            <Field label="Subject"><Input value={config.subject ?? ""} onChange={(e) => set("subject", e.target.value)} /></Field>
-            <Field label="Body"><Textarea rows={5} value={config.body ?? ""} onChange={(e) => set("body", e.target.value)} /></Field>
+            <CredentialBanner
+              icon="✉️"
+              text="Requires Brevo API key"
+              hint="Add your Brevo API key in"
+            />
+            <Field label="Subject"><Input value={config.subject ?? ""} onChange={(e) => set("subject", e.target.value)} placeholder="Follow-up from your call" /></Field>
+            <Field label="Body"><Textarea rows={5} value={config.body ?? ""} onChange={(e) => set("body", e.target.value)} placeholder={"Hi {{contact_name}},\n\nThank you for speaking with us today..."} /></Field>
+            <p className="text-xs text-muted-foreground">Variables: <code>{"{{contact_name}}"}</code>, <code>{"{{phone}}"}</code>, <code>{"{{status}}"}</code></p>
           </>
         );
       case "condition":
@@ -153,6 +165,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</Label>
       {children}
+    </div>
+  );
+}
+
+function CredentialBanner({ icon, text, hint }: { icon: string; text: string; hint: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        <span className="font-semibold">{icon} {text}.</span>{" "}
+        {hint}{" "}
+        <a href="/dashboard/integrations" className="underline hover:opacity-80">
+          Integrations
+        </a>
+        {" "}to set up.
+      </span>
     </div>
   );
 }

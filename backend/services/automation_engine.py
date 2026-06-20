@@ -2,6 +2,8 @@ import asyncio
 import httpx
 import logging
 from database import supabase
+from services.email_service import send_email
+from services.sms_service import send_sms
 
 logger = logging.getLogger(__name__)
 
@@ -113,17 +115,34 @@ async def _execute_node(user_id: str, node: dict, conversation: dict):
         pass
 
     elif node_type == "sms":
-        phone = conversation.get("phone")
-        message = data.get("message", "")
-        message = _interpolate(message, conversation)
-        logger.info(f"SMS node: would send '{message}' to {phone}")
+        phone = conversation.get("phone", "")
+        message = _interpolate(data.get("message", ""), conversation)
+        from_number = data.get("from", "").strip()
+        if not phone:
+            logger.warning("SMS node: no phone number in conversation, skipping")
+        elif not message:
+            logger.warning("SMS node: empty message, skipping")
+        else:
+            try:
+                await send_sms(user_id, phone, message, from_number)
+                logger.info(f"SMS node: sent to {phone}")
+            except Exception as e:
+                logger.error(f"SMS node failed: {e}")
+                raise
 
     elif node_type == "email":
-        to_email = data.get("to") or conversation.get("email", "")
-        subject = data.get("subject", "Follow-up")
-        body = data.get("body", "")
-        body = _interpolate(body, conversation)
-        logger.info(f"Email node: would send '{subject}' to {to_email}")
+        to_email = (data.get("to") or conversation.get("email", "")).strip()
+        subject = _interpolate(data.get("subject", "Follow-up"), conversation)
+        body = _interpolate(data.get("body", ""), conversation)
+        if not to_email:
+            logger.warning("Email node: no recipient email, skipping")
+        else:
+            try:
+                await send_email(user_id, to_email, subject, body)
+                logger.info(f"Email node: sent to {to_email}")
+            except Exception as e:
+                logger.error(f"Email node failed: {e}")
+                raise
 
     elif node_type == "update_contact":
         contact_id = conversation.get("contact_id")
