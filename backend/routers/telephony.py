@@ -46,7 +46,7 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
                     .select("vapi_assistant_id")
                     .eq("id", body.agent_id)
                     .eq("user_id", user["user_id"])
-                    .single()
+                    .maybe_single()
                     .execute()
                 )
                 if agent.data and agent.data.get("vapi_assistant_id"):
@@ -84,7 +84,7 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
         .select("vapi_phone_id")
         .eq("id", number_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if existing.data and existing.data.get("vapi_phone_id") and settings.vapi_api_key:
@@ -108,7 +108,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
         .select("vapi_assistant_id")
         .eq("id", body.agent_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not agent.data or not agent.data.get("vapi_assistant_id"):
@@ -125,7 +125,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
             .select("vapi_phone_id")
             .eq("id", body.phone_number_id)
             .eq("user_id", user["user_id"])
-            .single()
+            .maybe_single()
             .execute()
         )
         if phone.data and phone.data.get("vapi_phone_id"):
@@ -179,7 +179,7 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", campaign_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:
@@ -215,7 +215,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         .select("*, ai_agents!outbound_campaigns_agent_id_fkey(vapi_assistant_id)")
         .eq("id", campaign_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not campaign.data:
@@ -250,7 +250,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             supabase.table("phone_numbers")
             .select("vapi_phone_id")
             .eq("id", camp["phone_number_id"])
-            .single()
+            .maybe_single()
             .execute()
         )
         if pn.data:
@@ -333,7 +333,7 @@ async def get_inbound_queue(queue_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", queue_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:

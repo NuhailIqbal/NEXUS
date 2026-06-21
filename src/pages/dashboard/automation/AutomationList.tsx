@@ -119,4 +119,3 @@ const Automation = ({ v2 = false }: { v2?: boolean }) => {
 };
 
 export const AutomationList = () => <Automation />;
-export const AutomationV2List = () => <Automation v2 />;

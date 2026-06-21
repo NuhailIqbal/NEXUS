@@ -72,26 +72,31 @@ const Integrations = () => {
     toast.success("Integration removed");
   };
 
-  const openTest = (i: Integration) => {
+  const openTest = async (i: Integration) => {
     setTestTarget(i);
     setTestState("running");
-    setTestLog([`Connecting to ${i.name}...`]);
-    setTimeout(() => {
-      setTestLog((l) => [...l, "Authenticating credentials..."]);
-    }, 400);
-    setTimeout(() => {
-      setTestLog((l) => [...l, "Sending test request..."]);
-    }, 900);
-    setTimeout(() => {
-      const ok = i.status !== "Inactive";
-      if (ok) {
-        setTestLog((l) => [...l, `Connection healthy (latency 142ms)`]);
-        setTestState("success");
-      } else {
-        setTestLog((l) => [...l, `Connection refused -- integration is inactive`]);
-        setTestState("fail");
-      }
-    }, 1500);
+    setTestLog([`Connecting to ${i.name}…`, "Sending authenticated request…"]);
+
+    const { data, error } = await api.testIntegration(i.id);
+    if (error) {
+      setTestLog((l) => [...l, `Test failed: ${error}`]);
+      setTestState("fail");
+      return;
+    }
+
+    const result = data as { ok: boolean; message: string; latency_ms: number | null; provider: string | null } | null;
+    if (!result) {
+      setTestLog((l) => [...l, "Test failed: no response from server"]);
+      setTestState("fail");
+      return;
+    }
+
+    const tail: string[] = [];
+    if (result.provider) tail.push(`Detected provider: ${result.provider}`);
+    const latencyText = result.latency_ms != null ? ` (latency ${result.latency_ms}ms)` : "";
+    tail.push(`${result.message}${latencyText}`);
+    setTestLog((l) => [...l, ...tail]);
+    setTestState(result.ok ? "success" : "fail");
   };
 
   const openSettings = (i: Integration) => {

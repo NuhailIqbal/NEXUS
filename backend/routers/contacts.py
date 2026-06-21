@@ -38,7 +38,7 @@ async def get_contact(contact_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", contact_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     return {"data": result.data, "error": None}

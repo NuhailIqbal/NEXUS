@@ -55,6 +55,26 @@ export const api = {
   createAgent: (data: any) => post("/agents", data),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
   deleteAgent: (id: string) => del(`/agents/${id}`),
+  uploadAgentKnowledge: async (agentId: string, file: File) => {
+    const token = await getToken();
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch(`${API_URL}/agents/${agentId}/knowledge`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { data: null, error: body.detail || `Error ${res.status}` };
+      }
+      const body = await res.json();
+      return { data: body.data ?? body, error: body.error ?? null };
+    } catch (e: any) {
+      return { data: null, error: e.message || "Network error" };
+    }
+  },
 
   // Contacts
   getContacts: () => get("/contacts"),
@@ -123,6 +143,7 @@ export const api = {
   createIntegration: (data: any) => post("/integrations", data),
   updateIntegration: (id: string, data: any) => patch(`/integrations/${id}`, data),
   deleteIntegration: (id: string) => del(`/integrations/${id}`),
+  testIntegration: (id: string) => post(`/integrations/${id}/test`),
 
   // Analytics
   getAnalyticsOverview: () => get("/analytics/overview"),
@@ -136,6 +157,9 @@ export const api = {
   getFlow: (id: string) => get(`/automation/flows/${id}`),
   updateFlow: (id: string, data: any) => patch(`/automation/flows/${id}`, data),
   deleteFlow: (id: string) => del(`/automation/flows/${id}`),
+  getFlowVersions: (flowId: string) => get(`/automation/flows/${flowId}/versions`),
+  getFlowVersion: (flowId: string, versionId: string) => get(`/automation/flows/${flowId}/versions/${versionId}`),
+  restoreFlowVersion: (flowId: string, versionId: string) => post(`/automation/flows/${flowId}/versions/${versionId}/restore`),
   getRuns: (params?: string) => get(`/automation/runs${params ? `?${params}` : ""}`),
   getRunsStats: () => get("/automation/runs/stats"),
 

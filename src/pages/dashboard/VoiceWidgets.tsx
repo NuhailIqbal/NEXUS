@@ -30,7 +30,12 @@ type Widget = {
   status: string;
   agent: string;
   position: string;
+  public_token?: string;
 };
+
+const EMBED_BASE_URL =
+  (import.meta as any).env?.VITE_API_PUBLIC_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 const VoiceWidgets = () => {
   const [open, setOpen] = useState(false);
@@ -44,11 +49,32 @@ const VoiceWidgets = () => {
   const [embedFor, setEmbedFor] = useState<Widget | null>(null);
 
   const fetchWidgets = useCallback(async () => {
-    const { data, error } = await api.getVoiceWidgets();
-    if (error) {
-      toast.error(error);
+    const [widgetsRes, agentsRes] = await Promise.all([
+      api.getVoiceWidgets(),
+      api.getAgents(),
+    ]);
+    if (widgetsRes.error) {
+      toast.error(widgetsRes.error);
     } else {
-      setWidgets(data ?? []);
+      const agentsById = new Map<string, string>(
+        (agentsRes.data ?? []).map((a: any) => [a.id, a.name]),
+      );
+      const positionLabel = (slug?: string): string => {
+        if (!slug) return "Bottom Right";
+        return slug
+          .split("-")
+          .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+          .join(" ");
+      };
+      const normalized: Widget[] = (widgetsRes.data ?? []).map((w: any) => ({
+        id: w.id,
+        name: w.name,
+        status: w.status,
+        public_token: w.public_token,
+        agent: w.agent_id ? agentsById.get(w.agent_id) ?? "Unassigned" : "Unassigned",
+        position: positionLabel(w.config?.position),
+      }));
+      setWidgets(normalized);
     }
     setLoading(false);
   }, []);
@@ -77,32 +103,70 @@ const VoiceWidgets = () => {
 
   const saveSettings = async () => {
     if (!settingsTarget) return;
+    // The settings dialog only edits display fields (name, status, position label).
+    // agent_id is set at creation; position is folded into the config blob backend-side via the embed.js.
+    const newPosition = settingsForm.position ?? settingsTarget.position;
     const patch = {
       name: settingsForm.name ?? settingsTarget.name,
       status: settingsForm.status ?? settingsTarget.status,
-      agent: settingsForm.agent ?? settingsTarget.agent,
-      position: settingsForm.position ?? settingsTarget.position,
+      config: {
+        position: newPosition.toLowerCase().replace(/\s+/g, "-"),
+      },
     };
     const { error } = await api.updateVoiceWidget(settingsTarget.id, patch);
     if (error) return toast.error(error);
-    setWidgets((prev) => prev.map((x) => (x.id === settingsTarget.id ? { ...x, ...patch } : x)));
+    setWidgets((prev) => prev.map((x) =>
+      x.id === settingsTarget.id ? { ...x, name: patch.name, status: patch.status, position: newPosition } : x,
+    ));
     toast.success("Widget saved");
     setSettingsTarget(null);
   };
 
-  const handleCreate = async (d: { widgetName: string; status: string; agentName: string; position: string; agentId: string; callType: string; maxCalls: number; recordCalls: boolean; showTranscription: boolean }) => {
+  const handleCreate = async (d: {
+    widgetName: string;
+    status: string;
+    agentName: string;
+    position: string;
+    agentId: string;
+    callType: string;
+    maxCalls: number;
+    recordCalls: boolean;
+    showTranscription: boolean;
+    primaryColor: string;
+    autoOpen: boolean;
+  }) => {
+    const positionSlug = d.position.toLowerCase().replace(/\s+/g, "-");
+    const buttonLabel =
+      d.callType === "Voice + Video" || d.callType === "Video" ? "Start Call" : "Talk to AI";
+
     const { data, error } = await api.createVoiceWidget({
       name: d.widgetName,
       status: d.status,
-      agent: d.agentName,
-      position: d.position,
+      agent_id: d.agentId,
+      config: {
+        position: positionSlug,
+        buttonColor: d.primaryColor,
+        buttonLabel,
+        callType: d.callType,
+        maxCalls: d.maxCalls,
+        recordCalls: d.recordCalls,
+        showTranscription: d.showTranscription,
+        autoOpen: d.autoOpen,
+      },
     });
     if (error) return toast.error(error);
-    if (data) setWidgets((prev) => [data, ...prev]);
+    if (data) {
+      setWidgets((prev) => [{ ...data, agent: d.agentName, position: d.position }, ...prev]);
+      toast.success("Voice widget created");
+    }
   };
 
-  const embedSnippet = (w: Widget) =>
-    `<script src="https://cdn.edmnexus.ai/widget.js"\n        data-widget-id="${w.id}"\n        data-agent="${w.agent}"\n        data-position="${w.position.toLowerCase().replace(" ", "-")}"></script>`;
+  const embedSnippet = (w: Widget) => {
+    if (!w.public_token) {
+      return "<!-- Save this widget to generate an embed snippet -->";
+    }
+    return `<script async src="${EMBED_BASE_URL}/api/voice-widgets/${w.public_token}/embed.js"></script>`;
+  };
 
   if (loading) {
     return (

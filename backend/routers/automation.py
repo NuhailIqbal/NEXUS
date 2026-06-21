@@ -6,6 +6,37 @@ from typing import Optional
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
 
+VERSION_HISTORY_LIMIT = 10
+
+
+def _snapshot_flow_version(user_id: str, flow_id: str, definition: dict) -> None:
+    """Persist a snapshot of a flow's definition, keeping at most VERSION_HISTORY_LIMIT per flow."""
+    if not definition:
+        return
+
+    existing = (
+        supabase.table("automation_flow_versions")
+        .select("id, version_number")
+        .eq("flow_id", flow_id)
+        .order("version_number", desc=True)
+        .execute()
+    )
+    rows = existing.data or []
+    next_version = (rows[0]["version_number"] + 1) if rows else 1
+
+    supabase.table("automation_flow_versions").insert({
+        "flow_id": flow_id,
+        "user_id": user_id,
+        "version_number": next_version,
+        "definition": definition,
+    }).execute()
+
+    if len(rows) >= VERSION_HISTORY_LIMIT:
+        # rows are newest-first; delete everything past the limit-1 we just added one more to
+        to_delete = rows[VERSION_HISTORY_LIMIT - 1:]
+        for r in to_delete:
+            supabase.table("automation_flow_versions").delete().eq("id", r["id"]).execute()
+
 
 class FlowCreate(BaseModel):
     name: str
@@ -50,7 +81,7 @@ async def get_flow(flow_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", flow_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:
@@ -63,9 +94,96 @@ async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_u
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+
+    if "definition" in updates:
+        current = (
+            supabase.table("automation_flows")
+            .select("definition")
+            .eq("id", flow_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        if current.data and current.data.get("definition"):
+            _snapshot_flow_version(user["user_id"], flow_id, current.data["definition"])
+
     result = (
         supabase.table("automation_flows")
         .update(updates)
+        .eq("id", flow_id)
+        .eq("user_id", user["user_id"])
+        .execute()
+    )
+    return {"data": result.data[0] if result.data else None, "error": None}
+
+
+@router.get("/flows/{flow_id}/versions")
+async def list_flow_versions(flow_id: str, user=Depends(get_current_user)):
+    owner = (
+        supabase.table("automation_flows")
+        .select("id")
+        .eq("id", flow_id)
+        .eq("user_id", user["user_id"])
+        .execute()
+    )
+    if not owner.data:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    result = (
+        supabase.table("automation_flow_versions")
+        .select("id, version_number, created_at")
+        .eq("flow_id", flow_id)
+        .eq("user_id", user["user_id"])
+        .order("version_number", desc=True)
+        .execute()
+    )
+    return {"data": result.data or [], "error": None}
+
+
+@router.get("/flows/{flow_id}/versions/{version_id}")
+async def get_flow_version(flow_id: str, version_id: str, user=Depends(get_current_user)):
+    result = (
+        supabase.table("automation_flow_versions")
+        .select("*")
+        .eq("id", version_id)
+        .eq("flow_id", flow_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return {"data": result.data, "error": None}
+
+
+@router.post("/flows/{flow_id}/versions/{version_id}/restore")
+async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_current_user)):
+    version = (
+        supabase.table("automation_flow_versions")
+        .select("definition")
+        .eq("id", version_id)
+        .eq("flow_id", flow_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not version.data:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    current = (
+        supabase.table("automation_flows")
+        .select("definition")
+        .eq("id", flow_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    if current.data and current.data.get("definition"):
+        _snapshot_flow_version(user["user_id"], flow_id, current.data["definition"])
+
+    result = (
+        supabase.table("automation_flows")
+        .update({"definition": version.data["definition"]})
         .eq("id", flow_id)
         .eq("user_id", user["user_id"])
         .execute()
@@ -131,7 +249,7 @@ async def get_run(run_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", run_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:

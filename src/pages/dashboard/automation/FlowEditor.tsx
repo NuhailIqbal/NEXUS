@@ -42,6 +42,9 @@ import {
 } from "@/components/automation/flow-nodes";
 import { NodeEditPanel } from "@/components/automation/NodeEditPanel";
 import { newId } from "@/hooks/use-local-collection";
+import { api } from "@/services/api";
+
+type ServerVersion = { id: string; version_number: number; created_at: string };
 
 const STORAGE_KEY = (id: string) => `flow:graph:${id}`;
 const HISTORY_KEY = (id: string) => `flow:history:${id}`;
@@ -100,11 +103,66 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selected, setSelected] = useState<Node<FlowNodeData> | null>(null);
   const [savingHint, setSavingHint] = useState<string | null>(null);
+  const [loadingFlow, setLoadingFlow] = useState(flowId !== "new");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<Snapshot[]>(() => {
     if (typeof window === "undefined") return [];
     try { return JSON.parse(window.localStorage.getItem(HISTORY_KEY(flowId)) ?? "[]"); } catch { return []; }
   });
+  const [serverVersions, setServerVersions] = useState<ServerVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+
+  const loadServerVersions = useCallback(async () => {
+    if (!flowId || flowId === "new") return;
+    setVersionsLoading(true);
+    const { data } = await api.getFlowVersions(flowId);
+    if (Array.isArray(data)) setServerVersions(data);
+    setVersionsLoading(false);
+  }, [flowId]);
+
+  useEffect(() => {
+    if (historyOpen) loadServerVersions();
+  }, [historyOpen, loadServerVersions]);
+
+  // Load flow from server (source of truth) — localStorage only seeds the first paint.
+  useEffect(() => {
+    let cancelled = false;
+    if (!flowId || flowId === "new") return;
+    (async () => {
+      const { data, error } = await api.getFlow(flowId);
+      if (cancelled) return;
+      if (error || !data) {
+        setLoadingFlow(false);
+        return;
+      }
+      if (data.name) setName(data.name);
+      const def = data.definition;
+      if (def && Array.isArray(def.nodes)) {
+        setNodes(def.nodes);
+        setEdges(Array.isArray(def.edges) ? def.edges : []);
+      }
+      setLoadingFlow(false);
+    })();
+    return () => { cancelled = true; };
+  }, [flowId, setNodes, setEdges]);
+
+  const restoreServerVersion = async (versionId: string) => {
+    const { data: ver } = await api.getFlowVersion(flowId, versionId);
+    if (!ver?.definition) {
+      toast.error("Could not load that version");
+      return;
+    }
+    const { error } = await api.restoreFlowVersion(flowId, versionId);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setNodes(ver.definition.nodes || []);
+    setEdges(ver.definition.edges || []);
+    setHistoryOpen(false);
+    toast.success(`Restored version ${ver.version_number}`);
+    loadServerVersions();
+  };
 
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const rfRef = useRef<ReactFlowInstance | null>(null);
@@ -170,27 +228,44 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   };
 
   const handleSave = useCallback(
-    (silent = false) => {
+    async (silent = false) => {
       const snap: Snapshot = { nodes, edges, savedAt: new Date().toISOString() };
       saveGraph(flowId, snap);
       setHistory((h) => [snap, ...h].slice(0, 10));
-      if (!silent) toast.success("Flow saved");
-      else {
-        setSavingHint("Saved");
-        setTimeout(() => setSavingHint(null), 1500);
+
+      if (flowId && flowId !== "new") {
+        const { error } = await api.updateFlow(flowId, {
+          name,
+          definition: { nodes, edges },
+        });
+        if (error && !silent) {
+          toast.error(`Saved locally but server update failed: ${error}`);
+        } else if (!silent) {
+          toast.success("Flow saved");
+        } else {
+          setSavingHint("Saved");
+          setTimeout(() => setSavingHint(null), 1500);
+        }
+      } else {
+        if (!silent) toast.success("Flow saved locally");
+        else {
+          setSavingHint("Saved");
+          setTimeout(() => setSavingHint(null), 1500);
+        }
       }
     },
-    [flowId, nodes, edges],
+    [flowId, name, nodes, edges],
   );
 
-  // Auto-save every 30s
+  // Auto-save every 30s (skip while initial server fetch is in flight)
   useEffect(() => {
+    if (loadingFlow) return;
     const t = window.setInterval(() => {
       setSavingHint("Saving…");
       handleSave(true);
     }, 30000);
     return () => window.clearInterval(t);
-  }, [handleSave]);
+  }, [handleSave, loadingFlow]);
 
   return (
     <div className="-mx-4 -my-6 flex h-[calc(100vh-4rem)] flex-col bg-background sm:-mx-6 lg:-mx-8">
@@ -215,7 +290,8 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
           <button className="hidden md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
             <SettingsIcon className="h-4 w-4" /> Settings
           </button>
-          {savingHint && <span className="text-xs text-muted-foreground">{savingHint}</span>}
+          {loadingFlow && <span className="text-xs text-muted-foreground">Loading…</span>}
+          {!loadingFlow && savingHint && <span className="text-xs text-muted-foreground">{savingHint}</span>}
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -227,32 +303,55 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
               <History className="h-4 w-4" />
             </button>
             {historyOpen && (
-              <div className="absolute right-0 top-full z-30 mt-2 w-64 rounded-lg border border-border bg-card p-2 shadow-lg">
+              <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-2 shadow-lg">
                 <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Last saves
+                  Saved Versions {versionsLoading && <span className="ml-1 normal-case font-normal">— loading…</span>}
                 </div>
-                {history.length === 0 ? (
-                  <div className="p-3 text-center text-xs text-muted-foreground">No history yet</div>
+                {serverVersions.length === 0 && !versionsLoading ? (
+                  <div className="p-3 text-center text-xs text-muted-foreground">
+                    No saved versions yet. Save the flow to create one.
+                  </div>
                 ) : (
-                  history.map((h) => (
+                  serverVersions.map((v) => (
                     <button
-                      key={h.savedAt}
-                      onClick={() => {
-                        setNodes(h.nodes);
-                        setEdges(h.edges);
-                        setHistoryOpen(false);
-                        toast.success("Restored snapshot");
-                      }}
+                      key={v.id}
+                      onClick={() => restoreServerVersion(v.id)}
                       className="block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
                     >
-                      {new Date(h.savedAt).toLocaleString()} · {h.nodes.length} nodes
+                      <span className="font-semibold">v{v.version_number}</span>{" "}
+                      <span className="text-muted-foreground">· {new Date(v.created_at).toLocaleString()}</span>
                     </button>
                   ))
+                )}
+                {history.length > 0 && (
+                  <>
+                    <div className="mt-2 border-t border-border pt-2 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Local Snapshots
+                    </div>
+                    {history.slice(0, 5).map((h) => (
+                      <button
+                        key={h.savedAt}
+                        onClick={() => {
+                          setNodes(h.nodes);
+                          setEdges(h.edges);
+                          setHistoryOpen(false);
+                          toast.success("Restored local snapshot");
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
+                      >
+                        {new Date(h.savedAt).toLocaleString()} · {h.nodes.length} nodes
+                      </button>
+                    ))}
+                  </>
                 )}
               </div>
             )}
           </div>
-          <Button onClick={() => handleSave(false)} className="bg-primary text-primary-foreground hover:opacity-90">
+          <Button
+            onClick={() => handleSave(false)}
+            disabled={loadingFlow}
+            className="bg-primary text-primary-foreground hover:opacity-90"
+          >
             <Save className="mr-1.5 h-4 w-4" /> Save
           </Button>
           <Button
@@ -430,4 +529,3 @@ const FlowEditor = ({ v2 = false }: { v2?: boolean }) => (
 );
 
 export const AutomationFlowEditor = () => <FlowEditor />;
-export const AutomationV2FlowEditor = () => <FlowEditor v2 />;

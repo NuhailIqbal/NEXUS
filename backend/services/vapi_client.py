@@ -117,20 +117,25 @@ async def delete_phone_number(phone_id: str) -> None:
 
 
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
-                             system_prompt: str = None, first_message: str = None) -> dict:
+                             system_prompt: str = None, first_message: str = None,
+                             tool_ids: list[str] | None = None) -> dict:
+    model: dict = {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": system_prompt or f"You are {name}, a helpful AI assistant."}
+        ],
+    }
+    if tool_ids:
+        model["toolIds"] = tool_ids
+
     payload = {
         "name": name,
         "transcriber": {
             "provider": "deepgram",
             "language": language or "en",
         },
-        "model": {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": system_prompt or f"You are {name}, a helpful AI assistant."}
-            ],
-        },
+        "model": model,
     }
     if first_message:
         payload["firstMessage"] = first_message

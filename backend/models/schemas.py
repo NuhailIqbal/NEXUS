@@ -104,6 +104,10 @@ class AgentCreate(BaseModel):
     status: str = "Active"
     system_prompt: Optional[str] = None
     first_message: Optional[str] = None
+    main_goal: Optional[str] = None
+    website: Optional[str] = None
+    knowledge_text: Optional[str] = None
+    selected_tool_keys: Optional[list[str]] = None
 
 
 class AgentUpdate(BaseModel):
@@ -114,6 +118,9 @@ class AgentUpdate(BaseModel):
     status: Optional[str] = None
     system_prompt: Optional[str] = None
     first_message: Optional[str] = None
+    main_goal: Optional[str] = None
+    website: Optional[str] = None
+    selected_tool_keys: Optional[list[str]] = None
 
 
 # ── Tools ──

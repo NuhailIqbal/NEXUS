@@ -20,6 +20,7 @@ from routers import (
     team,
     profile,
     webhooks,
+    agent_tool_callbacks,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -54,7 +55,7 @@ from database import supabase
 
 @app.get("/me", tags=["System"])
 async def me(user=Depends(get_current_user)):
-    result = supabase.table("profiles").select("*").eq("id", user["user_id"]).single().execute()
+    result = supabase.table("profiles").select("*").eq("id", user["user_id"]).maybe_single().execute()
     return {"data": result.data, "error": None}
 
 
@@ -73,3 +74,4 @@ app.include_router(analytics.router)
 app.include_router(team.router)
 app.include_router(profile.router)
 app.include_router(webhooks.router)
+app.include_router(agent_tool_callbacks.router)

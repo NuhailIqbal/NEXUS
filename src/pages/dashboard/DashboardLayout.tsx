@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
-  LayoutDashboard, Bot, Wrench, Mic, Plug, Database, Workflow, Layers,
+  LayoutDashboard, Bot, Wrench, Mic, Plug, Database, Workflow,
   PhoneCall, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
   Sparkles, Bell, Search, Menu, X, MessageSquare, Radio,
 } from "lucide-react";
@@ -32,7 +32,6 @@ const NAV: NavItem[] = [
     ],
   },
   { label: "Automation", to: "/dashboard/automation", icon: Workflow },
-  { label: "Automation V2", to: "/dashboard/automation-v2", icon: Layers },
   {
     label: "AI Telephony",
     icon: PhoneCall,

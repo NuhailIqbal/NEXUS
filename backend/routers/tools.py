@@ -73,7 +73,7 @@ async def get_tool(tool_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", tool_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     return {"data": result.data, "error": None}
@@ -90,7 +90,7 @@ async def update_tool(tool_id: str, body: ToolUpdate, user=Depends(get_current_u
         .select("vapi_tool_id")
         .eq("id", tool_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     tool = tool_res.data
@@ -132,7 +132,7 @@ async def delete_tool(tool_id: str, user=Depends(get_current_user)):
         .select("vapi_tool_id")
         .eq("id", tool_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     tool = tool_res.data

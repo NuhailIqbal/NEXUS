@@ -3,18 +3,24 @@ import hmac
 import logging
 import asyncio
 from fastapi import APIRouter, Request, HTTPException, Header
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from config import settings
 from database import supabase
 from services.gemini import summarize_transcript, analyze_sentiment
 from services.automation_engine import run_post_call_automations
 
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
     if not settings.vapi_webhook_secret:
+        # In production, config.py refuses to start without the secret, so this
+        # branch only fires in development. We still log a loud warning.
+        logger.warning("VAPI_WEBHOOK_SECRET is empty — webhook signature is NOT being verified.")
         return True
     expected = hmac.new(
         settings.vapi_webhook_secret.encode(),
@@ -179,7 +185,7 @@ async def _post_call_ai(vapi_call_id: str, transcript: str, conv_id: str):
             supabase.table("conversations")
             .select("*")
             .eq("id", conv_id)
-            .single()
+            .maybe_single()
             .execute()
         )
         conversation = conv.data if conv.data else {}
@@ -222,13 +228,14 @@ async def _handle_status_update(payload: dict):
 
 
 @router.post("/vapi")
+@limiter.limit("120/minute")
 async def vapi_webhook(
     request: Request,
     x_vapi_signature: str = Header(None),
 ):
     body = await request.body()
 
-    if settings.vapi_webhook_secret and not _verify_signature(body, x_vapi_signature):
+    if not _verify_signature(body, x_vapi_signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = await request.json()

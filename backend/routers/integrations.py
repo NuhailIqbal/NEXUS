@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user
 from database import supabase
 from models.schemas import IntegrationCreate, IntegrationUpdate
 from services.encryption import encrypt_config, decrypt_config, mask_config
+from services.integration_test import run_test
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -52,7 +53,7 @@ async def get_integration(integration_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", integration_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     row = result.data
@@ -101,3 +102,35 @@ async def update_integration(integration_id: str, body: IntegrationUpdate, user=
 async def delete_integration(integration_id: str, user=Depends(get_current_user)):
     supabase.table("integrations").delete().eq("id", integration_id).eq("user_id", user["user_id"]).execute()
     return {"data": None, "error": None}
+
+
+@router.post("/{integration_id}/test")
+async def test_integration(integration_id: str, user=Depends(get_current_user)):
+    row = (
+        supabase.table("integrations")
+        .select("name, config_encrypted, status")
+        .eq("id", integration_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    config = {}
+    if row.data.get("config_encrypted"):
+        try:
+            config = decrypt_config(row.data["config_encrypted"])
+        except Exception:
+            return {
+                "data": {
+                    "ok": False,
+                    "message": "Could not decrypt stored credentials — re-save the integration.",
+                    "latency_ms": None,
+                    "provider": None,
+                },
+                "error": None,
+            }
+
+    result = await run_test(row.data.get("name", ""), config)
+    return {"data": result, "error": None}

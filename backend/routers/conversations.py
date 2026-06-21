@@ -73,7 +73,7 @@ async def get_conversation(conversation_id: str, user=Depends(get_current_user))
         .select("*")
         .eq("id", conversation_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:
@@ -88,7 +88,7 @@ async def get_transcript(conversation_id: str, user=Depends(get_current_user)):
         .select("id, transcript, recording_url, ai_summary")
         .eq("id", conversation_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data:

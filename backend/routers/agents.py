@@ -3,6 +3,7 @@ from dependencies import get_current_user
 from database import supabase
 from models.schemas import AgentCreate, AgentUpdate
 from services import vapi_client
+from services.agent_tools import provision_tools_for_agent
 from config import settings
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
@@ -20,8 +21,23 @@ async def list_agents(user=Depends(get_current_user)):
     return {"data": result.data, "error": None}
 
 
+def _compose_system_prompt(name: str, base_prompt: str | None, main_goal: str | None, knowledge_text: str | None) -> str:
+    parts: list[str] = []
+    if base_prompt and base_prompt.strip():
+        parts.append(base_prompt.strip())
+    else:
+        parts.append(f"You are {name}, a helpful AI assistant.")
+    if main_goal and main_goal.strip():
+        parts.append(f"\nYour primary goal:\n{main_goal.strip()}")
+    if knowledge_text and knowledge_text.strip():
+        parts.append(f"\nReference knowledge — use this to answer questions accurately:\n{knowledge_text.strip()}")
+    return "\n".join(parts)
+
+
 @router.post("")
 async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
+    composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
+
     row = {
         "user_id": user["user_id"],
         "name": body.name,
@@ -29,16 +45,23 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
         "language": body.language,
         "category": body.category,
         "status": body.status,
+        "system_prompt": composed_prompt,
+        "first_message": body.first_message,
+        "main_goal": body.main_goal,
+        "website": body.website,
+        "selected_tool_keys": body.selected_tool_keys or [],
     }
 
     if settings.vapi_api_key:
+        tool_ids = await provision_tools_for_agent(user["user_id"], body.selected_tool_keys or [])
         try:
             payload = vapi_client.build_assistant_payload(
                 name=body.name,
                 voice=body.voice,
                 language=body.language,
-                system_prompt=body.system_prompt,
+                system_prompt=composed_prompt,
                 first_message=body.first_message,
+                tool_ids=tool_ids or None,
             )
             vapi_agent = await vapi_client.create_assistant(payload)
             row["vapi_assistant_id"] = vapi_agent.get("id")
@@ -46,7 +69,20 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
             raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
 
     result = supabase.table("ai_agents").insert(row).execute()
-    return {"data": result.data[0] if result.data else None, "error": None}
+    agent = result.data[0] if result.data else None
+
+    if agent and body.knowledge_text and body.knowledge_text.strip():
+        try:
+            supabase.table("agent_knowledge").insert({
+                "user_id": user["user_id"],
+                "agent_id": agent["id"],
+                "type": "text",
+                "text_content": body.knowledge_text.strip(),
+            }).execute()
+        except Exception:
+            pass
+
+    return {"data": agent, "error": None}
 
 
 @router.get("/{agent_id}")
@@ -56,7 +92,7 @@ async def get_agent(agent_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     return {"data": result.data, "error": None}
@@ -73,14 +109,17 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         .select("vapi_assistant_id")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     agent = agent_res.data
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    db_updates = {k: v for k, v in updates.items() if k in ("name", "voice", "language", "category", "status")}
+    db_updates = {k: v for k, v in updates.items() if k in (
+        "name", "voice", "language", "category", "status",
+        "system_prompt", "first_message", "main_goal", "website", "selected_tool_keys",
+    )}
 
     if settings.vapi_api_key and agent.get("vapi_assistant_id"):
         try:
@@ -117,7 +156,7 @@ async def delete_agent(agent_id: str, user=Depends(get_current_user)):
         .select("vapi_assistant_id")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     agent = agent_res.data
@@ -138,7 +177,7 @@ async def upload_knowledge(agent_id: str, file: UploadFile = File(...), user=Dep
         .select("id, vapi_assistant_id")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     if not agent_res.data:

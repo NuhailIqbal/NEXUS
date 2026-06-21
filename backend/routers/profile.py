@@ -8,7 +8,7 @@ router = APIRouter(prefix="/profile", tags=["Profile"])
 
 @router.get("")
 async def get_profile(user=Depends(get_current_user)):
-    result = supabase.table("profiles").select("*").eq("id", user["user_id"]).single().execute()
+    result = supabase.table("profiles").select("*").eq("id", user["user_id"]).maybe_single().execute()
     return {"data": result.data, "error": None}
 
 

@@ -26,6 +26,8 @@ interface WidgetData {
   recordCalls: boolean;
   showTranscription: boolean;
   position: string;
+  primaryColor: string;
+  autoOpen: boolean;
 }
 
 type Agent = {
@@ -108,8 +110,9 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
       recordCalls,
       showTranscription,
       position,
+      primaryColor,
+      autoOpen,
     });
-    toast.success("Voice widget created successfully");
     handleClose(false);
   };
 

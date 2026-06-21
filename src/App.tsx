@@ -42,8 +42,8 @@ import {
   AnalyticsScenario,
   AnalyticsFlow,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
-import { AutomationList, AutomationV2List } from "./pages/dashboard/automation/AutomationList.tsx";
-import { AutomationFlowEditor, AutomationV2FlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
+import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
+import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
 
 const queryClient = new QueryClient();
 
@@ -92,8 +92,6 @@ const App = () => (
               <Route path="analytics/flow" element={<AnalyticsFlow />} />
               <Route path="automation" element={<AutomationList />} />
               <Route path="automation/:flowId" element={<AutomationFlowEditor />} />
-              <Route path="automation-v2" element={<AutomationV2List />} />
-              <Route path="automation-v2/:flowId" element={<AutomationV2FlowEditor />} />
             </Route>
 
             <Route path="*" element={<NotFound />} />

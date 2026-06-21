@@ -33,7 +33,7 @@ async def get_list(list_id: str, user=Depends(get_current_user)):
         .select("*")
         .eq("id", list_id)
         .eq("user_id", user["user_id"])
-        .single()
+        .maybe_single()
         .execute()
     )
     return {"data": result.data, "error": None}

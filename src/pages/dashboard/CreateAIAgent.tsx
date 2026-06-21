@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, Wrench, BookOpen, FileText, PlayCircle, Sparkles,
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Building2,
-  ArrowLeft, ArrowRight,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,10 +41,15 @@ type FormState = {
   voice: string;
   selectedTools: string[];
   knowledgeText: string;
+  knowledgeFiles: File[];
   systemPrompt: string;
   greeting: string;
   testMessage: string;
 };
+
+const KNOWLEDGE_TEXT_LIMIT = 8000;
+const KNOWLEDGE_FILE_MAX_MB = 10;
+const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
 
 const TOOLS_OPTIONS = [
   { id: "send_email", label: "Send Email", desc: "Send transactional emails" },
@@ -65,9 +70,11 @@ const CreateAIAgent = () => {
     agentName: "", website: "", mainGoal: "", industry: "", language: "English (US)", voice: "Aria",
     selectedTools: [],
     knowledgeText: "",
+    knowledgeFiles: [],
     systemPrompt: "", greeting: "",
     testMessage: "",
   });
+  const [submitting, setSubmitting] = useState(false);
 
   const currentStep = STEPS[stepIndex];
   const completedCount = Object.values(completed).filter(Boolean).length;
@@ -87,9 +94,17 @@ const CreateAIAgent = () => {
       toast.error("Select at least one tool");
       return false;
     }
-    if (currentStep.key === "knowledge" && !form.knowledgeText.trim()) {
-      toast.error("Add some knowledge content before continuing");
-      return false;
+    if (currentStep.key === "knowledge") {
+      const hasText = form.knowledgeText.trim().length > 0;
+      const hasFiles = form.knowledgeFiles.length > 0;
+      if (!hasText && !hasFiles) {
+        toast.error("Add knowledge text or upload at least one file before continuing");
+        return false;
+      }
+      if (form.knowledgeText.length > KNOWLEDGE_TEXT_LIMIT) {
+        toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters — upload as a file instead`);
+        return false;
+      }
     }
     if (currentStep.key === "prompt") {
       if (!form.systemPrompt.trim()) { toast.error("System prompt is required"); return false; }
@@ -103,7 +118,7 @@ const CreateAIAgent = () => {
   };
 
   const persistToApi = async () => {
-    const { error } = await api.createAgent({
+    const { data, error } = await api.createAgent({
       name: form.agentName,
       category: form.industry || "General",
       voice: form.voice,
@@ -111,11 +126,30 @@ const CreateAIAgent = () => {
       status: "Active",
       system_prompt: form.systemPrompt || null,
       first_message: form.greeting || null,
+      main_goal: form.mainGoal || null,
+      website: form.website || null,
+      knowledge_text: form.knowledgeText || null,
+      selected_tool_keys: form.selectedTools,
     });
-    if (error) {
-      toast.error(error);
+    if (error || !data?.id) {
+      toast.error(error || "Failed to create agent");
       return false;
     }
+
+    if (form.knowledgeFiles.length > 0) {
+      let failed = 0;
+      for (const file of form.knowledgeFiles) {
+        const res = await api.uploadAgentKnowledge(data.id, file);
+        if (res.error) {
+          failed += 1;
+          toast.error(`Failed to upload ${file.name}: ${res.error}`);
+        }
+      }
+      if (failed === 0) {
+        toast.success(`Uploaded ${form.knowledgeFiles.length} knowledge file(s)`);
+      }
+    }
+
     return true;
   };
 
@@ -125,8 +159,13 @@ const CreateAIAgent = () => {
     if (stepIndex < STEPS.length - 1) {
       setStepIndex(stepIndex + 1);
     } else {
-      const ok = await persistToApi();
-      if (ok) setShowSuccess(true);
+      setSubmitting(true);
+      try {
+        const ok = await persistToApi();
+        if (ok) setShowSuccess(true);
+      } finally {
+        setSubmitting(false);
+      }
     }
   };
 
@@ -236,8 +275,10 @@ const CreateAIAgent = () => {
             <Button variant="outline" onClick={back} disabled={stepIndex === 0}>
               <ArrowLeft className="mr-1.5 h-4 w-4" /> Back
             </Button>
-            <Button onClick={next} className="bg-primary text-primary-foreground">
-              {stepIndex === STEPS.length - 1 ? "Create Agent" : "Continue"}
+            <Button onClick={next} disabled={submitting} className="bg-primary text-primary-foreground">
+              {stepIndex === STEPS.length - 1
+                ? (submitting ? "Creating…" : "Create Agent")
+                : "Continue"}
               {stepIndex < STEPS.length - 1 && <ArrowRight className="ml-1.5 h-4 w-4" />}
             </Button>
           </div>
@@ -426,6 +467,32 @@ function StepTools({
 function StepKnowledge({
   form, update,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+  const textLen = form.knowledgeText.length;
+  const textOver = textLen > KNOWLEDGE_TEXT_LIMIT;
+
+  const handleFiles = (files: FileList | null) => {
+    if (!files) return;
+    const accepted: File[] = [];
+    Array.from(files).forEach((f) => {
+      const sizeMb = f.size / (1024 * 1024);
+      const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
+      if (sizeMb > KNOWLEDGE_FILE_MAX_MB) {
+        toast.error(`${f.name} exceeds ${KNOWLEDGE_FILE_MAX_MB}MB limit`);
+        return;
+      }
+      if (!KNOWLEDGE_FILE_TYPES.includes(ext)) {
+        toast.error(`${f.name}: unsupported file type (${KNOWLEDGE_FILE_TYPES.join(", ")})`);
+        return;
+      }
+      accepted.push(f);
+    });
+    update("knowledgeFiles", [...form.knowledgeFiles, ...accepted]);
+  };
+
+  const removeFile = (i: number) => {
+    update("knowledgeFiles", form.knowledgeFiles.filter((_, idx) => idx !== i));
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -434,18 +501,99 @@ function StepKnowledge({
         </div>
         <h3 className="mt-3 text-lg font-bold">Knowledge Center</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Provide context, FAQs, or any reference material your agent should know
+          Give your agent the info it needs to answer accurately
         </p>
       </div>
-      <Field label="Knowledge Content" required>
+
+      <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+        <div className="flex items-start gap-2.5">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div className="space-y-2 text-sm">
+            <p className="font-semibold text-foreground">When to use what</p>
+            <ul className="space-y-1 text-muted-foreground">
+              <li><span className="font-medium text-foreground">Paste text</span> — short FAQs, key policies, scripts (under {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters). Goes straight into the agent's instructions, available instantly on every call.</li>
+              <li><span className="font-medium text-foreground">Upload files</span> — product catalogs, full manuals, large documents. The agent retrieves relevant sections during the call.</li>
+            </ul>
+            <p className="text-xs text-muted-foreground">You can use one or both. At least one is required.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">Quick Text <span className="text-xs font-normal text-muted-foreground">— short content</span></span>
+          <span className={cn("text-xs", textOver ? "text-destructive font-semibold" : "text-muted-foreground")}>
+            {textLen.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()}
+          </span>
+        </div>
         <textarea
           value={form.knowledgeText}
           onChange={(e) => update("knowledgeText", e.target.value)}
-          rows={10}
+          rows={8}
           placeholder="Paste FAQs, product info, policies, scripts…"
-          className="w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+          className={cn(
+            "w-full rounded-md border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30",
+            textOver ? "border-destructive" : "border-input",
+          )}
         />
-      </Field>
+        {textOver && (
+          <p className="text-xs text-destructive">
+            This is too long for quick text. Save it as a .txt or .pdf file and upload it below instead.
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <span className="block text-sm font-medium">Knowledge Files <span className="text-xs font-normal text-muted-foreground">— large content</span></span>
+        <label
+          htmlFor="knowledge-file-input"
+          className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-input bg-muted/30 px-4 py-8 text-center transition hover:border-primary/40 hover:bg-muted/50"
+        >
+          <Upload className="h-6 w-6 text-muted-foreground" />
+          <div className="text-sm font-medium">Click to upload or drag files here</div>
+          <div className="text-xs text-muted-foreground">
+            {KNOWLEDGE_FILE_TYPES.join(", ")} — up to {KNOWLEDGE_FILE_MAX_MB}MB each
+          </div>
+          <input
+            id="knowledge-file-input"
+            type="file"
+            multiple
+            accept={KNOWLEDGE_FILE_TYPES.join(",")}
+            className="hidden"
+            onChange={(e) => {
+              handleFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
+
+        {form.knowledgeFiles.length > 0 && (
+          <ul className="space-y-2">
+            {form.knowledgeFiles.map((f, i) => (
+              <li
+                key={`${f.name}-${i}`}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <FileText className="h-4 w-4 shrink-0 text-primary" />
+                  <span className="truncate text-sm font-medium">{f.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {(f.size / 1024).toFixed(1)} KB
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeFile(i)}
+                  className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={`Remove ${f.name}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
