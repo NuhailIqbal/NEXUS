@@ -150,6 +150,7 @@ export const api = {
   getAnalyticsChannel: () => get("/analytics/channel"),
   getAnalyticsCampaign: () => get("/analytics/campaign"),
   getAnalyticsAgent: () => get("/analytics/agent"),
+  getAnalyticsTimeseries: (days = 14) => get(`/analytics/timeseries?days=${days}`),
 
   // Automation
   getFlows: () => get("/automation/flows"),

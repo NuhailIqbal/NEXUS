@@ -37,14 +37,18 @@ type Campaign = {
 const Outbound = () => {
   const [open, setOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [agentsById, setAgentsById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
 
   const [settingsTarget, setSettingsTarget] = useState<Campaign | null>(null);
   const [settingsForm, setSettingsForm] = useState<{ name: string; agent_id: string; status: string }>({ name: "", agent_id: "", status: "" });
 
   const fetchCampaigns = async () => {
-    const { data } = await api.getCampaigns();
-    if (data) setCampaigns(Array.isArray(data) ? data : []);
+    const [campaignsRes, agentsRes] = await Promise.all([api.getCampaigns(), api.getAgents()]);
+    if (Array.isArray(campaignsRes.data)) setCampaigns(campaignsRes.data);
+    if (Array.isArray(agentsRes.data)) {
+      setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
+    }
     setLoading(false);
   };
 
@@ -93,8 +97,8 @@ const Outbound = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Dialer</h1>
-          <p className="text-sm text-muted-foreground">Run AI-powered outbound campaigns.</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Campaigns</h1>
+          <p className="text-sm text-muted-foreground">Run AI-powered outbound calling campaigns.</p>
         </div>
         <Button onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />New Campaign</Button>
       </div>
@@ -116,7 +120,7 @@ const Outbound = () => {
                   <Badge variant={isActive ? "default" : "secondary"}>{c.status}</Badge>
                 </div>
                 <h3 className="mt-4 font-semibold text-foreground">{c.name}</h3>
-                <p className="text-xs text-muted-foreground">Agent: {c.agent_id}</p>
+                <p className="text-xs text-muted-foreground">Agent: {agentsById.get(c.agent_id) ?? "Unassigned"}</p>
                 <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
                   <span>{c.completed_count.toLocaleString()} / {c.contacts_count.toLocaleString()}</span>
                   <span className="font-medium text-foreground">{pct}%</span>
@@ -149,8 +153,9 @@ const Outbound = () => {
         onCreate={async (d) => {
           const { error } = await api.createCampaign({
             name: d.name,
-            agent_id: d.agents[0] ?? "",
-            list_id: d.customerList ?? "",
+            agent_id: d.agentId,
+            list_id: d.listId,
+            phone_number_id: d.phoneNumberId || null,
           });
           if (error) return toast.error(error);
           toast.success(`Campaign "${d.name}" created`);
@@ -171,7 +176,16 @@ const Outbound = () => {
             </div>
             <div className="space-y-2">
               <Label>Agent</Label>
-              <Input value={settingsForm.agent_id} onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))} />
+              <select
+                value={settingsForm.agent_id}
+                onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Select agent…</option>
+                {Array.from(agentsById.entries()).map(([id, name]) => (
+                  <option key={id} value={id}>{name}</option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2">
               <Label>Status</Label>

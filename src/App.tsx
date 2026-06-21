@@ -84,6 +84,7 @@ const App = () => (
               <Route path="database/lists" element={<Lists />} />
               <Route path="database/custom-fields" element={<CustomFields />} />
               <Route path="telephony/outbound" element={<Outbound />} />
+              <Route path="telephony/campaigns" element={<Outbound />} />
               <Route path="telephony/inbound" element={<Inbound />} />
               <Route path="telephony/phone-numbers" element={<PhoneNumbers />} />
               <Route path="analytics/channel" element={<AnalyticsChannel />} />

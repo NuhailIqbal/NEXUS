@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, PhoneOff, Bot, User, Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { Mic, MicOff, PhoneOff, Bot, User, Loader2, AlertTriangle, PhoneCall } from "lucide-react";
+import Vapi from "@vapi-ai/web";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -18,48 +18,13 @@ export type VoiceAgentInfo = {
   language?: string | null;
   category?: string | null;
   status?: string;
+  vapi_assistant_id?: string | null;
 };
 
 type Msg = { role: "user" | "assistant"; content: string };
+type CallStatus = "idle" | "connecting" | "ringing" | "in-call" | "ended" | "error";
 
-const LANG_MAP: Record<string, string> = {
-  "English (US)": "en-US",
-  "English (UK)": "en-GB",
-  "Spanish (ES)": "es-ES",
-  "Spanish (MX)": "es-MX",
-  "French (FR)": "fr-FR",
-  "Italian (IT)": "it-IT",
-  "German (DE)": "de-DE",
-};
-
-const FEMALE_HINTS = [
-  "female", "woman", "samantha", "victoria", "karen", "tessa", "moira",
-  "fiona", "veena", "zira", "susan", "allison", "ava", "serena", "aria",
-  "nora", "eva", "lia",
-];
-const MALE_HINTS = [
-  "male", "man", "daniel", "alex", "fred", "tom", "diego", "jorge",
-  "david", "mark", "rishi", "oliver", "kai", "marco",
-];
-
-function pickVoice(agent: VoiceAgentInfo, langCode: string): SpeechSynthesisVoice | null {
-  if (typeof window === "undefined") return null;
-  const all = window.speechSynthesis.getVoices();
-  if (!all.length) return null;
-  const name = (agent.voice ?? "").toLowerCase();
-  const isFemale = FEMALE_HINTS.some((h) => name.includes(h));
-  const isMale = MALE_HINTS.some((h) => name.includes(h));
-  const langMatches = all.filter(
-    (v) => v.lang === langCode || v.lang.startsWith(langCode.split("-")[0]),
-  );
-  const pool = langMatches.length ? langMatches : all;
-  const byHint = (hints: string[]) =>
-    pool.find((v) => hints.some((h) => v.name.toLowerCase().includes(h)));
-  if (isFemale) return byHint(FEMALE_HINTS) ?? pool[0] ?? null;
-  if (isMale) return byHint(MALE_HINTS) ?? pool[0] ?? null;
-  const byName = name ? pool.find((v) => v.name.toLowerCase().includes(name)) : null;
-  return byName ?? pool[0] ?? null;
-}
+const PUBLIC_KEY = ((import.meta as any).env?.VITE_VAPI_PUBLIC_KEY ?? "").trim();
 
 export function LiveVoiceModal({
   agent,
@@ -71,185 +36,120 @@ export function LiveVoiceModal({
   onOpenChange: (o: boolean) => void;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [listening, setListening] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [thinking, setThinking] = useState(false);
-  const [interim, setInterim] = useState("");
-  const [supported, setSupported] = useState(true);
-  const recogRef = useRef<any>(null);
-  const messagesRef = useRef<Msg[]>([]);
-  const wantListenRef = useRef(false);
+  const [status, setStatus] = useState<CallStatus>("idle");
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const vapiRef = useRef<Vapi | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  messagesRef.current = messages;
-
-  const langCode =
-    (agent?.language && LANG_MAP[agent.language]) || "en-US";
-
-  const stopAll = () => {
-    wantListenRef.current = false;
-    try {
-      recogRef.current?.stop();
-    } catch {}
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-    setListening(false);
-    setSpeaking(false);
-    setInterim("");
+  const teardown = () => {
+    try { vapiRef.current?.stop(); } catch {}
+    vapiRef.current = null;
   };
 
-  // Speak text, then resume listening when done
-  const speak = (text: string, onEnd?: () => void) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window) || !agent) {
-      onEnd?.();
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = langCode;
-    const v = pickVoice(agent, langCode);
-    if (v) u.voice = v;
-    const name = (agent.voice ?? "").toLowerCase();
-    const isFemale = FEMALE_HINTS.some((h) => name.includes(h));
-    const isMale = MALE_HINTS.some((h) => name.includes(h));
-    u.pitch = isFemale ? 1.15 : isMale ? 0.85 : 1;
-    u.rate = 1;
-    u.onstart = () => setSpeaking(true);
-    u.onend = () => {
-      setSpeaking(false);
-      onEnd?.();
-    };
-    u.onerror = () => {
-      setSpeaking(false);
-      onEnd?.();
-    };
-    window.speechSynthesis.speak(u);
-  };
-
-  const sendToAgent = async (userText: string) => {
+  const startCall = async () => {
     if (!agent) return;
-    const next: Msg[] = [...messagesRef.current, { role: "user", content: userText }];
-    setMessages(next);
-    setThinking(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("agent-chat", {
-        body: { messages: next, agent },
-      });
-      if (error) throw error;
-      const reply: string = data?.reply ?? "Sorry, I didn't catch that.";
-      setMessages((m) => [...m, { role: "assistant", content: reply }]);
-      setThinking(false);
-      speak(reply, () => {
-        if (wantListenRef.current) startListening();
-      });
-    } catch (e: any) {
-      setThinking(false);
-      toast.error(e?.message ?? "Agent error");
-    }
-  };
-
-  const startListening = () => {
-    const SR =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) {
-      setSupported(false);
-      toast.error("Speech recognition not supported in this browser. Try Chrome.");
+    if (!PUBLIC_KEY) {
+      setError("VAPI public key is not configured. Set VITE_VAPI_PUBLIC_KEY in your .env file.");
+      setStatus("error");
       return;
     }
-    if (speaking) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {}
-    const recog = new SR();
-    recog.lang = langCode;
-    recog.interimResults = true;
-    recog.continuous = false;
-    recog.maxAlternatives = 1;
-    recogRef.current = recog;
-    setInterim("");
-
-    recog.onstart = () => setListening(true);
-    recog.onresult = (ev: any) => {
-      let finalText = "";
-      let interimText = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const r = ev.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else interimText += r[0].transcript;
-      }
-      if (interimText) setInterim(interimText);
-      if (finalText) {
-        setInterim("");
-        sendToAgent(finalText.trim());
-      }
-    };
-    recog.onerror = (e: any) => {
-      setListening(false);
-      if (e.error === "not-allowed") {
-        toast.error("Microphone permission denied.");
-        wantListenRef.current = false;
-      }
-    };
-    recog.onend = () => {
-      setListening(false);
-      // If still wanting to listen and not speaking/thinking, restart
-      if (wantListenRef.current && !speaking && !thinking) {
-        try {
-          recog.start();
-        } catch {}
-      }
-    };
-    try {
-      recog.start();
-    } catch {}
-  };
-
-  const toggleMic = () => {
-    if (listening) {
-      wantListenRef.current = false;
-      try {
-        recogRef.current?.stop();
-      } catch {}
-      setListening(false);
-    } else {
-      wantListenRef.current = true;
-      startListening();
+    if (!agent.vapi_assistant_id) {
+      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured — re-create it or update via the API.");
+      setStatus("error");
+      return;
     }
-  };
 
-  // Initialize call when opened
-  useEffect(() => {
-    if (!open || !agent) return;
-    // Warm up voices
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.getVoices();
-    }
-    const greeting = `Hi, I'm ${agent.name.split("—")[0].trim()}. I'm your ${agent.category ?? "AI assistant"}. How can I help you today?`;
-    setMessages([{ role: "assistant", content: greeting }]);
-    setInterim("");
-    wantListenRef.current = true;
-    setTimeout(() => {
-      speak(greeting, () => {
-        if (wantListenRef.current) startListening();
+    setStatus("connecting");
+    setError(null);
+    setMessages([]);
+
+    try {
+      const vapi = new Vapi(PUBLIC_KEY);
+      vapiRef.current = vapi;
+
+      vapi.on("call-start", () => setStatus("in-call"));
+      vapi.on("call-end", () => setStatus("ended"));
+      vapi.on("speech-start", () => {/* user starts talking — UI hint optional */});
+      vapi.on("speech-end", () => {/* user stops talking */});
+      vapi.on("message", (m: any) => {
+        if (m?.type === "transcript" && m?.transcriptType === "final") {
+          const role: "user" | "assistant" = m.role === "user" ? "user" : "assistant";
+          const content: string = m.transcript ?? "";
+          if (content.trim()) {
+            setMessages((prev) => [...prev, { role, content }]);
+          }
+        }
       });
-    }, 200);
-    return () => {
-      stopAll();
-    };
+      vapi.on("error", (e: any) => {
+        const msg = e?.error?.message ?? e?.message ?? "VAPI call error";
+        setError(msg);
+        setStatus("error");
+      });
+
+      await vapi.start(agent.vapi_assistant_id);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to start call");
+      setStatus("error");
+      teardown();
+    }
+  };
+
+  const endCall = () => {
+    teardown();
+    setStatus("ended");
+  };
+
+  const toggleMute = () => {
+    const vapi = vapiRef.current;
+    if (!vapi) return;
+    try {
+      const nextMuted = !muted;
+      vapi.setMuted(nextMuted);
+      setMuted(nextMuted);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  // Reset state when modal closes; auto-start when it opens
+  useEffect(() => {
+    if (!open) {
+      teardown();
+      setStatus("idle");
+      setMessages([]);
+      setMuted(false);
+      setError(null);
+      return;
+    }
+    // auto-start on open
+    startCall();
+    return () => { teardown(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, agent?.id]);
 
   // Autoscroll
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, interim, thinking]);
+  }, [messages]);
+
+  const statusLabel: Record<CallStatus, string> = {
+    idle: "Ready",
+    connecting: "Connecting to agent…",
+    ringing: "Ringing…",
+    "in-call": "In call — just talk.",
+    ended: "Call ended",
+    error: error ?? "Something went wrong",
+  };
+
+  const isLive = status === "in-call";
+  const isBusy = status === "connecting" || status === "ringing";
 
   return (
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (!o) stopAll();
+        if (!o) teardown();
         onOpenChange(o);
       }}
     >
@@ -257,44 +157,45 @@ export function LiveVoiceModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
-              <span className={`absolute inline-flex h-full w-full rounded-full ${listening || speaking ? "animate-ping bg-primary/70" : "bg-muted"}`} />
-              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${listening || speaking ? "bg-primary" : "bg-muted-foreground"}`} />
+              <span className={`absolute inline-flex h-full w-full rounded-full ${isLive ? "animate-ping bg-primary/70" : "bg-muted"}`} />
+              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${isLive ? "bg-primary" : status === "error" ? "bg-destructive" : "bg-muted-foreground"}`} />
             </span>
-            Live call with {agent?.name}
+            Talk to {agent?.name}
           </DialogTitle>
-          <DialogDescription>
-            {speaking
-              ? "Agent is speaking…"
-              : thinking
-                ? "Agent is thinking…"
-                : listening
-                  ? "Listening — just speak."
-                  : "Tap the mic to talk."}
-          </DialogDescription>
+          <DialogDescription>{statusLabel[status]}</DialogDescription>
         </DialogHeader>
 
-        {agent && (
+        {!agent ? null : (
           <>
-            <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-              <div>
-                <span className="text-muted-foreground">Voice: </span>
-                <span className="font-medium">{agent.voice ?? "—"}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Language: </span>
-                <span className="font-medium">{agent.language ?? "—"}</span>
-              </div>
+            <div className="grid grid-cols-3 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+              <div><span className="text-muted-foreground">Voice: </span><span className="font-medium">{agent.voice ?? "—"}</span></div>
+              <div><span className="text-muted-foreground">Language: </span><span className="font-medium">{agent.language ?? "—"}</span></div>
+              <div><span className="text-muted-foreground">Status: </span><span className="font-medium">{agent.status ?? "—"}</span></div>
             </div>
+
+            {status === "error" && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
             <div
               ref={scrollRef}
               className="h-72 overflow-y-auto rounded-lg border border-border bg-background p-3 space-y-3"
             >
+              {messages.length === 0 && status === "in-call" && (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  Listening… say hello to start the conversation.
+                </p>
+              )}
+              {messages.length === 0 && isBusy && (
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> {statusLabel[status]}
+                </div>
+              )}
               {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                >
+                <div key={i} className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                   {m.role === "assistant" && (
                     <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                       <Bot className="h-4 w-4" />
@@ -302,9 +203,7 @@ export function LiveVoiceModal({
                   )}
                   <div
                     className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
-                      m.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
+                      m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
                     }`}
                   >
                     {m.content}
@@ -316,48 +215,51 @@ export function LiveVoiceModal({
                   )}
                 </div>
               ))}
-              {interim && (
-                <div className="flex justify-end gap-2 opacity-70">
-                  <div className="max-w-[75%] rounded-lg bg-primary/60 px-3 py-2 text-sm text-primary-foreground italic">
-                    {interim}…
-                  </div>
-                </div>
-              )}
-              {thinking && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Agent is thinking…
-                </div>
-              )}
             </div>
 
             <div className="flex items-center justify-center gap-3 pt-2">
-              <Button
-                size="lg"
-                onClick={toggleMic}
-                disabled={!supported || speaking || thinking}
-                className={`h-14 w-14 rounded-full p-0 ${listening ? "bg-destructive hover:bg-destructive/90" : "bg-primary hover:bg-primary/90"}`}
-                title={listening ? "Mute" : "Speak"}
-              >
-                {listening ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
-              </Button>
-              <Button
-                size="lg"
-                variant="outline"
-                onClick={() => {
-                  stopAll();
-                  onOpenChange(false);
-                }}
-                className="h-14 w-14 rounded-full p-0"
-                title="End call"
-              >
-                <PhoneOff className="h-6 w-6" />
-              </Button>
+              {(status === "idle" || status === "ended" || status === "error") && (
+                <Button
+                  size="lg"
+                  onClick={startCall}
+                  className="h-14 rounded-full bg-primary px-6 hover:bg-primary/90"
+                  title="Start call"
+                >
+                  <PhoneCall className="mr-2 h-5 w-5" />
+                  {status === "ended" || status === "error" ? "Call again" : "Start call"}
+                </Button>
+              )}
+              {isLive && (
+                <>
+                  <Button
+                    size="lg"
+                    onClick={toggleMute}
+                    variant={muted ? "default" : "outline"}
+                    className="h-14 w-14 rounded-full p-0"
+                    title={muted ? "Unmute" : "Mute"}
+                  >
+                    {muted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="destructive"
+                    onClick={endCall}
+                    className="h-14 w-14 rounded-full p-0"
+                    title="End call"
+                  >
+                    <PhoneOff className="h-6 w-6" />
+                  </Button>
+                </>
+              )}
+              {isBusy && (
+                <Button size="lg" variant="outline" onClick={endCall} className="h-14 rounded-full px-6">
+                  Cancel
+                </Button>
+              )}
             </div>
-            {!supported && (
-              <p className="text-center text-xs text-destructive">
-                Live mic not supported here. Use Chrome or Edge for voice input.
-              </p>
-            )}
+            <p className="text-center text-xs text-muted-foreground">
+              Live web call powered by VAPI. Uses your agent's real voice, model, and tools — no phone number needed.
+            </p>
           </>
         )}
       </DialogContent>

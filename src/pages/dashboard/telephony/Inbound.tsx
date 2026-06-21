@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { PhoneIncoming, Plus, Loader2, CheckCircle2 } from "lucide-react";
+import { PhoneIncoming, Plus } from "lucide-react";
+import { LiveVoiceModal, type VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -38,23 +39,37 @@ const Inbound = () => {
   const [queues, setQueues] = useState<Queue[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [testTarget, setTestTarget] = useState<Queue | null>(null);
-  const [testState, setTestState] = useState<"loading" | "ok">("loading");
+  const [testAgent, setTestAgent] = useState<VoiceAgentInfo | null>(null);
+  const [agentsById, setAgentsById] = useState<Map<string, any>>(new Map());
   const [settingsTarget, setSettingsTarget] = useState<Queue | null>(null);
   const [settingsForm, setSettingsForm] = useState<{ name: string; agent_id: string; status: string }>({ name: "", agent_id: "", status: "" });
 
   const fetchQueues = async () => {
-    const { data } = await api.getInboundQueues();
-    if (data) setQueues(Array.isArray(data) ? data : []);
+    const [queuesRes, agentsRes] = await Promise.all([api.getInboundQueues(), api.getAgents()]);
+    if (Array.isArray(queuesRes.data)) setQueues(queuesRes.data);
+    if (Array.isArray(agentsRes.data)) {
+      setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a])));
+    }
     setLoading(false);
   };
 
   useEffect(() => { fetchQueues(); }, []);
 
   const openTest = (q: Queue) => {
-    setTestTarget(q);
-    setTestState("loading");
-    setTimeout(() => setTestState("ok"), 900);
+    const agent = agentsById.get(q.agent_id);
+    if (!agent) {
+      toast.error("No agent assigned to this queue. Edit it in Settings first.");
+      return;
+    }
+    setTestAgent({
+      id: agent.id,
+      name: agent.name,
+      voice: agent.voice,
+      language: agent.language,
+      category: agent.category,
+      status: agent.status,
+      vapi_assistant_id: agent.vapi_assistant_id,
+    });
   };
 
   const openSettings = (q: Queue) => {
@@ -106,7 +121,7 @@ const Inbound = () => {
                 <Badge variant={q.status === "Active" ? "default" : "secondary"}>{q.status}</Badge>
               </div>
               <h3 className="mt-4 font-semibold text-foreground">{q.name}</h3>
-              <p className="text-xs text-muted-foreground">Agent: {q.agent_id}</p>
+              <p className="text-xs text-muted-foreground">Agent: {agentsById.get(q.agent_id)?.name ?? "Unassigned"}</p>
               <div className="mt-4 flex justify-between text-sm">
                 <div>
                   <div className="text-2xl font-bold text-foreground">{q.max_wait_seconds}s</div>
@@ -144,28 +159,11 @@ const Inbound = () => {
         }}
       />
 
-      <Dialog open={!!testTarget} onOpenChange={(o) => !o && setTestTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Test {testTarget?.name}</DialogTitle>
-            <DialogDescription>Simulating an incoming call routed to this queue.</DialogDescription>
-          </DialogHeader>
-          {testState === "loading" ? (
-            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Routing call...
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-2 py-6">
-              <CheckCircle2 className="h-10 w-10 text-success" />
-              <p className="text-sm">Call routed to {testTarget?.agent_id}.</p>
-              <p className="text-xs text-muted-foreground">Queue is responding normally.</p>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTestTarget(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <LiveVoiceModal
+        agent={testAgent}
+        open={!!testAgent}
+        onOpenChange={(o) => { if (!o) setTestAgent(null); }}
+      />
 
       <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
         <DialogContent className="max-w-lg">

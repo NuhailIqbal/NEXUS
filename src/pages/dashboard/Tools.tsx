@@ -118,30 +118,18 @@ const Tools = () => {
 
   const runTest = () => {
     if (!testTool) return;
-    setTestLoading(true);
-    setTestOutput(null);
-    setTimeout(() => {
-      let parsed: unknown = testInput;
-      try {
-        parsed = JSON.parse(testInput);
-      } catch {
-        // leave as string
-      }
-      const result = {
-        tool: testTool.name,
-        status: "success",
-        executedAt: new Date().toISOString(),
-        durationMs: 412,
-        input: parsed,
-        output: {
-          message: `${testTool.name} executed successfully (simulated).`,
-          details: testTool.description,
-        },
-      };
-      setTestOutput(JSON.stringify(result, null, 2));
-      setTestLoading(false);
-      toast.success("Tool executed");
-    }, 700);
+    setTestOutput(
+      [
+        "Tools execute inside live VAPI calls, not from the dashboard.",
+        "",
+        `To test "${testTool.name}":`,
+        " 1. Attach this tool to an AI agent (via the Create AI Agent wizard or by editing the agent).",
+        " 2. Use the \"Talk to Agent\" button on the AI Agents page.",
+        " 3. Ask the agent to perform the action this tool exposes.",
+        "",
+        "Inside the call, VAPI will invoke the tool's server URL with the live arguments.",
+      ].join("\n"),
+    );
   };
 
   const openSettings = (t: Tool) => {

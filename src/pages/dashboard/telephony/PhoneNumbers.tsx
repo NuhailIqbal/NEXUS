@@ -60,13 +60,31 @@ const PhoneNumbers = () => {
 
   const openTest = (n: Num) => {
     setTestTarget(n);
-    setTestLog([`Placing test call to ${n.number}...`]);
-    setTimeout(() => setTestLog((l) => [...l, "Routing through carrier..."]), 400);
-    setTimeout(() => setTestLog((l) => [...l, "Connected to agent: " + n.agent_id]), 900);
-    setTimeout(() => {
-      const ok = n.status === "Active";
-      setTestLog((l) => [...l, ok ? "Test call completed (3.2s)" : "Number is inactive -- call rejected"]);
-    }, 1400);
+    setTestLog([`Selected ${n.number}.`,
+      "To test, click 'Place Call' below and enter a phone number to dial.",
+      "VAPI will place a real outbound call using this number's assigned agent."]);
+  };
+
+  const placeTestCall = async (n: Num, to: string) => {
+    if (!n.agent_id) {
+      setTestLog((l) => [...l, "Error: no agent assigned to this number. Assign one in Settings first."]);
+      return;
+    }
+    if (!to.trim()) {
+      setTestLog((l) => [...l, "Error: enter a target phone number."]);
+      return;
+    }
+    setTestLog((l) => [...l, `Dialing ${to}…`]);
+    const { data, error } = await api.makeCall({
+      agent_id: n.agent_id,
+      phone_number: to.trim(),
+      phone_number_id: n.id,
+    });
+    if (error) {
+      setTestLog((l) => [...l, `Call failed: ${error}`]);
+    } else {
+      setTestLog((l) => [...l, `Call queued (status: ${data?.status ?? "queued"})`]);
+    }
   };
 
   const openSettings = (n: Num) => {
@@ -159,21 +177,13 @@ const PhoneNumbers = () => {
         }}
       />
 
-      {/* Test call modal */}
-      <Dialog open={!!testTarget} onOpenChange={(o) => !o && setTestTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Test {testTarget?.number}</DialogTitle>
-            <DialogDescription>Simulating an inbound test call.</DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border border-border bg-muted/30 p-3 font-mono text-xs space-y-1 max-h-56 overflow-y-auto">
-            {testLog.map((l, i) => <div key={i}>{l}</div>)}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTestTarget(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Place test call modal */}
+      <TestCallDialog
+        target={testTarget}
+        log={testLog}
+        onPlace={placeTestCall}
+        onClose={() => setTestTarget(null)}
+      />
 
       {/* Settings modal */}
       <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
@@ -213,5 +223,39 @@ const PhoneNumbers = () => {
     </div>
   );
 };
+
+function TestCallDialog({
+  target, log, onPlace, onClose,
+}: {
+  target: Num | null;
+  log: string[];
+  onPlace: (n: Num, to: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [to, setTo] = useState("");
+  return (
+    <Dialog open={!!target} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Place test call from {target?.number}</DialogTitle>
+          <DialogDescription>This dials a real number through VAPI using the agent assigned to this number.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label>Target phone number</Label>
+            <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="+15551234567" />
+          </div>
+          <div className="rounded-md border border-border bg-muted/30 p-3 font-mono text-xs space-y-1 max-h-56 overflow-y-auto">
+            {log.map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          <Button onClick={() => target && onPlace(target, to)} disabled={!to.trim()}>Place Call</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default PhoneNumbers;

@@ -1,8 +1,91 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends, Query
 from dependencies import get_current_user
 from database import supabase
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
+
+def _parse_dt(value) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        s = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def _duration_seconds(value) -> int:
+    """Conversations.duration is stored as 'M:SS' or similar; parse to seconds, return 0 on failure."""
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    s = str(value).strip()
+    if ":" in s:
+        try:
+            parts = [int(p) for p in s.split(":")]
+            if len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+            if len(parts) == 3:
+                return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        except Exception:
+            return 0
+    try:
+        return int(float(s))
+    except Exception:
+        return 0
+
+
+@router.get("/timeseries")
+async def timeseries(
+    user=Depends(get_current_user),
+    days: int = Query(14, ge=1, le=90),
+):
+    """Per-day calls / completed / total duration for the last `days` days."""
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    convos = (
+        supabase.table("conversations")
+        .select("status, duration, call_time, created_at")
+        .eq("user_id", user["user_id"])
+        .gte("created_at", start.isoformat())
+        .execute()
+    )
+    rows = convos.data or []
+
+    buckets: dict[str, dict[str, int]] = {}
+    for i in range(days):
+        d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+        buckets[d] = {"calls": 0, "completed": 0, "duration_sec": 0}
+
+    for r in rows:
+        dt = _parse_dt(r.get("call_time")) or _parse_dt(r.get("created_at"))
+        if not dt:
+            continue
+        key = dt.strftime("%Y-%m-%d")
+        if key not in buckets:
+            continue
+        buckets[key]["calls"] += 1
+        if (r.get("status") or "").lower() == "completed":
+            buckets[key]["completed"] += 1
+        buckets[key]["duration_sec"] += _duration_seconds(r.get("duration"))
+
+    series = [
+        {
+            "day": k,
+            "label": datetime.strptime(k, "%Y-%m-%d").strftime("%b %d"),
+            "calls": v["calls"],
+            "completed": v["completed"],
+            "duration_min": round(v["duration_sec"] / 60, 1),
+        }
+        for k, v in buckets.items()
+    ]
+    return {"data": series, "error": None}
 
 
 @router.get("/channel")

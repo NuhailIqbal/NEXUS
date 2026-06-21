@@ -36,7 +36,7 @@ const NAV: NavItem[] = [
     label: "AI Telephony",
     icon: PhoneCall,
     children: [
-      { label: "Outbound Dialer", to: "/dashboard/telephony/outbound" },
+      { label: "Campaigns", to: "/dashboard/telephony/campaigns" },
       { label: "Inbound Queue", to: "/dashboard/telephony/inbound" },
       { label: "Phone Numbers", to: "/dashboard/telephony/phone-numbers" },
     ],
