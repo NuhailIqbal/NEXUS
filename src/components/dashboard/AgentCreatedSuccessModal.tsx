@@ -98,9 +98,9 @@ export function AgentCreatedSuccessModal({
           )}
 
           <p className="mt-4 max-w-md text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Your agent has been successfully saved. Our team is now configuring and
-            activating your agent. It will be fully live and operational within{" "}
-            <span className="font-semibold text-foreground">24–48 hours</span>.
+            Your agent is live and ready to take calls. Use{" "}
+            <span className="font-semibold text-foreground">Talk to Agent</span>{" "}
+            on the My Agents page to try it out.
           </p>
 
           <div className="mt-8 flex w-full flex-col gap-2 sm:flex-row sm:justify-center">

@@ -121,19 +121,47 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         "system_prompt", "first_message", "main_goal", "website", "selected_tool_keys",
     )}
 
+    # Re-compose the system prompt with goal + knowledge if any of those changed
+    if any(k in updates for k in ("system_prompt", "main_goal")):
+        # Pull current goal/knowledge so we don't lose them when only one part changes
+        existing = (
+            supabase.table("ai_agents")
+            .select("system_prompt, main_goal, name")
+            .eq("id", agent_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        cur = existing.data or {}
+        new_prompt = _compose_system_prompt(
+            updates.get("name", cur.get("name", "")),
+            updates.get("system_prompt", cur.get("system_prompt")),
+            updates.get("main_goal", cur.get("main_goal")),
+            None,  # knowledge text is stored separately in agent_knowledge
+        )
+        updates["system_prompt"] = new_prompt
+        db_updates["system_prompt"] = new_prompt
+
     if settings.vapi_api_key and agent.get("vapi_assistant_id"):
         try:
-            vapi_payload = {}
+            vapi_payload: dict = {}
             if "name" in updates:
                 vapi_payload["name"] = updates["name"]
-            if "system_prompt" in updates or "first_message" in updates or "voice" in updates or "language" in updates:
-                vapi_payload.update(vapi_client.build_assistant_payload(
-                    name=updates.get("name", ""),
-                    voice=updates.get("voice"),
-                    language=updates.get("language", "en"),
-                    system_prompt=updates.get("system_prompt"),
-                    first_message=updates.get("first_message"),
-                ))
+            if "first_message" in updates:
+                vapi_payload["firstMessage"] = updates["first_message"]
+            if "system_prompt" in updates:
+                vapi_payload["model"] = {
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": updates["system_prompt"]}],
+                }
+            if "voice" in updates:
+                vapi_payload["voice"] = vapi_client._resolve_voice(updates["voice"])
+            if "language" in updates:
+                vapi_payload["transcriber"] = {
+                    "provider": "deepgram",
+                    "language": vapi_client._resolve_language(updates["language"]),
+                }
             if vapi_payload:
                 await vapi_client.update_assistant(agent["vapi_assistant_id"], vapi_payload)
         except Exception as e:

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -131,6 +132,8 @@ const AIAgents = () => {
       voice: a.voice,
       language: a.language,
       category: a.category,
+      system_prompt: a.system_prompt,
+      first_message: a.first_message,
     });
   };
 
@@ -142,6 +145,8 @@ const AIAgents = () => {
       voice: editForm.voice,
       language: editForm.language,
       category: editForm.category,
+      system_prompt: editForm.system_prompt,
+      first_message: editForm.first_message,
     });
     if (error) return toast.error(error);
     toast.success("Settings saved");
@@ -246,7 +251,7 @@ const AIAgents = () => {
 
       {/* Settings Modal */}
       <Dialog open={!!settingsAgent} onOpenChange={(o) => !o && setSettingsAgent(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Settings className="h-5 w-5 text-primary" />
@@ -340,6 +345,32 @@ const AIAgents = () => {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2 border-t border-border pt-4">
+              <Label htmlFor="agent-first-message">Greeting (first message)</Label>
+              <Input
+                id="agent-first-message"
+                value={editForm.first_message ?? ""}
+                onChange={(e) => setEditForm((f) => ({ ...f, first_message: e.target.value }))}
+                placeholder="Hi! How can I help you today?"
+              />
+              <p className="text-xs text-muted-foreground">What the agent says at the very start of a call.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="agent-system-prompt">System prompt</Label>
+              <Textarea
+                id="agent-system-prompt"
+                value={editForm.system_prompt ?? ""}
+                onChange={(e) => setEditForm((f) => ({ ...f, system_prompt: e.target.value }))}
+                rows={8}
+                placeholder="You are a friendly assistant who helps users with…"
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                The agent's instructions. Changes apply on the next call — no need to recreate the agent.
+              </p>
             </div>
           </div>
 
