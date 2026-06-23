@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Plus, Phone } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Phone, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,6 +31,7 @@ type Num = {
   agent_id: string;
   provider: string;
   vapi_phone_id: string;
+  created_at: string;
 };
 
 const PhoneNumbers = () => {
@@ -145,7 +146,7 @@ const PhoneNumbers = () => {
                   <td className="px-4 py-3">{n.provider}</td>
                   <td className="px-4 py-3 text-muted-foreground">{n.agent_id}</td>
                   <td className="px-4 py-3">
-                    <Badge variant={n.status === "Active" ? "default" : "secondary"}>{n.status}</Badge>
+                    <NumberStatus num={n} />
                   </td>
                   <td className="px-4 py-3">
                     <RowActions
@@ -165,12 +166,19 @@ const PhoneNumbers = () => {
         open={open}
         onOpenChange={setOpen}
         onCreate={async (d) => {
-          const number = d.title.startsWith("+") ? d.title : `+${d.title}`;
-          const { error } = await api.createPhoneNumber({
-            number,
+          const isVapi = d.serviceProvider.toLowerCase() === "vapi";
+          const payload: Record<string, any> = {
+            label: d.title,
             status: d.active ? "Active" : "Inactive",
             provider: d.serviceProvider,
-          });
+          };
+          if (isVapi) {
+            if (d.areaCode) payload.area_code = d.areaCode;
+          } else {
+            payload.number = d.title.startsWith("+") ? d.title : `+${d.title}`;
+          }
+          if (d.agentId) payload.agent_id = d.agentId;
+          const { error } = await api.createPhoneNumber(payload);
           if (error) return toast.error(error);
           toast.success(`Phone number "${d.title}" created`);
           fetchNumbers();
@@ -223,6 +231,41 @@ const PhoneNumbers = () => {
     </div>
   );
 };
+
+const ACTIVATION_SECS = 120;
+
+function NumberStatus({ num }: { num: Num }) {
+  const [remaining, setRemaining] = useState<number>(() => {
+    if ((num.provider || "").toLowerCase() !== "vapi" || !num.vapi_phone_id || !num.created_at) return 0;
+    const elapsed = Math.floor((Date.now() - new Date(num.created_at).getTime()) / 1000);
+    return Math.max(0, ACTIVATION_SECS - elapsed);
+  });
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (remaining <= 0) return;
+    timerRef.current = setInterval(() => {
+      setRemaining((r) => {
+        if (r <= 1) { clearInterval(timerRef.current!); return 0; }
+        return r - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current!);
+  }, []);
+
+  if (remaining > 0) {
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-xs font-medium text-yellow-500">
+        <Clock className="h-3 w-3 animate-pulse" />
+        Activating {m}:{String(s).padStart(2, "0")}
+      </span>
+    );
+  }
+
+  return <Badge variant={num.status === "Active" ? "default" : "secondary"}>{num.status}</Badge>;
+}
 
 function TestCallDialog({
   target, log, onPlace, onClose,

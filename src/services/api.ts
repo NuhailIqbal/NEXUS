@@ -55,6 +55,7 @@ export const api = {
   createAgent: (data: any) => post("/agents", data),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
   deleteAgent: (id: string) => del(`/agents/${id}`),
+  syncAgentVapi: (id: string) => post(`/agents/${id}/sync-vapi`),
   uploadAgentKnowledge: async (agentId: string, file: File) => {
     const token = await getToken();
     const fd = new FormData();

@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Eye, Plus, Settings, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { api } from "@/services/api";
 
 type Props = {
   open: boolean;
@@ -16,6 +17,7 @@ type BasicInfo = {
   email: string;
   name: string;
   timezone: string;
+  list_id: string;
 };
 
 type CustomField = { key: string; label: string; placeholder?: string; type?: "text" | "yesno" };
@@ -39,14 +41,21 @@ const TIMEZONES = ["UTC", "America/New_York", "America/Chicago", "America/Los_An
 
 export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [basic, setBasic] = useState<BasicInfo>({ phone: "", email: "", name: "", timezone: "UTC" });
+  const [basic, setBasic] = useState<BasicInfo>({ phone: "", email: "", name: "", timezone: "UTC", list_id: "" });
   const [custom, setCustom] = useState<Record<string, string>>({});
+  const [lists, setLists] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      api.getLists().then(({ data }) => setLists((data as any[]) ?? []));
+    }
+  }, [open]);
 
   const progress = useMemo(() => Math.round((step / 3) * 100), [step]);
 
   const reset = () => {
     setStep(1);
-    setBasic({ phone: "", email: "", name: "", timezone: "UTC" });
+    setBasic({ phone: "", email: "", name: "", timezone: "UTC", list_id: "" });
     setCustom({});
   };
 
@@ -122,6 +131,12 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                     {TIMEZONES.map((tz) => (<option key={tz} value={tz}>{tz}</option>))}
                   </select>
                 </Field>
+                <Field label="List">
+                  <select value={basic.list_id} onChange={(e) => setBasic((b) => ({ ...b, list_id: e.target.value }))} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+                    <option value="">No list (unassigned)</option>
+                    {lists.map((l) => (<option key={l.id} value={l.id}>{l.name}</option>))}
+                  </select>
+                </Field>
               </div>
             </div>
           )}
@@ -164,6 +179,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                     <ReviewRow label="Phone" value={basic.phone} />
                     <ReviewRow label="Email" value={basic.email} />
                     <ReviewRow label="Timezone" value={basic.timezone} />
+                    <ReviewRow label="List" value={lists.find((l) => l.id === basic.list_id)?.name ?? "Unassigned"} />
                   </div>
                 </div>
                 <div>

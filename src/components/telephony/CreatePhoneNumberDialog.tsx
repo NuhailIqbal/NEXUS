@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, Plus, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { api } from "@/services/api";
 
 type Props = {
   open: boolean;
@@ -22,9 +23,11 @@ export type PhoneNumberData = {
   useForHumanAgent: boolean;
   useForSms: boolean;
   serviceProvider: string;
+  areaCode: string;
+  agentId: string;
 };
 
-const PROVIDERS = ["Twilio", "Telnyx", "Vonage", "Plivo", "Bandwidth", "IDT"];
+const PROVIDERS = ["VAPI", "Twilio", "Telnyx", "Vonage", "Plivo", "Bandwidth", "IDT"];
 
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
@@ -35,10 +38,21 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     useForHumanAgent: false,
     useForSms: false,
     serviceProvider: "",
+    areaCode: "",
+    agentId: "",
   });
+  const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      api.getAgents().then(({ data: d }) => setAgents((d as any[]) ?? []));
+    }
+  }, [open]);
+
+  const isVapi = data.serviceProvider.toLowerCase() === "vapi";
 
   const reset = () =>
-    setData({ title: "", description: "", active: false, useForCall: false, useForHumanAgent: false, useForSms: false, serviceProvider: "" });
+    setData({ title: "", description: "", active: false, useForCall: false, useForHumanAgent: false, useForSms: false, serviceProvider: "", areaCode: "", agentId: "" });
 
   const close = (v: boolean) => {
     if (!v) reset();
@@ -48,8 +62,10 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   const create = () => {
     if (!data.title.trim()) return toast.error("Title is required");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
+    if (isVapi && (!data.areaCode.trim() || !/^\d{3}$/.test(data.areaCode.trim()))) {
+      return toast.error("Enter a valid 3-digit area code for VAPI (e.g. 415)");
+    }
     onCreate?.(data);
-    toast.success(`Phone number "${data.title}" created`);
     close(false);
   };
 
@@ -89,18 +105,51 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
           <div>
             <h3 className="text-base font-bold mb-4">Phone Details</h3>
-            <div>
-              <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
-              <div className="relative">
-                <select
-                  value={data.serviceProvider}
-                  onChange={(e) => setData({ ...data, serviceProvider: e.target.value })}
-                  className="w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                >
-                  <option value="">Please select your phone number provider</option>
-                  {PROVIDERS.map((p) => (<option key={p} value={p}>{p}</option>))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
+                <div className="relative">
+                  <select
+                    value={data.serviceProvider}
+                    onChange={(e) => setData({ ...data, serviceProvider: e.target.value })}
+                    className="w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  >
+                    <option value="">Please select your phone number provider</option>
+                    {PROVIDERS.map((p) => (<option key={p} value={p}>{p}</option>))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                </div>
+              </div>
+
+              {isVapi && (
+                <div>
+                  <label className="block text-sm font-semibold mb-1.5">Area Code <span className="text-destructive">*</span></label>
+                  <Input
+                    placeholder="e.g. 415"
+                    maxLength={3}
+                    value={data.areaCode}
+                    onChange={(e) => setData({ ...data, areaCode: e.target.value.replace(/\D/g, "") })}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">3-digit US area code. VAPI will provision a number in this area.</p>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-semibold mb-1.5">Assign AI Agent</label>
+                <div className="relative">
+                  <select
+                    value={data.agentId}
+                    onChange={(e) => setData({ ...data, agentId: e.target.value })}
+                    className="w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  >
+                    <option value="">No agent assigned</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">Agent that handles inbound calls on this number.</p>
               </div>
             </div>
           </div>

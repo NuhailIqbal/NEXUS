@@ -215,6 +215,7 @@ const Contacts = () => {
             phone: payload.basic.phone || "",
             email: payload.basic.email || "",
             status: "Active",
+            ...(payload.basic.list_id ? { list_id: payload.basic.list_id } : {}),
           });
           if (error) {
             toast.error("Failed to create contact");

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, PhoneOff, Bot, User, Loader2, AlertTriangle, PhoneCall } from "lucide-react";
+import { Mic, MicOff, PhoneOff, Bot, User, Loader2, AlertTriangle, PhoneCall, RefreshCw } from "lucide-react";
 import Vapi from "@vapi-ai/web";
 import { toast } from "sonner";
+import { api } from "@/services/api";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,13 @@ export type VoiceAgentInfo = {
   vapi_assistant_id?: string | null;
 };
 
+export type LiveVoiceModalProps = {
+  agent: VoiceAgentInfo | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onAgentSynced?: (agentId: string, vapiAssistantId: string) => void;
+};
+
 type Msg = { role: "user" | "assistant"; content: string };
 type CallStatus = "idle" | "connecting" | "ringing" | "in-call" | "ended" | "error";
 
@@ -30,15 +38,14 @@ export function LiveVoiceModal({
   agent,
   open,
   onOpenChange,
-}: {
-  agent: VoiceAgentInfo | null;
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-}) {
+  onAgentSynced,
+}: LiveVoiceModalProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [status, setStatus] = useState<CallStatus>("idle");
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAssistantId, setSyncedAssistantId] = useState<string | null>(null);
   const vapiRef = useRef<Vapi | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -47,15 +54,16 @@ export function LiveVoiceModal({
     vapiRef.current = null;
   };
 
-  const startCall = async () => {
+  const startCall = async (assistantIdOverride?: string) => {
     if (!agent) return;
     if (!PUBLIC_KEY) {
       setError("VAPI public key is not configured. Set VITE_VAPI_PUBLIC_KEY in your .env file.");
       setStatus("error");
       return;
     }
-    if (!agent.vapi_assistant_id) {
-      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured — re-create it or update via the API.");
+    const assistantId = assistantIdOverride ?? syncedAssistantId ?? agent.vapi_assistant_id;
+    if (!assistantId) {
+      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured — use the Sync button below to fix this.");
       setStatus("error");
       return;
     }
@@ -87,12 +95,30 @@ export function LiveVoiceModal({
         setStatus("error");
       });
 
-      await vapi.start(agent.vapi_assistant_id);
+      await vapi.start(assistantId);
     } catch (e: any) {
       setError(e?.message ?? "Failed to start call");
       setStatus("error");
       teardown();
     }
+  };
+
+  const syncToVapi = async () => {
+    if (!agent) return;
+    setSyncing(true);
+    setError(null);
+    const result = await api.syncAgentVapi(agent.id);
+    setSyncing(false);
+    if (result.error || !result.data?.vapi_assistant_id) {
+      setError(result.error ?? "Sync failed — no assistant ID returned. Check your VAPI configuration.");
+      setStatus("error");
+      return;
+    }
+    const newId: string = result.data.vapi_assistant_id;
+    setSyncedAssistantId(newId);
+    onAgentSynced?.(agent.id, newId);
+    toast.success("Agent synced to VAPI — starting call…");
+    await startCall(newId);
   };
 
   const endCall = () => {
@@ -120,6 +146,7 @@ export function LiveVoiceModal({
       setMessages([]);
       setMuted(false);
       setError(null);
+      setSyncedAssistantId(null);
       return;
     }
     // auto-start on open
@@ -144,6 +171,7 @@ export function LiveVoiceModal({
 
   const isLive = status === "in-call";
   const isBusy = status === "connecting" || status === "ringing";
+  const isNotLinked = status === "error" && !agent?.vapi_assistant_id && !syncedAssistantId;
 
   return (
     <Dialog
@@ -174,9 +202,27 @@ export function LiveVoiceModal({
             </div>
 
             {status === "error" && (
-              <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{error}</span>
+              <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+                {isNotLinked && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={syncToVapi}
+                    disabled={syncing}
+                    className="self-start border-destructive/40 text-destructive hover:bg-destructive/10"
+                  >
+                    {syncing ? (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                    )}
+                    {syncing ? "Syncing…" : "Sync to VAPI"}
+                  </Button>
+                )}
               </div>
             )}
 
@@ -218,10 +264,10 @@ export function LiveVoiceModal({
             </div>
 
             <div className="flex items-center justify-center gap-3 pt-2">
-              {(status === "idle" || status === "ended" || status === "error") && (
+              {(status === "idle" || status === "ended" || (status === "error" && !isNotLinked)) && (
                 <Button
                   size="lg"
-                  onClick={startCall}
+                  onClick={() => startCall()}
                   className="h-14 rounded-full bg-primary px-6 hover:bg-primary/90"
                   title="Start call"
                 >

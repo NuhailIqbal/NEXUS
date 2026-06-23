@@ -182,8 +182,11 @@ class InboundQueueUpdate(BaseModel):
 
 class PhoneNumberCreate(BaseModel):
     number: Optional[str] = None
+    label: Optional[str] = None
     agent_id: Optional[str] = None
     provider: str = "vapi"
+    area_code: Optional[str] = None
+    status: Optional[str] = "Active"
 
 
 class PhoneNumberUpdate(BaseModel):

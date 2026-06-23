@@ -32,14 +32,21 @@ async def list_phone_numbers(user=Depends(get_current_user)):
 
 @router.post("/phone-numbers")
 async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
-    row = body.model_dump()
-    row["user_id"] = user["user_id"]
+    # Only include columns that exist in the phone_numbers table
+    row: dict = {
+        "user_id": user["user_id"],
+        "number": body.number or "",
+        "status": body.status or "Active",
+        "provider": body.provider or "vapi",
+    }
+    if body.agent_id:
+        row["agent_id"] = body.agent_id
 
-    if settings.vapi_api_key and body.provider == "vapi":
+    if settings.vapi_api_key and (body.provider or "").lower() == "vapi":
         try:
-            vapi_payload = {"provider": "vapi"}
-            if body.number:
-                vapi_payload["number"] = body.number
+            vapi_payload: dict = {"provider": "vapi"}
+            if body.area_code:
+                vapi_payload["numberDesiredAreaCode"] = body.area_code
             if body.agent_id:
                 agent = (
                     supabase.table("ai_agents")
@@ -230,7 +237,10 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
 
     if not camp.get("list_id"):
-        raise HTTPException(status_code=400, detail="Campaign has no contact list")
+        raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")
+
+    if not camp.get("phone_number_id"):
+        raise HTTPException(status_code=400, detail="Campaign has no phone number assigned. Edit the campaign and select a phone number to call from.")
 
     contacts = (
         supabase.table("contacts")
@@ -244,17 +254,16 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not contacts.data:
         raise HTTPException(status_code=400, detail="No contacts with phone numbers in the list")
 
-    phone_number_id = None
-    if camp.get("phone_number_id"):
-        pn = (
-            supabase.table("phone_numbers")
-            .select("vapi_phone_id")
-            .eq("id", camp["phone_number_id"])
-            .maybe_single()
-            .execute()
-        )
-        if pn.data:
-            phone_number_id = pn.data.get("vapi_phone_id")
+    pn = (
+        supabase.table("phone_numbers")
+        .select("vapi_phone_id")
+        .eq("id", camp["phone_number_id"])
+        .maybe_single()
+        .execute()
+    )
+    phone_number_id = pn.data.get("vapi_phone_id") if pn.data else None
+    if not phone_number_id:
+        raise HTTPException(status_code=400, detail="The campaign's phone number is not linked to VAPI yet. Wait for activation or re-provision the number.")
 
     async def dial_contact(contact):
         call_payload = {

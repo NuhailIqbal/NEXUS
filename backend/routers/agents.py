@@ -85,6 +85,51 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     return {"data": agent, "error": None}
 
 
+@router.post("/{agent_id}/sync-vapi")
+async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
+    if not settings.vapi_api_key:
+        raise HTTPException(status_code=400, detail="VAPI is not configured on this server.")
+
+    agent_res = (
+        supabase.table("ai_agents")
+        .select("*")
+        .eq("id", agent_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    agent = agent_res.data
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if agent.get("vapi_assistant_id"):
+        return {"data": agent, "error": None}
+
+    tool_ids = await provision_tools_for_agent(user["user_id"], agent.get("selected_tool_keys") or [])
+    try:
+        payload = vapi_client.build_assistant_payload(
+            name=agent["name"],
+            voice=agent.get("voice"),
+            language=agent.get("language"),
+            system_prompt=agent.get("system_prompt"),
+            first_message=agent.get("first_message"),
+            tool_ids=tool_ids or None,
+        )
+        vapi_agent = await vapi_client.create_assistant(payload)
+        vapi_assistant_id = vapi_agent.get("id")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+
+    result = (
+        supabase.table("ai_agents")
+        .update({"vapi_assistant_id": vapi_assistant_id})
+        .eq("id", agent_id)
+        .eq("user_id", user["user_id"])
+        .execute()
+    )
+    return {"data": result.data[0] if result.data else None, "error": None}
+
+
 @router.get("/{agent_id}")
 async def get_agent(agent_id: str, user=Depends(get_current_user)):
     result = (
@@ -121,9 +166,10 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         "system_prompt", "first_message", "main_goal", "website", "selected_tool_keys",
     )}
 
-    # Re-compose the system prompt with goal + knowledge if any of those changed
-    if any(k in updates for k in ("system_prompt", "main_goal")):
-        # Pull current goal/knowledge so we don't lose them when only one part changes
+    # If system_prompt is explicitly provided, use it as-is — the UI shows and edits
+    # the full final prompt, so re-composing would double-append the goal section.
+    # Only compose when main_goal changes but system_prompt is not being updated.
+    if "main_goal" in updates and "system_prompt" not in updates:
         existing = (
             supabase.table("ai_agents")
             .select("system_prompt, main_goal, name")
@@ -135,9 +181,9 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         cur = existing.data or {}
         new_prompt = _compose_system_prompt(
             updates.get("name", cur.get("name", "")),
-            updates.get("system_prompt", cur.get("system_prompt")),
-            updates.get("main_goal", cur.get("main_goal")),
-            None,  # knowledge text is stored separately in agent_knowledge
+            cur.get("system_prompt"),
+            updates["main_goal"],
+            None,
         )
         updates["system_prompt"] = new_prompt
         db_updates["system_prompt"] = new_prompt
