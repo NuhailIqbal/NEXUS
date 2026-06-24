@@ -35,6 +35,7 @@ import Lists from "./pages/dashboard/database/Lists.tsx";
 import CustomFields from "./pages/dashboard/database/CustomFields.tsx";
 import Outbound from "./pages/dashboard/telephony/Outbound.tsx";
 import Inbound from "./pages/dashboard/telephony/Inbound.tsx";
+import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
 import PhoneNumbers from "./pages/dashboard/telephony/PhoneNumbers.tsx";
 import {
   AnalyticsChannel,
@@ -86,6 +87,7 @@ const App = () => (
               <Route path="telephony/outbound" element={<Outbound />} />
               <Route path="telephony/campaigns" element={<Outbound />} />
               <Route path="telephony/inbound" element={<Inbound />} />
+              <Route path="telephony/inbound-logs" element={<InboundLogs />} />
               <Route path="telephony/phone-numbers" element={<PhoneNumbers />} />
               <Route path="analytics/channel" element={<AnalyticsChannel />} />
               <Route path="analytics/campaign" element={<AnalyticsCampaign />} />

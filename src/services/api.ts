@@ -100,6 +100,7 @@ export const api = {
   createTool: (data: any) => post("/tools", data),
   updateTool: (id: string, data: any) => patch(`/tools/${id}`, data),
   deleteTool: (id: string) => del(`/tools/${id}`),
+  testTool: (id: string) => post(`/tools/${id}/test`),
 
   // Conversations
   getConversations: (params?: string) => get(`/conversations${params ? `?${params}` : ""}`),

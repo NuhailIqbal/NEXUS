@@ -74,6 +74,37 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+
+    if "agent_id" in updates and settings.vapi_api_key:
+        existing = (
+            supabase.table("phone_numbers")
+            .select("vapi_phone_id")
+            .eq("id", number_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        vapi_phone_id = existing.data.get("vapi_phone_id") if existing.data else None
+        if vapi_phone_id:
+            vapi_update: dict = {}
+            if updates["agent_id"]:
+                agent = (
+                    supabase.table("ai_agents")
+                    .select("vapi_assistant_id")
+                    .eq("id", updates["agent_id"])
+                    .eq("user_id", user["user_id"])
+                    .maybe_single()
+                    .execute()
+                )
+                if agent.data and agent.data.get("vapi_assistant_id"):
+                    vapi_update["assistantId"] = agent.data["vapi_assistant_id"]
+            else:
+                vapi_update["assistantId"] = None
+            try:
+                await vapi_client.update_phone_number(vapi_phone_id, vapi_update)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"VAPI sync error: {str(e)}")
+
     result = (
         supabase.table("phone_numbers")
         .update(updates)
@@ -329,8 +360,66 @@ async def list_inbound_queues(user=Depends(get_current_user)):
 
 @router.post("/inbound")
 async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_current_user)):
-    row = body.model_dump()
+    if not settings.vapi_api_key:
+        raise HTTPException(status_code=503, detail="VAPI not configured")
+    if not body.agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+
+    agent = (
+        supabase.table("ai_agents")
+        .select("vapi_assistant_id")
+        .eq("id", body.agent_id)
+        .eq("user_id", user["user_id"])
+        .maybe_single()
+        .execute()
+    )
+    if not agent.data or not agent.data.get("vapi_assistant_id"):
+        raise HTTPException(status_code=400, detail="Agent not found or not synced with VAPI")
+    vapi_assistant_id = agent.data["vapi_assistant_id"]
+
+    phone_number_id = body.phone_number_id
+
+    if phone_number_id:
+        phone = (
+            supabase.table("phone_numbers")
+            .select("vapi_phone_id")
+            .eq("id", phone_number_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        if not phone.data or not phone.data.get("vapi_phone_id"):
+            raise HTTPException(status_code=400, detail="Phone number not found or not VAPI-provisioned")
+        try:
+            await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"VAPI error assigning agent: {str(e)}")
+        supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", user["user_id"]).execute()
+    else:
+        vapi_payload: dict = {"provider": "vapi", "assistantId": vapi_assistant_id}
+        if body.area_code:
+            vapi_payload["numberDesiredAreaCode"] = body.area_code
+        try:
+            vapi_result = await vapi_client.create_phone_number(vapi_payload)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"VAPI error provisioning number: {str(e)}")
+
+        pn_row = {
+            "user_id": user["user_id"],
+            "number": vapi_result.get("number", ""),
+            "vapi_phone_id": vapi_result.get("id"),
+            "agent_id": body.agent_id,
+            "provider": "vapi",
+            "status": "Active",
+        }
+        pn_result = supabase.table("phone_numbers").insert(pn_row).execute()
+        if pn_result.data:
+            phone_number_id = pn_result.data[0]["id"]
+
+    row = body.model_dump(exclude={"area_code"})
     row["user_id"] = user["user_id"]
+    row["phone_number_id"] = phone_number_id
+
     result = supabase.table("inbound_queues").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
 
@@ -355,6 +444,30 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+
+    if ("agent_id" in updates or "phone_number_id" in updates) and settings.vapi_api_key:
+        existing = (
+            supabase.table("inbound_queues")
+            .select("agent_id, phone_number_id")
+            .eq("id", queue_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        agent_id = updates.get("agent_id") or (existing.data.get("agent_id") if existing.data else None)
+        pn_id = updates.get("phone_number_id") or (existing.data.get("phone_number_id") if existing.data else None)
+        if agent_id and pn_id:
+            phone = supabase.table("phone_numbers").select("vapi_phone_id").eq("id", pn_id).eq("user_id", user["user_id"]).maybe_single().execute()
+            agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", user["user_id"]).maybe_single().execute()
+            vapi_phone_id = phone.data.get("vapi_phone_id") if phone.data else None
+            vapi_assistant_id = agent.data.get("vapi_assistant_id") if agent.data else None
+            if vapi_phone_id and vapi_assistant_id:
+                try:
+                    await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": vapi_assistant_id})
+                except Exception as e:
+                    raise HTTPException(status_code=502, detail=f"VAPI sync error: {str(e)}")
+            supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", user["user_id"]).execute()
+
     result = (
         supabase.table("inbound_queues")
         .update(updates)

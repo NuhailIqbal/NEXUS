@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
   LayoutDashboard, Bot, Wrench, Mic, Plug, Database, Workflow,
-  PhoneCall, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
+  PhoneCall, PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
   Sparkles, Bell, Search, Menu, X, MessageSquare, Radio,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,12 +33,19 @@ const NAV: NavItem[] = [
   },
   { label: "Automation", to: "/dashboard/automation", icon: Workflow },
   {
-    label: "AI Telephony",
-    icon: PhoneCall,
+    label: "Outbound",
+    icon: PhoneOutgoing,
     children: [
       { label: "Campaigns", to: "/dashboard/telephony/campaigns" },
-      { label: "Inbound Queue", to: "/dashboard/telephony/inbound" },
       { label: "Phone Numbers", to: "/dashboard/telephony/phone-numbers" },
+    ],
+  },
+  {
+    label: "Inbound",
+    icon: PhoneIncoming,
+    children: [
+      { label: "AI Receptionist", to: "/dashboard/telephony/inbound" },
+      { label: "Call Logs", to: "/dashboard/telephony/inbound-logs" },
     ],
   },
   { label: "Voice Widgets", to: "/dashboard/voice-widgets", icon: Radio },

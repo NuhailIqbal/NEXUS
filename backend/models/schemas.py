@@ -128,10 +128,10 @@ class AgentUpdate(BaseModel):
 class ToolCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    url: str
+    url: str = ""
     method: str = "POST"
     headers: Optional[dict] = None
-    body_schema: Optional[dict] = None
+    parameters: Optional[list[dict]] = None
 
 
 class ToolUpdate(BaseModel):
@@ -140,7 +140,7 @@ class ToolUpdate(BaseModel):
     url: Optional[str] = None
     method: Optional[str] = None
     headers: Optional[dict] = None
-    body_schema: Optional[dict] = None
+    parameters: Optional[list[dict]] = None
     status: Optional[str] = None
 
 
@@ -166,6 +166,8 @@ class CampaignUpdate(BaseModel):
 class InboundQueueCreate(BaseModel):
     name: str
     agent_id: Optional[str] = None
+    phone_number_id: Optional[str] = None
+    area_code: Optional[str] = None
     max_wait_seconds: int = 120
     overflow_action: str = "voicemail"
 
@@ -173,6 +175,7 @@ class InboundQueueCreate(BaseModel):
 class InboundQueueUpdate(BaseModel):
     name: Optional[str] = None
     agent_id: Optional[str] = None
+    phone_number_id: Optional[str] = None
     status: Optional[str] = None
     max_wait_seconds: Optional[int] = None
     overflow_action: Optional[str] = None

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Wrench, Pencil, Trash2, PlayCircle, Settings as SettingsIcon, Loader2 } from "lucide-react";
+import { Plus, Wrench, Pencil, Trash2, PlayCircle, Settings as SettingsIcon, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -29,9 +29,35 @@ type Tool = {
   name: string;
   description: string;
   status: string;
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  parameters?: any[];
   lastModified: string;
   data?: ToolWizardData;
 };
+
+function toolToWizardData(t: Tool): Partial<ToolWizardData> {
+  return {
+    name: t.name,
+    description: t.description,
+    active: t.status === "Active",
+    method: (t.method as ToolWizardData["method"]) || "POST",
+    apiUrl: t.url || "",
+    headers: Object.entries(t.headers || {}).map(([key, value]) => ({ id: Math.random().toString(36).slice(2, 10), key, value })),
+    parameters: (t.parameters || []).map((p: any) => ({
+      id: Math.random().toString(36).slice(2, 10),
+      name: p.name || "",
+      type: p.type || "string",
+      description: p.description || "",
+      defaultValue: p.defaultValue || "",
+      required: p.required || false,
+      enumValues: p.enumValues || [],
+      expanded: false,
+    })),
+    bodyProperties: [],
+  };
+}
 
 const Tools = () => {
   const [tools, setTools] = useState<Tool[]>([]);
@@ -40,9 +66,8 @@ const Tools = () => {
   const [editing, setEditing] = useState<Tool | null>(null);
 
   const [testTool, setTestTool] = useState<Tool | null>(null);
-  const [testInput, setTestInput] = useState("");
-  const [testOutput, setTestOutput] = useState<string | null>(null);
-  const [testLoading, setTestLoading] = useState(false);
+  const [testState, setTestState] = useState<"idle" | "running" | "success" | "fail">("idle");
+  const [testLog, setTestLog] = useState<string[]>([]);
 
   const [settingsTool, setSettingsTool] = useState<Tool | null>(null);
   const [settingsForm, setSettingsForm] = useState<Partial<Tool>>({});
@@ -58,6 +83,10 @@ const Tools = () => {
           name: t.name,
           description: t.description ?? "",
           status: t.status ?? "Active",
+          url: t.url ?? "",
+          method: t.method ?? "POST",
+          headers: t.headers ?? {},
+          parameters: t.parameters ?? [],
           lastModified: t.updated_at
             ? new Date(t.updated_at).toISOString().slice(0, 10)
             : new Date(t.created_at).toISOString().slice(0, 10),
@@ -72,12 +101,32 @@ const Tools = () => {
   }, []);
 
   const handleSave = async (data: ToolWizardData) => {
+    const headersObj: Record<string, string> = {};
+    for (const h of data.headers) {
+      if (h.key.trim()) headersObj[h.key.trim()] = h.value;
+    }
+
+    const params = data.parameters.map((p) => ({
+      name: p.name,
+      type: p.type,
+      description: p.description,
+      defaultValue: p.defaultValue,
+      required: p.required,
+      enumValues: p.enumValues,
+    }));
+
+    const payload = {
+      name: data.name,
+      description: data.description,
+      status: data.active ? "Active" : "Inactive",
+      url: data.apiUrl,
+      method: data.method,
+      headers: headersObj,
+      parameters: params,
+    };
+
     if (editing) {
-      const { error } = await api.updateTool(editing.id, {
-        name: data.name,
-        description: data.description,
-        status: data.active ? "Active" : "Inactive",
-      });
+      const { error } = await api.updateTool(editing.id, payload);
       if (error) return toast.error(error);
       toast.success("Tool updated");
       setEditing(null);
@@ -86,11 +135,7 @@ const Tools = () => {
       return;
     }
 
-    const { error } = await api.createTool({
-      name: data.name,
-      description: data.description,
-      status: data.active ? "Active" : "Inactive",
-    });
+    const { error } = await api.createTool(payload);
     if (error) return toast.error(error);
     toast.success("Tool created");
     setOpen(false);
@@ -104,32 +149,33 @@ const Tools = () => {
     toast.success("Tool deleted");
   };
 
-  const openTest = (t: Tool) => {
+  const openTest = async (t: Tool) => {
     setTestTool(t);
-    setTestInput(
-      JSON.stringify(
-        { example: "value", trigger: "manual" },
-        null,
-        2,
-      ),
-    );
-    setTestOutput(null);
-  };
+    setTestState("running");
+    setTestLog([`Testing ${t.name}…`, `${t.method || "POST"} ${t.url || "(no URL)"}`, "Sending request with sample data…"]);
 
-  const runTest = () => {
-    if (!testTool) return;
-    setTestOutput(
-      [
-        "Tools execute inside live VAPI calls, not from the dashboard.",
-        "",
-        `To test "${testTool.name}":`,
-        " 1. Attach this tool to an AI agent (via the Create AI Agent wizard or by editing the agent).",
-        " 2. Use the \"Talk to Agent\" button on the AI Agents page.",
-        " 3. Ask the agent to perform the action this tool exposes.",
-        "",
-        "Inside the call, VAPI will invoke the tool's server URL with the live arguments.",
-      ].join("\n"),
-    );
+    const { data, error } = await api.testTool(t.id);
+    if (error) {
+      setTestLog((l) => [...l, `Error: ${error}`]);
+      setTestState("fail");
+      return;
+    }
+
+    const result = data as { ok: boolean; message: string; latency_ms: number | null; response_preview?: string } | null;
+    if (!result) {
+      setTestLog((l) => [...l, "No response from server"]);
+      setTestState("fail");
+      return;
+    }
+
+    const lines: string[] = [];
+    const latency = result.latency_ms != null ? ` (${result.latency_ms}ms)` : "";
+    lines.push(`${result.message}${latency}`);
+    if (result.response_preview) {
+      lines.push(`Response: ${result.response_preview.slice(0, 200)}`);
+    }
+    setTestLog((l) => [...l, ...lines]);
+    setTestState(result.ok ? "success" : "fail");
   };
 
   const openSettings = (t: Tool) => {
@@ -160,7 +206,7 @@ const Tools = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tools</h1>
-          <p className="text-sm text-muted-foreground">Reusable actions your agents and flows can call.</p>
+          <p className="text-sm text-muted-foreground">Custom API actions your agents can call during live calls.</p>
         </div>
         <Button onClick={() => { setEditing(null); setOpen(true); }}>
           <Plus className="mr-2 h-4 w-4" /> Add Tool
@@ -181,9 +227,10 @@ const Tools = () => {
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Description</th>
+                <th className="px-4 py-3">Endpoint</th>
+                <th className="px-4 py-3">Params</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Last modified</th>
+                <th className="px-4 py-3">Modified</th>
                 <th className="px-4 py-3 w-44"></th>
               </tr>
             </thead>
@@ -195,10 +242,23 @@ const Tools = () => {
                       <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary">
                         <Wrench className="h-4 w-4" />
                       </div>
-                      <span className="font-medium text-foreground">{t.name}</span>
+                      <div>
+                        <span className="font-medium text-foreground">{t.name}</span>
+                        <p className="text-xs text-muted-foreground truncate max-w-[200px]">{t.description}</p>
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{t.description}</td>
+                  <td className="px-4 py-3">
+                    {t.url ? (
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10px]">{t.method || "POST"}</Badge>
+                        <span className="text-xs text-muted-foreground truncate max-w-[180px]">{t.url}</span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{(t.parameters || []).length}</td>
                   <td className="px-4 py-3">
                     <Badge variant={t.status === "Active" ? "default" : "secondary"}>{t.status}</Badge>
                   </td>
@@ -208,15 +268,13 @@ const Tools = () => {
                       <button
                         onClick={() => openTest(t)}
                         className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
-                        aria-label="Test"
-                        title="Test"
+                        title="Test tool"
                       >
                         <PlayCircle className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => openSettings(t)}
                         className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        aria-label="Settings"
                         title="Settings"
                       >
                         <SettingsIcon className="h-4 w-4" />
@@ -224,7 +282,6 @@ const Tools = () => {
                       <button
                         onClick={() => { setEditing(t); setOpen(true); }}
                         className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        aria-label="Edit"
                         title="Edit in wizard"
                       >
                         <Pencil className="h-4 w-4" />
@@ -232,7 +289,6 @@ const Tools = () => {
                       <button
                         onClick={() => handleDelete(t)}
                         className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                        aria-label="Delete"
                         title="Delete"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -250,63 +306,52 @@ const Tools = () => {
         open={open}
         onOpenChange={(v) => { setOpen(v); if (!v) setEditing(null); }}
         mode={editing ? "edit" : "create"}
-        initialData={editing?.data}
+        initialData={editing ? toolToWizardData(editing) : undefined}
         onSave={handleSave}
       />
 
       {/* Test Tool Modal */}
       <Dialog open={!!testTool} onOpenChange={(o) => !o && setTestTool(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <PlayCircle className="h-5 w-5 text-primary" />
               Test {testTool?.name}
             </DialogTitle>
             <DialogDescription>
-              Run this tool with sample input to preview its behavior.
+              Sends a request with sample data to your tool's API endpoint.
             </DialogDescription>
           </DialogHeader>
 
-          {testTool && (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                <p className="text-muted-foreground">{testTool.description}</p>
-                <div className="mt-2 flex items-center gap-2">
-                  <Badge variant={testTool.status === "Active" ? "default" : "secondary"}>
-                    {testTool.status}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">Last modified {testTool.lastModified}</span>
-                </div>
+          <div className="rounded-lg border border-border bg-muted/30 p-3 font-mono text-xs space-y-1 max-h-56 overflow-y-auto">
+            {testLog.map((line, i) => (
+              <div key={i} className="text-foreground">{line}</div>
+            ))}
+            {testState === "running" && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> Working...
               </div>
+            )}
+          </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="test-input">Input (JSON)</Label>
-                <Textarea
-                  id="test-input"
-                  className="font-mono text-xs h-32"
-                  value={testInput}
-                  onChange={(e) => setTestInput(e.target.value)}
-                />
-              </div>
-
-              {testOutput && (
-                <div className="space-y-2">
-                  <Label>Output</Label>
-                  <pre className="max-h-56 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs font-mono">
-                    {testOutput}
-                  </pre>
-                </div>
-              )}
+          {testState === "success" && (
+            <div className="flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+              <CheckCircle2 className="h-4 w-4" /> Endpoint reachable — tool is working.
+            </div>
+          )}
+          {testState === "fail" && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <XCircle className="h-4 w-4" /> Test failed — check your URL and credentials.
             </div>
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTestTool(null)}>
-              Close
-            </Button>
-            <Button onClick={runTest} disabled={testLoading}>
-              <PlayCircle className="mr-2 h-4 w-4" />
-              {testLoading ? "Running..." : "Run Tool"}
+            <Button variant="outline" onClick={() => setTestTool(null)}>Close</Button>
+            <Button
+              onClick={() => testTool && openTest(testTool)}
+              disabled={testState === "running"}
+            >
+              Run Again
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -321,7 +366,7 @@ const Tools = () => {
               Tool Settings
             </DialogTitle>
             <DialogDescription>
-              Update name, description, and status. Changes save immediately.
+              Update name, description, and status.
             </DialogDescription>
           </DialogHeader>
 

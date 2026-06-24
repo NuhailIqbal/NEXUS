@@ -99,6 +99,8 @@ const Integrations = () => {
     setTestState(result.ok ? "success" : "fail");
   };
 
+  const [settingsCreds, setSettingsCreds] = useState<Record<string, string>>({});
+
   const openSettings = (i: Integration) => {
     setSettingsTarget(i);
     setSettingsForm({
@@ -106,15 +108,20 @@ const Integrations = () => {
       description: i.description,
       status: i.status,
     });
+    setSettingsCreds({});
   };
 
   const saveSettings = async () => {
     if (!settingsTarget) return;
-    const patch: Partial<Integration> = {
+    const patch: any = {
       name: settingsForm.name ?? settingsTarget.name,
       description: settingsForm.description ?? settingsTarget.description,
       status: settingsForm.status ?? settingsTarget.status,
     };
+    const hasNewCreds = Object.values(settingsCreds).some((v) => v.trim());
+    if (hasNewCreds) {
+      patch.config = settingsCreds;
+    }
     const { error } = await api.updateIntegration(settingsTarget.id, patch);
     if (error) return toast.error(error);
     setIntegrations((prev) => prev.map((x) => (x.id === settingsTarget.id ? { ...x, ...patch } : x)));
@@ -335,6 +342,42 @@ const Integrations = () => {
                   <SelectItem value="Inactive">Inactive</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-3 border-t border-border pt-4">
+              <Label className="text-sm font-semibold">Update Credentials</Label>
+              <p className="text-xs text-muted-foreground">Leave blank to keep existing credentials. Fill in to replace them.</p>
+              <div className="space-y-2">
+                <Label htmlFor="cred-api-key">API Key / Token</Label>
+                <Input
+                  id="cred-api-key"
+                  type="password"
+                  placeholder="Enter new API key…"
+                  value={settingsCreds.apiKey ?? ""}
+                  onChange={(e) => setSettingsCreds((c) => ({ ...c, apiKey: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="cred-username">Username / SID</Label>
+                  <Input
+                    id="cred-username"
+                    placeholder="Optional"
+                    value={settingsCreds.sid ?? ""}
+                    onChange={(e) => setSettingsCreds((c) => ({ ...c, sid: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cred-password">Password / Secret</Label>
+                  <Input
+                    id="cred-password"
+                    type="password"
+                    placeholder="Optional"
+                    value={settingsCreds.token ?? ""}
+                    onChange={(e) => setSettingsCreds((c) => ({ ...c, token: e.target.value }))}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 

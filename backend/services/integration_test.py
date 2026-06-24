@@ -108,18 +108,109 @@ async def test_vonage(config: dict) -> dict:
     )
 
 
+# ── CRM / SaaS providers ──
+
+async def test_hubspot(config: dict) -> dict:
+    token = (config.get("accessToken") or config.get("apiKey") or "").strip()
+    if not token:
+        return {"ok": False, "message": "Missing accessToken"}
+    return await _http_test(
+        "GET", "https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+async def test_salesforce(config: dict) -> dict:
+    token = (config.get("accessToken") or "").strip()
+    instance = (config.get("instanceUrl") or "https://login.salesforce.com").strip().rstrip("/")
+    if not token:
+        return {"ok": False, "message": "Missing accessToken"}
+    return await _http_test(
+        "GET", f"{instance}/services/data/v59.0/limits",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+async def test_openai(config: dict) -> dict:
+    api_key = (config.get("apiKey") or "").strip()
+    if not api_key:
+        return {"ok": False, "message": "Missing apiKey"}
+    return await _http_test(
+        "GET", "https://api.openai.com/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+
+async def test_stripe(config: dict) -> dict:
+    key = (config.get("secretKey") or config.get("apiKey") or "").strip()
+    if not key:
+        return {"ok": False, "message": "Missing secretKey"}
+    return await _http_test(
+        "GET", "https://api.stripe.com/v1/balance",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+async def test_slack(config: dict) -> dict:
+    url = (config.get("webhookUrl") or "").strip()
+    if not url:
+        return {"ok": False, "message": "Missing webhookUrl"}
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json={"text": "EDM Nexus test ping"})
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if resp.status_code == 200:
+            return {"ok": True, "latency_ms": latency_ms, "message": "Webhook delivered successfully"}
+        return {"ok": False, "latency_ms": latency_ms, "message": f"Slack returned HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"ok": False, "latency_ms": int((time.perf_counter() - started) * 1000), "message": f"Error: {e}"}
+
+
+async def test_zapier(config: dict) -> dict:
+    url = (config.get("webhookUrl") or "").strip()
+    if not url:
+        return {"ok": False, "message": "Missing webhookUrl"}
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json={"test": True, "source": "edm_nexus"})
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if 200 <= resp.status_code < 300:
+            return {"ok": True, "latency_ms": latency_ms, "message": "Webhook accepted"}
+        return {"ok": False, "latency_ms": latency_ms, "message": f"Zapier returned HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"ok": False, "latency_ms": int((time.perf_counter() - started) * 1000), "message": f"Error: {e}"}
+
+
+async def test_gemini(config: dict) -> dict:
+    api_key = (config.get("apiKey") or "").strip()
+    if not api_key:
+        return {"ok": False, "message": "Missing apiKey"}
+    return await _http_test(
+        "GET", f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+    )
+
+
 # ── Provider registry & dispatcher ──
 
 PROVIDERS = [
     # (keyword matched against integration.name, lowercased), prober, friendly label
-    ("brevo",     test_brevo,    "Brevo"),
-    ("sendinblue", test_brevo,   "Brevo"),  # legacy name
-    ("sendgrid",  test_sendgrid, "SendGrid"),
-    ("mailgun",   test_mailgun,  "Mailgun"),
-    ("twilio",    test_twilio,   "Twilio"),
-    ("telnyx",    test_telnyx,   "Telnyx"),
-    ("vonage",    test_vonage,   "Vonage"),
-    ("nexmo",     test_vonage,   "Vonage"),  # legacy name
+    ("brevo",      test_brevo,      "Brevo"),
+    ("sendinblue", test_brevo,      "Brevo"),
+    ("sendgrid",   test_sendgrid,   "SendGrid"),
+    ("mailgun",    test_mailgun,    "Mailgun"),
+    ("twilio",     test_twilio,     "Twilio"),
+    ("telnyx",     test_telnyx,     "Telnyx"),
+    ("vonage",     test_vonage,     "Vonage"),
+    ("nexmo",      test_vonage,     "Vonage"),
+    ("hubspot",    test_hubspot,    "HubSpot"),
+    ("salesforce", test_salesforce, "Salesforce"),
+    ("openai",     test_openai,     "OpenAI"),
+    ("stripe",     test_stripe,     "Stripe"),
+    ("slack",      test_slack,      "Slack"),
+    ("zapier",     test_zapier,     "Zapier"),
+    ("gemini",     test_gemini,     "Gemini"),
 ]
 
 

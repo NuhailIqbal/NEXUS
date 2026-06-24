@@ -122,6 +122,13 @@ async def create_phone_number(payload: dict) -> dict:
         return r.json()
 
 
+async def update_phone_number(phone_id: str, payload: dict) -> dict:
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(f"{BASE_URL}/phone-number/{phone_id}", headers=_headers(), json=payload)
+        _check(r)
+        return r.json()
+
+
 async def delete_phone_number(phone_id: str) -> None:
     async with httpx.AsyncClient() as client:
         r = await client.delete(f"{BASE_URL}/phone-number/{phone_id}", headers=_headers())
