@@ -15,7 +15,26 @@ async def list_lists(user=Depends(get_current_user)):
         .order("created_at", desc=True)
         .execute()
     )
-    return {"data": result.data, "error": None}
+    lists = result.data or []
+
+    if lists:
+        list_ids = [l["id"] for l in lists]
+        contacts_result = (
+            supabase.table("contacts")
+            .select("list_id")
+            .eq("user_id", user["user_id"])
+            .in_("list_id", list_ids)
+            .execute()
+        )
+        counts: dict = {}
+        for c in (contacts_result.data or []):
+            lid = c.get("list_id")
+            if lid:
+                counts[lid] = counts.get(lid, 0) + 1
+        for l in lists:
+            l["contact_count"] = counts.get(l["id"], 0)
+
+    return {"data": lists, "error": None}
 
 
 @router.post("")

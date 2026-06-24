@@ -31,13 +31,17 @@ type Contact = {
   email: string;
   status: string;
   list: string;
+  list_id: string | null;
   createdAt: string;
 };
+
+type ListRow = { id: string; name: string };
 
 const Contacts = () => {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [lists, setLists] = useState<ListRow[]>([]);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [viewTarget, setViewTarget] = useState<Contact | null>(null);
@@ -45,20 +49,24 @@ const Contacts = () => {
   const [editForm, setEditForm] = useState<Partial<Contact>>({});
 
   const fetchContacts = useCallback(async () => {
-    const { data, error } = await api.getContacts();
-    if (error) {
+    const [contactsRes, listsRes] = await Promise.all([api.getContacts(), api.getLists()]);
+    if (contactsRes.error) {
       toast.error("Failed to load contacts");
       return;
     }
-    if (data) {
+    const listsData: ListRow[] = Array.isArray(listsRes.data) ? listsRes.data : [];
+    setLists(listsData);
+    const listsMap = new Map(listsData.map((l) => [l.id, l.name]));
+    if (contactsRes.data) {
       setContacts(
-        (data as any[]).map((c) => ({
+        (contactsRes.data as any[]).map((c) => ({
           id: c.id,
           name: c.name,
           phone: c.phone ?? "",
           email: c.email ?? "",
           status: c.status ?? "Active",
-          list: c.list_id ?? "—",
+          list_id: c.list_id ?? null,
+          list: c.list_id ? (listsMap.get(c.list_id) ?? "—") : "—",
           createdAt: c.created_at
             ? new Date(c.created_at).toISOString().slice(0, 10)
             : "",
@@ -88,16 +96,17 @@ const Contacts = () => {
 
   const openEdit = (c: Contact) => {
     setEditTarget(c);
-    setEditForm({ name: c.name, phone: c.phone, email: c.email, status: c.status, list: c.list });
+    setEditForm({ name: c.name, phone: c.phone, email: c.email, status: c.status, list_id: c.list_id });
   };
 
   const saveEdit = async () => {
     if (!editTarget) return;
-    const patch = {
+    const patch: Record<string, any> = {
       name: editForm.name ?? editTarget.name,
       phone: editForm.phone ?? editTarget.phone,
       email: editForm.email ?? editTarget.email,
       status: editForm.status ?? editTarget.status,
+      list_id: editForm.list_id ?? null,
     };
     const { error } = await api.updateContact(editTarget.id, patch);
     if (error) {
@@ -277,7 +286,16 @@ const Contacts = () => {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>List</Label>
-                <Input value={editForm.list ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, list: e.target.value }))} />
+                <select
+                  value={editForm.list_id ?? ""}
+                  onChange={(e) => setEditForm((f) => ({ ...f, list_id: e.target.value || null }))}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="">No list</option>
+                  {lists.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-2">
                 <Label>Status</Label>
