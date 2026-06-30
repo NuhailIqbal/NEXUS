@@ -10,6 +10,7 @@ from models.schemas import (
 )
 from services import vapi_client
 from config import settings
+from routers.billing import check_call_quota, get_or_create_billing
 
 CAMPAIGN_BATCH_SIZE = 20
 
@@ -141,6 +142,12 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="VAPI not configured")
 
+    billing = get_or_create_billing(user["user_id"])
+    if not billing.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    if not check_call_quota(user["user_id"], "outbound"):
+        raise HTTPException(status_code=403, detail="Outbound call limit reached. Upgrade your plan for more calls.")
+
     agent = (
         supabase.table("ai_agents")
         .select("vapi_assistant_id")
@@ -266,6 +273,12 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
 
     if not vapi_assistant_id:
         raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
+
+    billing = get_or_create_billing(user["user_id"])
+    if not billing.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    if not check_call_quota(user["user_id"], "outbound"):
+        raise HTTPException(status_code=403, detail="Outbound call limit reached. Upgrade your plan for more calls.")
 
     if not camp.get("list_id"):
         raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")

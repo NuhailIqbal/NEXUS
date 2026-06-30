@@ -176,6 +176,23 @@ export const api = {
   getProfile: () => get("/profile"),
   updateProfile: (data: any) => patch("/profile", data),
 
+  // Billing
+  getBillingPlans: () => get("/billing/plans"),
+  getBillingStatus: () => get("/billing/status"),
+  getBillingUsage: () => get("/billing/usage"),
+  getBillingInvoices: () => get("/billing/invoices"),
+  createCheckout: (data: any) => post("/billing/checkout", data),
+  createPortalSession: () => post("/billing/portal"),
+
+  // Admin
+  getAdminStats: () => get("/admin/stats"),
+  getAdminUsers: () => get("/admin/users"),
+  getAdminUser: (id: string) => get(`/admin/users/${id}`),
+  updateAdminUser: (id: string, data: any) => patch(`/admin/users/${id}`, data),
+  adjustCredits: (id: string, data: any) => post(`/admin/users/${id}/credits`, data),
+  toggleAccess: (id: string) => post(`/admin/users/${id}/toggle-access`),
+  resetUsage: (id: string) => post(`/admin/users/${id}/reset-usage`),
+
   // Health
   getHealth: () => get("/health"),
 };

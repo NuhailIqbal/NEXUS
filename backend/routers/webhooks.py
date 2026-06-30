@@ -9,6 +9,7 @@ from config import settings
 from database import supabase
 from services.gemini import summarize_transcript, analyze_sentiment
 from services.automation_engine import run_post_call_automations
+from routers.billing import increment_usage, check_call_quota
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -113,6 +114,8 @@ async def _handle_call_started(payload: dict):
             row["contact_id"] = contact.data[0]["id"]
 
     supabase.table("conversations").insert(row).execute()
+    if user_id:
+        increment_usage(user_id, dir_label)
     logger.info(f"call-started logged: {vapi_call_id}")
 
 

@@ -61,3 +61,10 @@ async def get_current_user(
     except JWTError as e:
         logger.error(f"JWT decode failed: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+
+async def get_admin_user(user=Depends(get_current_user)) -> dict:
+    email = user.get("email", "").lower()
+    if email not in settings.admin_email_list:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user

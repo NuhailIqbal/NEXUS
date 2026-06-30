@@ -36,6 +36,8 @@ import Outbound from "./pages/dashboard/telephony/Outbound.tsx";
 import Inbound from "./pages/dashboard/telephony/Inbound.tsx";
 import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
 import PhoneNumbers from "./pages/dashboard/telephony/PhoneNumbers.tsx";
+import Billing from "./pages/dashboard/Billing.tsx";
+import Admin from "./pages/dashboard/Admin.tsx";
 import {
   AnalyticsChannel,
   AnalyticsCampaign,
@@ -90,6 +92,8 @@ const App = () => (
               <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
               <Route path="analytics/scenario" element={<AnalyticsScenario />} />
               <Route path="analytics/flow" element={<AnalyticsFlow />} />
+              <Route path="billing" element={<Billing />} />
+              <Route path="admin" element={<Admin />} />
 
             </Route>
 

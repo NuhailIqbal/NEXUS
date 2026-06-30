@@ -36,9 +36,20 @@ class Settings(BaseSettings):
     # Gemini
     gemini_api_key: str = ""
 
+    # Stripe
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+
+    # Admin
+    admin_emails: str = ""  # comma-separated admin emails
+
     # Server
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     public_api_url: str = ""  # publicly reachable URL of this backend; used in VAPI tool callbacks
+
+    @property
+    def admin_email_list(self) -> list[str]:
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     @property
     def allowed_origins(self) -> list[str]:
