@@ -252,9 +252,9 @@ async def create_checkout(body: CheckoutRequest, user=Depends(get_current_user))
     customer_id = billing.get("stripe_customer_id")
 
     if not customer_id:
-        profile_res = supabase.table("profiles").select("email, full_name").eq("id", user["user_id"]).execute()
+        profile_res = supabase.table("profiles").select("full_name").eq("id", user["user_id"]).execute()
         profile_row = profile_res.data[0] if profile_res.data else None
-        email = profile_row.get("email") if profile_row else user.get("email")
+        email = user.get("email")
         name = profile_row.get("full_name") if profile_row else None
 
         try:
