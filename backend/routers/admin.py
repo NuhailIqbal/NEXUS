@@ -14,6 +14,8 @@ class UserUpdate(BaseModel):
     outbound_limit: Optional[int] = None
     inbound_limit: Optional[int] = None
     agents_limit: Optional[int] = None
+    outbound_used: Optional[int] = None
+    inbound_used: Optional[int] = None
     credits: Optional[int] = None
 
 
@@ -94,14 +96,8 @@ async def list_users(admin=Depends(get_admin_user)):
 
 @router.get("/users/{user_id}")
 async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
-    profile = (
-        supabase.table("profiles")
-        .select("*")
-        .eq("id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    profile_data = profile.data or {}
+    profile_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+    profile_data = profile_res.data[0] if profile_res.data else {}
 
     try:
         auth_user = supabase.auth.admin.get_user_by_id(user_id)
@@ -112,13 +108,7 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
     if not profile_data.get("id"):
         profile_data["id"] = user_id
 
-    billing = (
-        supabase.table("billing")
-        .select("*")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    billing_res = supabase.table("billing").select("*").eq("user_id", user_id).execute()
 
     agents = (
         supabase.table("ai_agents")
@@ -156,7 +146,7 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
     return {
         "data": {
             "profile": profile_data,
-            "billing": billing.data or {},
+            "billing": billing_res.data[0] if billing_res.data else {},
             "agents": agents.data or [],
             "recent_conversations": conversations.data or [],
             "total_conversations": conversations.count or 0,
@@ -173,44 +163,28 @@ async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_us
     if not updates:
         return {"data": None, "error": "No fields to update"}
 
-    existing = (
-        supabase.table("billing")
-        .select("id")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
+    has_row = bool(existing.data)
 
-    if existing.data:
+    if has_row:
         supabase.table("billing").update(updates).eq("user_id", user_id).execute()
     else:
         updates["user_id"] = user_id
         supabase.table("billing").insert(updates).execute()
 
-    result = (
-        supabase.table("billing")
-        .select("*")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    return {"data": result.data, "error": None}
+    result = supabase.table("billing").select("*").eq("user_id", user_id).execute()
+    return {"data": result.data[0] if result.data else None, "error": None}
 
 
 @router.post("/users/{user_id}/credits")
 async def adjust_credits(user_id: str, body: CreditAdjust, admin=Depends(get_admin_user)):
-    existing = (
-        supabase.table("billing")
-        .select("credits")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    existing = supabase.table("billing").select("credits").eq("user_id", user_id).execute()
+    has_row = bool(existing.data)
 
-    current = existing.data.get("credits", 0) if existing.data else 0
+    current = existing.data[0].get("credits", 0) if has_row else 0
     new_credits = max(0, current + body.amount)
 
-    if existing.data:
+    if has_row:
         supabase.table("billing").update({"credits": new_credits}).eq("user_id", user_id).execute()
     else:
         supabase.table("billing").insert({
@@ -228,18 +202,13 @@ async def adjust_credits(user_id: str, body: CreditAdjust, admin=Depends(get_adm
 
 @router.post("/users/{user_id}/toggle-access")
 async def toggle_access(user_id: str, admin=Depends(get_admin_user)):
-    existing = (
-        supabase.table("billing")
-        .select("is_active")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    existing = supabase.table("billing").select("is_active").eq("user_id", user_id).execute()
+    has_row = bool(existing.data)
 
-    current = existing.data.get("is_active", True) if existing.data else True
+    current = existing.data[0].get("is_active", True) if has_row else True
     new_val = not current
 
-    if existing.data:
+    if has_row:
         supabase.table("billing").update({"is_active": new_val}).eq("user_id", user_id).execute()
     else:
         supabase.table("billing").insert({
@@ -257,13 +226,7 @@ async def toggle_access(user_id: str, admin=Depends(get_admin_user)):
 
 @router.post("/users/{user_id}/reset-usage")
 async def reset_usage(user_id: str, admin=Depends(get_admin_user)):
-    existing = (
-        supabase.table("billing")
-        .select("id")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
 
     if existing.data:
         supabase.table("billing").update({

@@ -1,6 +1,7 @@
 import logging
 import httpx
-from fastapi import Depends, HTTPException, status
+import base64
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, jwk
 from config import settings
@@ -63,11 +64,22 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
 
-async def get_admin_user(user=Depends(get_current_user)) -> dict:
-    email = user.get("email", "").lower()
-    if email not in settings.admin_email_list:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return user
+ADMIN_USERNAME = "qarib"
+ADMIN_PASSWORD = "test123"
+
+
+async def get_admin_user(request: Request) -> dict:
+    auth_header = request.headers.get("X-Admin-Auth", "")
+    if not auth_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin credentials required")
+    try:
+        decoded = base64.b64decode(auth_header).decode("utf-8")
+        uname, pwd = decoded.split(":", 1)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
+    if uname != ADMIN_USERNAME or pwd != ADMIN_PASSWORD:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin credentials")
+    return {"admin": True, "username": uname}
 
 
 def require_owner(user=Depends(get_current_user)) -> dict:

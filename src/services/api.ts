@@ -49,6 +49,22 @@ function del<T = any>(path: string) {
   return request<T>(path, { method: "DELETE" });
 }
 
+function getAdminAuthHeader(): Record<string, string> {
+  return { "X-Admin-Auth": btoa("qarib:test123") };
+}
+
+function adminGet<T = any>(path: string) {
+  return request<T>(path, { headers: getAdminAuthHeader() });
+}
+
+function adminPost<T = any>(path: string, body?: any) {
+  return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined, headers: getAdminAuthHeader() });
+}
+
+function adminPatch<T = any>(path: string, body: any) {
+  return request<T>(path, { method: "PATCH", body: JSON.stringify(body), headers: getAdminAuthHeader() });
+}
+
 export const api = {
   // Agents
   getAgents: () => get("/agents"),
@@ -186,13 +202,13 @@ export const api = {
   createPortalSession: () => post("/billing/portal"),
 
   // Admin
-  getAdminStats: () => get("/admin/stats"),
-  getAdminUsers: () => get("/admin/users"),
-  getAdminUser: (id: string) => get(`/admin/users/${id}`),
-  updateAdminUser: (id: string, data: any) => patch(`/admin/users/${id}`, data),
-  adjustCredits: (id: string, data: any) => post(`/admin/users/${id}/credits`, data),
-  toggleAccess: (id: string) => post(`/admin/users/${id}/toggle-access`),
-  resetUsage: (id: string) => post(`/admin/users/${id}/reset-usage`),
+  getAdminStats: () => adminGet("/admin/stats"),
+  getAdminUsers: () => adminGet("/admin/users"),
+  getAdminUser: (id: string) => adminGet(`/admin/users/${id}`),
+  updateAdminUser: (id: string, data: any) => adminPatch(`/admin/users/${id}`, data),
+  adjustCredits: (id: string, data: any) => adminPost(`/admin/users/${id}/credits`, data),
+  toggleAccess: (id: string) => adminPost(`/admin/users/${id}/toggle-access`),
+  resetUsage: (id: string) => adminPost(`/admin/users/${id}/reset-usage`),
 
   // Health
   getHealth: () => get("/health"),

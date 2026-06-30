@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import {
   Users, Bot, PhoneOutgoing, PhoneIncoming, CreditCard,
   Loader2, Shield, Search, ChevronRight, ToggleLeft, ToggleRight,
-  Plus, Minus, RotateCcw, TrendingUp, LogOut,
+  Plus, Minus, RotateCcw, TrendingUp, LogOut, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
@@ -54,41 +55,54 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: number; 
   );
 }
 
+const ADMIN_USER = "qarib";
+const ADMIN_PASS = "test123";
+
 const Admin = () => {
-  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem("nexus_admin") === "1");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const [denied, setDenied] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [creditAmount, setCreditAmount] = useState(10);
   const [editingLimits, setEditingLimits] = useState<string | null>(null);
   const [limitForm, setLimitForm] = useState({ outbound_limit: 0, inbound_limit: 0, agents_limit: 0 });
 
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
+      sessionStorage.setItem("nexus_admin", "1");
+      setAuthenticated(true);
+      setLoginError("");
+    } else {
+      setLoginError("Invalid username or password");
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem("nexus_admin");
+    setAuthenticated(false);
+  };
+
   const fetchData = async () => {
     const [statsRes, usersRes] = await Promise.all([
       api.getAdminStats(),
       api.getAdminUsers(),
     ]);
-    if (statsRes.error && statsRes.error.includes("Admin")) {
-      setDenied(true);
-      setLoading(false);
-      return;
-    }
     if (statsRes.data) setStats(statsRes.data);
     if (Array.isArray(usersRes.data)) setUsers(usersRes.data);
     setLoading(false);
   };
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/login");
-      return;
-    }
-    if (user) fetchData();
-  }, [user, authLoading]);
+    if (authenticated) fetchData();
+  }, [authenticated]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -152,22 +166,34 @@ const Admin = () => {
     fetchData();
   };
 
-  if (authLoading || loading) {
+  if (!authenticated) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" /> Loading admin panel...
+        <form onSubmit={handleLogin} className="w-full max-w-sm space-y-5 rounded-xl border border-border bg-card p-8 shadow-lg">
+          <div className="text-center">
+            <Lock className="mx-auto h-10 w-10 text-primary mb-3" />
+            <h1 className="text-xl font-bold text-foreground">Admin Portal</h1>
+            <p className="text-sm text-muted-foreground mt-1">Enter credentials to continue</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="admin-user">Username</Label>
+            <Input id="admin-user" value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" autoFocus />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="admin-pass">Password</Label>
+            <Input id="admin-pass" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" />
+          </div>
+          {loginError && <p className="text-sm text-destructive">{loginError}</p>}
+          <Button type="submit" className="w-full">Sign In</Button>
+        </form>
       </div>
     );
   }
 
-  if (denied) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-center">
-          <Shield className="mx-auto h-12 w-12 text-destructive mb-4" />
-          <h1 className="text-xl font-bold text-foreground">Access Denied</h1>
-          <p className="text-sm text-muted-foreground mt-2">You don't have admin access.</p>
-        </div>
+        <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" /> Loading admin panel...
       </div>
     );
   }
@@ -180,9 +206,14 @@ const Admin = () => {
             <Shield className="h-5 w-5 text-primary" />
             <span className="font-bold text-foreground">EDM NEXUS Admin</span>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
-            <LogOut className="mr-1 h-4 w-4" /> Back to Dashboard
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
+              Back to Dashboard
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              <LogOut className="mr-1 h-4 w-4" /> Logout
+            </Button>
+          </div>
         </div>
       </header>
 
