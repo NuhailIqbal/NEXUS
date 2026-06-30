@@ -70,13 +70,7 @@ def _handle_checkout_completed(session: dict):
         billing_data["inbound_limit"] = plan["inbound_limit"]
         billing_data["agents_limit"] = plan["agents_limit"]
 
-    existing = (
-        supabase.table("billing")
-        .select("id")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
 
     if existing.data:
         supabase.table("billing").update(billing_data).eq("user_id", user_id).execute()
@@ -92,13 +86,7 @@ def _handle_invoice_paid(invoice: dict):
     if not customer_id:
         return
 
-    billing = (
-        supabase.table("billing")
-        .select("user_id")
-        .eq("stripe_customer_id", customer_id)
-        .maybe_single()
-        .execute()
-    )
+    billing = supabase.table("billing").select("user_id").eq("stripe_customer_id", customer_id).execute()
     if billing.data:
         supabase.table("billing").update({
             "status": "active",

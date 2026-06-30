@@ -80,15 +80,9 @@ def get_plan_by_id(plan_id: str) -> dict | None:
 
 
 def get_or_create_billing(user_id: str) -> dict:
-    result = (
-        supabase.table("billing")
-        .select("*")
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
+    result = supabase.table("billing").select("*").eq("user_id", user_id).execute()
     if result.data:
-        return result.data
+        return result.data[0]
 
     row = {
         "user_id": user_id,
@@ -218,19 +212,14 @@ async def get_invoices(user=Depends(get_current_user)):
     if not settings.stripe_secret_key:
         return {"data": [], "error": None}
 
-    billing = (
-        supabase.table("billing")
-        .select("stripe_customer_id")
-        .eq("user_id", user["user_id"])
-        .maybe_single()
-        .execute()
-    )
-    if not billing.data or not billing.data.get("stripe_customer_id"):
+    billing_res = supabase.table("billing").select("stripe_customer_id").eq("user_id", user["user_id"]).execute()
+    billing_row = billing_res.data[0] if billing_res.data else None
+    if not billing_row or not billing_row.get("stripe_customer_id"):
         return {"data": [], "error": None}
 
     try:
         invoices = stripe.Invoice.list(
-            customer=billing.data["stripe_customer_id"],
+            customer=billing_row["stripe_customer_id"],
             limit=20,
         )
         items = [
@@ -263,15 +252,10 @@ async def create_checkout(body: CheckoutRequest, user=Depends(get_current_user))
     customer_id = billing.get("stripe_customer_id")
 
     if not customer_id:
-        profile = (
-            supabase.table("profiles")
-            .select("email, full_name")
-            .eq("id", user["user_id"])
-            .maybe_single()
-            .execute()
-        )
-        email = profile.data.get("email") if profile.data else None
-        name = profile.data.get("full_name") if profile.data else None
+        profile_res = supabase.table("profiles").select("email, full_name").eq("id", user["user_id"]).execute()
+        profile_row = profile_res.data[0] if profile_res.data else None
+        email = profile_row.get("email") if profile_row else user.get("email")
+        name = profile_row.get("full_name") if profile_row else None
 
         try:
             customer = stripe.Customer.create(
@@ -324,19 +308,14 @@ async def create_portal_session(user=Depends(get_current_user)):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
-    billing = (
-        supabase.table("billing")
-        .select("stripe_customer_id")
-        .eq("user_id", user["user_id"])
-        .maybe_single()
-        .execute()
-    )
-    if not billing.data or not billing.data.get("stripe_customer_id"):
+    billing_res = supabase.table("billing").select("stripe_customer_id").eq("user_id", user["user_id"]).execute()
+    billing_row = billing_res.data[0] if billing_res.data else None
+    if not billing_row or not billing_row.get("stripe_customer_id"):
         raise HTTPException(status_code=400, detail="No billing account found. Subscribe to a plan first.")
 
     try:
         session = stripe.billing_portal.Session.create(
-            customer=billing.data["stripe_customer_id"],
+            customer=billing_row["stripe_customer_id"],
             return_url="http://localhost:8082/dashboard/billing",
         )
         return {"data": {"portal_url": session.url}, "error": None}
