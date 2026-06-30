@@ -168,6 +168,7 @@ export const api = {
 
   // Team
   getTeam: () => get("/team"),
+  getMyRole: () => get("/team/me"),
   inviteTeamMember: (data: any) => post("/team/invite", data),
   updateTeamMember: (id: string, data: any) => patch(`/team/${id}`, data),
   removeTeamMember: (id: string) => del(`/team/${id}`),

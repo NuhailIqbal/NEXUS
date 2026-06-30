@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Wrench, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Sparkles, Bell, Search, Menu, X, MessageSquare, Radio, CreditCard, Shield,
+  Sparkles, Bell, Search, Menu, X, MessageSquare, Radio, CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -61,7 +61,6 @@ const NAV: NavItem[] = [
   { label: "Billing", to: "/dashboard/billing", icon: CreditCard },
   { label: "Profile & Teams", to: "/dashboard/profile", icon: Users },
   { label: "Support", to: "/dashboard/support", icon: LifeBuoy },
-  { label: "Admin Portal", to: "/dashboard/admin", icon: Shield },
 ];
 
 const DashboardLayout = () => {

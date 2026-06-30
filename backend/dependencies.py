@@ -68,3 +68,10 @@ async def get_admin_user(user=Depends(get_current_user)) -> dict:
     if email not in settings.admin_email_list:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
+
+
+def require_owner(user=Depends(get_current_user)) -> dict:
+    from routers.team import is_owner
+    if not is_owner(user["user_id"]):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only account owners can perform this action")
+    return user

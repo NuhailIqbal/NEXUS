@@ -24,16 +24,21 @@ class CreditAdjust(BaseModel):
 
 @router.get("/users")
 async def list_users(admin=Depends(get_admin_user)):
-    profiles = (
-        supabase.table("profiles")
-        .select("id, email, full_name, company_name, created_at")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    if not profiles.data:
+    auth_users = supabase.auth.admin.list_users()
+    email_map = {str(u.id): u.email for u in auth_users}
+    user_ids = list(email_map.keys())
+
+    if not user_ids:
         return {"data": [], "error": None}
 
-    user_ids = [p["id"] for p in profiles.data]
+    profiles = (
+        supabase.table("profiles")
+        .select("id, full_name, company_name, created_at")
+        .in_("id", user_ids)
+        .execute()
+    )
+    profile_map = {p["id"]: p for p in (profiles.data or [])}
+
     billing_rows = supabase.table("billing").select("*").in_("user_id", user_ids).execute()
     billing_map = {b["user_id"]: b for b in (billing_rows.data or [])}
 
@@ -58,12 +63,12 @@ async def list_users(admin=Depends(get_admin_user)):
         conversation_counts[uid] = result.count or 0
 
     users = []
-    for p in profiles.data:
-        uid = p["id"]
+    for uid in user_ids:
+        p = profile_map.get(uid, {})
         b = billing_map.get(uid, {})
         users.append({
             "id": uid,
-            "email": p.get("email", ""),
+            "email": email_map.get(uid, ""),
             "full_name": p.get("full_name", ""),
             "company_name": p.get("company_name", ""),
             "created_at": p.get("created_at", ""),
@@ -83,6 +88,7 @@ async def list_users(admin=Depends(get_admin_user)):
             "current_period_end": b.get("current_period_end"),
         })
 
+    users.sort(key=lambda u: u.get("created_at", ""), reverse=True)
     return {"data": users, "error": None}
 
 
@@ -95,8 +101,16 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
         .maybe_single()
         .execute()
     )
-    if not profile.data:
-        raise HTTPException(status_code=404, detail="User not found")
+    profile_data = profile.data or {}
+
+    try:
+        auth_user = supabase.auth.admin.get_user_by_id(user_id)
+        profile_data["email"] = auth_user.user.email if auth_user.user else ""
+    except Exception:
+        profile_data["email"] = ""
+
+    if not profile_data.get("id"):
+        profile_data["id"] = user_id
 
     billing = (
         supabase.table("billing")
@@ -141,7 +155,7 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
 
     return {
         "data": {
-            "profile": profile.data,
+            "profile": profile_data,
             "billing": billing.data or {},
             "agents": agents.data or [],
             "recent_conversations": conversations.data or [],

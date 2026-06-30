@@ -68,12 +68,14 @@ class CustomFieldUpdate(BaseModel):
 
 class TeamInvite(BaseModel):
     member_email: str
-    role: str = "Viewer"
+    role: str = "member"
+    permissions: Optional[list[str]] = None
 
 
 class TeamMemberUpdate(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
+    permissions: Optional[list[str]] = None
 
 
 # ── Integrations ──

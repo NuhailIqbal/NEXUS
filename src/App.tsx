@@ -93,10 +93,10 @@ const App = () => (
               <Route path="analytics/scenario" element={<AnalyticsScenario />} />
               <Route path="analytics/flow" element={<AnalyticsFlow />} />
               <Route path="billing" element={<Billing />} />
-              <Route path="admin" element={<Admin />} />
 
             </Route>
 
+            <Route path="/nexus-admin" element={<Admin />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

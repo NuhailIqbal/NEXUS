@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -44,6 +46,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class SubUserDeleteGuard(BaseHTTPMiddleware):
+    """Block DELETE requests from sub-users (team members). Owners only."""
+
+    EXEMPT_PATHS = {"/webhooks/", "/admin/"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method != "DELETE":
+            return await call_next(request)
+
+        path = request.url.path
+        if any(path.startswith(p) for p in self.EXEMPT_PATHS):
+            return await call_next(request)
+
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            try:
+                from dependencies import _decode_token
+                payload = _decode_token(token)
+                user_id = payload.get("sub")
+                if user_id:
+                    from routers.team import is_owner
+                    if not is_owner(user_id):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Sub-users cannot delete resources. Contact your account owner."},
+                        )
+            except Exception:
+                pass
+
+        return await call_next(request)
+
+
+app.add_middleware(SubUserDeleteGuard)
+
 
 # Health + Auth
 @app.get("/health", tags=["System"])

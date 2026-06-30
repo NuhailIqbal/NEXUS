@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Users, Bot, PhoneOutgoing, PhoneIncoming, CreditCard,
   Loader2, Shield, Search, ChevronRight, ToggleLeft, ToggleRight,
-  Plus, Minus, RotateCcw, TrendingUp,
+  Plus, Minus, RotateCcw, TrendingUp, LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
@@ -53,9 +55,12 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: number; 
 }
 
 const Admin = () => {
+  const { user, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [denied, setDenied] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [creditAmount, setCreditAmount] = useState(10);
@@ -67,12 +72,23 @@ const Admin = () => {
       api.getAdminStats(),
       api.getAdminUsers(),
     ]);
+    if (statsRes.error && statsRes.error.includes("Admin")) {
+      setDenied(true);
+      setLoading(false);
+      return;
+    }
     if (statsRes.data) setStats(statsRes.data);
     if (Array.isArray(usersRes.data)) setUsers(usersRes.data);
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate("/login");
+      return;
+    }
+    if (user) fetchData();
+  }, [user, authLoading]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -136,18 +152,42 @@ const Admin = () => {
     fetchData();
   };
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
-      <div className="flex items-center justify-center py-20 text-muted-foreground">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading admin panel...
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin text-muted-foreground" /> Loading admin panel...
+      </div>
+    );
+  }
+
+  if (denied) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-center">
+          <Shield className="mx-auto h-12 w-12 text-destructive mb-4" />
+          <h1 className="text-xl font-bold text-foreground">Access Denied</h1>
+          <p className="text-sm text-muted-foreground mt-2">You don't have admin access.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
+    <div className="min-h-screen bg-background">
+      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
+          <div className="flex items-center gap-2">
+            <Shield className="h-5 w-5 text-primary" />
+            <span className="font-bold text-foreground">EDM NEXUS Admin</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
+            <LogOut className="mr-1 h-4 w-4" /> Back to Dashboard
+          </Button>
+        </div>
+      </header>
+
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-8">
       <div className="flex items-center gap-3">
-        <Shield className="h-6 w-6 text-primary" />
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Admin Portal</h1>
           <p className="text-sm text-muted-foreground">Manage users, billing, limits and credits.</p>
@@ -352,6 +392,7 @@ const Admin = () => {
           <div className="py-8 text-center text-sm text-muted-foreground">No users found</div>
         )}
       </div>
+    </div>
     </div>
   );
 };
