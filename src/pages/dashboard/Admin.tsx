@@ -147,11 +147,12 @@ const Admin = () => {
   };
 
   const handleChangePlan = async (userId: string, plan: string) => {
-    const planLimits: Record<string, { outbound_limit: number; inbound_limit: number; agents_limit: number }> = {
-      free: { outbound_limit: 5, inbound_limit: 5, agents_limit: 10 },
-      starter: { outbound_limit: 100, inbound_limit: 200, agents_limit: 25 },
-      growth: { outbound_limit: 300, inbound_limit: 500, agents_limit: 50 },
-      business: { outbound_limit: 500, inbound_limit: 700, agents_limit: 100 },
+    const planLimits: Record<string, { outbound_limit: number; inbound_limit: number; agents_limit: number; rate_per_minute: number }> = {
+      free: { outbound_limit: 5, inbound_limit: 5, agents_limit: 10, rate_per_minute: 0.05 },
+      payg: { outbound_limit: 999999, inbound_limit: 999999, agents_limit: 10, rate_per_minute: 0.05 },
+      starter: { outbound_limit: 100, inbound_limit: 200, agents_limit: 25, rate_per_minute: 0.03 },
+      growth: { outbound_limit: 300, inbound_limit: 500, agents_limit: 50, rate_per_minute: 0.02 },
+      business: { outbound_limit: 500, inbound_limit: 700, agents_limit: 100, rate_per_minute: 0.01 },
     };
     const limits = planLimits[plan] || planLimits.free;
     const { error } = await api.updateAdminUser(userId, {
@@ -344,6 +345,7 @@ const Admin = () => {
                             className="h-8 rounded border border-input bg-background px-2 text-sm"
                           >
                             <option value="free">Free (Trial)</option>
+                            <option value="payg">Pay As You Go — $0.05/min</option>
                             <option value="starter">Starter — $25 (100 out / 200 in)</option>
                             <option value="growth">Growth — $50 (300 out / 500 in)</option>
                             <option value="business">Business — $100 (500 out / 700 in)</option>

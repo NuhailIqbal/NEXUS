@@ -17,6 +17,9 @@ class UserUpdate(BaseModel):
     outbound_used: Optional[int] = None
     inbound_used: Optional[int] = None
     credits: Optional[int] = None
+    rate_per_minute: Optional[float] = None
+    total_charges: Optional[float] = None
+    balance: Optional[float] = None
 
 
 class CreditAdjust(BaseModel):

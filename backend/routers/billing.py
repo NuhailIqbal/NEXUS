@@ -13,6 +13,24 @@ stripe.api_key = settings.stripe_secret_key
 
 PLANS = [
     {
+        "id": "payg",
+        "name": "Pay As You Go",
+        "price": 0,
+        "price_display": "$0.05/min",
+        "description": "Only pay for what you use",
+        "outbound_limit": 999999,
+        "inbound_limit": 999999,
+        "agents_limit": 10,
+        "rate_per_minute": 0.05,
+        "features": [
+            "Unlimited calls",
+            "$0.05 per minute",
+            "Up to 10 AI Agents",
+            "Pay only for usage",
+            "No monthly commitment",
+        ],
+    },
+    {
         "id": "starter",
         "name": "Starter",
         "price": 2500,
@@ -21,11 +39,12 @@ PLANS = [
         "outbound_limit": 100,
         "inbound_limit": 200,
         "agents_limit": 25,
+        "rate_per_minute": 0.03,
         "features": [
             "100 outbound calls/mo",
             "200 inbound calls/mo",
             "Up to 25 AI Agents",
-            "Basic automation",
+            "Lower per-minute rate ($0.03)",
             "Email support",
         ],
     },
@@ -38,12 +57,12 @@ PLANS = [
         "outbound_limit": 300,
         "inbound_limit": 500,
         "agents_limit": 50,
+        "rate_per_minute": 0.02,
         "features": [
             "300 outbound calls/mo",
             "500 inbound calls/mo",
             "Up to 50 AI Agents",
-            "Advanced automation",
-            "15+ integrations",
+            "Lowest per-minute rate ($0.02)",
             "Priority support",
         ],
         "popular": True,
@@ -57,16 +76,18 @@ PLANS = [
         "outbound_limit": 500,
         "inbound_limit": 700,
         "agents_limit": 100,
+        "rate_per_minute": 0.01,
         "features": [
             "500 outbound calls/mo",
             "700 inbound calls/mo",
             "Up to 100 AI Agents",
-            "Custom automation flows",
+            "Best per-minute rate ($0.01)",
             "Dedicated account manager",
-            "SLA & custom integrations",
         ],
     },
 ]
+
+DEFAULT_RATE_PER_MINUTE = 0.05
 
 FREE_TIER = {
     "agents_limit": 10,
@@ -137,6 +158,30 @@ def increment_usage(user_id: str, direction: str):
     supabase.table("billing").update({field: current + 1}).eq("user_id", user_id).execute()
 
 
+def calculate_call_cost(user_id: str, duration_seconds: int) -> float:
+    billing = get_or_create_billing(user_id)
+    rate = billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE
+    duration_minutes = duration_seconds / 60.0
+    cost = round(duration_minutes * float(rate), 4)
+    return cost
+
+
+def record_call_cost(user_id: str, vapi_call_id: str, duration_seconds: int) -> float:
+    cost = calculate_call_cost(user_id, duration_seconds)
+    if cost > 0:
+        supabase.table("conversations").update({
+            "duration_seconds": duration_seconds,
+            "call_cost": cost,
+        }).eq("vapi_call_id", vapi_call_id).execute()
+
+        billing = get_or_create_billing(user_id)
+        current_charges = float(billing.get("total_charges") or 0)
+        supabase.table("billing").update({
+            "total_charges": round(current_charges + cost, 2),
+        }).eq("user_id", user_id).execute()
+    return cost
+
+
 class CheckoutRequest(BaseModel):
     plan_id: str
     success_url: Optional[str] = None
@@ -158,6 +203,7 @@ async def get_plans():
             "outbound_limit": p["outbound_limit"],
             "inbound_limit": p["inbound_limit"],
             "agents_limit": p["agents_limit"],
+            "rate_per_minute": p.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
         })
     return {"data": public_plans, "error": None}
 
@@ -202,6 +248,9 @@ async def get_usage(user=Depends(get_current_user)):
             "credits": billing.get("credits", 0),
             "plan": billing.get("plan", "free"),
             "is_active": billing.get("is_active", True),
+            "rate_per_minute": float(billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE),
+            "total_charges": float(billing.get("total_charges") or 0),
+            "balance": float(billing.get("balance") or 0),
         },
         "error": None,
     }
@@ -321,3 +370,26 @@ async def create_portal_session(user=Depends(get_current_user)):
         return {"data": {"portal_url": session.url}, "error": None}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Stripe portal error: {str(e)}")
+
+
+@router.get("/call-costs")
+async def get_call_costs(user=Depends(get_current_user)):
+    result = (
+        supabase.table("conversations")
+        .select("id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, created_at")
+        .eq("user_id", user["user_id"])
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+    calls = result.data or []
+    total_cost = sum(float(c.get("call_cost") or 0) for c in calls)
+    total_minutes = sum(int(c.get("duration_seconds") or 0) for c in calls) / 60.0
+    return {
+        "data": {
+            "calls": calls,
+            "total_cost": round(total_cost, 2),
+            "total_minutes": round(total_minutes, 1),
+        },
+        "error": None,
+    }

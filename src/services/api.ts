@@ -198,6 +198,7 @@ export const api = {
   getBillingStatus: () => get("/billing/status"),
   getBillingUsage: () => get("/billing/usage"),
   getBillingInvoices: () => get("/billing/invoices"),
+  getBillingCallCosts: () => get("/billing/call-costs"),
   createCheckout: (data: any) => post("/billing/checkout", data),
   createPortalSession: () => post("/billing/portal"),
 

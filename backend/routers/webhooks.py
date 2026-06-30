@@ -9,7 +9,7 @@ from config import settings
 from database import supabase
 from services.gemini import summarize_transcript, analyze_sentiment
 from services.automation_engine import run_post_call_automations
-from routers.billing import increment_usage, check_call_quota
+from routers.billing import increment_usage, check_call_quota, record_call_cost
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -165,6 +165,8 @@ async def _handle_call_ended(payload: dict):
         supabase.table("conversations").update(updates).eq("vapi_call_id", vapi_call_id).execute()
         logger.info(f"call-ended updated: {vapi_call_id}")
         conv_id = existing.data[0]["id"]
+        assistant_id = _extract_assistant_id(payload)
+        user_id = _find_user_for_assistant(assistant_id)
     else:
         assistant_id = _extract_assistant_id(payload)
         user_id = _find_user_for_assistant(assistant_id)
@@ -178,6 +180,12 @@ async def _handle_call_ended(payload: dict):
             logger.info(f"call-ended inserted: {vapi_call_id}")
         else:
             return
+
+    if user_id and duration_seconds:
+        dur_int = int(float(duration_seconds))
+        if dur_int > 0:
+            cost = record_call_cost(user_id, vapi_call_id, dur_int)
+            logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
 
     asyncio.create_task(_post_call_ai(vapi_call_id, transcript, conv_id))
 
