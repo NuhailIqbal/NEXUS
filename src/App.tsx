@@ -25,7 +25,6 @@ import AIAgents from "./pages/dashboard/AIAgents.tsx";
 import CreateAIAgent from "./pages/dashboard/CreateAIAgent.tsx";
 import Tools from "./pages/dashboard/Tools.tsx";
 import AIVoices from "./pages/dashboard/AIVoices.tsx";
-import Integrations from "./pages/dashboard/Integrations.tsx";
 import VoiceWidgets from "./pages/dashboard/VoiceWidgets.tsx";
 import Profile from "./pages/dashboard/Profile.tsx";
 import Support from "./pages/dashboard/Support.tsx";
@@ -43,8 +42,7 @@ import {
   AnalyticsScenario,
   AnalyticsFlow,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
-import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
-import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
+
 
 const queryClient = new QueryClient();
 
@@ -76,7 +74,6 @@ const App = () => (
               <Route path="ai-agents/create" element={<CreateAIAgent />} />
               <Route path="tools" element={<Tools />} />
               <Route path="ai-voices" element={<AIVoices />} />
-              <Route path="integrations" element={<Integrations />} />
               <Route path="voice-widgets" element={<VoiceWidgets />} />
               <Route path="conversations" element={<Conversations />} />
               <Route path="profile" element={<Profile />} />
@@ -93,8 +90,7 @@ const App = () => (
               <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
               <Route path="analytics/scenario" element={<AnalyticsScenario />} />
               <Route path="analytics/flow" element={<AnalyticsFlow />} />
-              <Route path="automation" element={<AutomationList />} />
-              <Route path="automation/:flowId" element={<AutomationFlowEditor />} />
+
             </Route>
 
             <Route path="*" element={<NotFound />} />
