@@ -36,6 +36,14 @@ app = FastAPI(
     description="AI-powered revenue platform backend",
 )
 
+
+@app.on_event("startup")
+def _auto_migrate() -> None:
+    """Auto-create the database schema on an empty PostgreSQL database."""
+    from migrate import bootstrap_schema
+    bootstrap_schema()
+
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

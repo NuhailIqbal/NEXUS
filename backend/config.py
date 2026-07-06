@@ -23,10 +23,24 @@ class Settings(BaseSettings):
     # Environment
     environment: str = "development"  # "development" | "production"
 
-    # Supabase
-    supabase_url: str
-    supabase_service_role_key: str
-    supabase_jwt_secret: str
+    # Database (plain PostgreSQL) — replaces Supabase Postgres/PostgREST
+    database_url: str = ""  # e.g. postgresql://user:pass@localhost:5432/nexus
+
+    # Auth (own JWT) — replaces Supabase Auth. Falls back to supabase_jwt_secret during transition.
+    jwt_secret: str = ""
+
+    # Local object storage — replaces Supabase Storage
+    storage_dir: str = ""  # absolute path for uploaded files (defaults to backend/_storage)
+
+    # Supabase (legacy — optional after migration; jwt_secret still used to verify tokens)
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_jwt_secret: str = ""
+
+    @property
+    def active_jwt_secret(self) -> str:
+        """Secret used to sign/verify our own JWTs (prefers JWT_SECRET, falls back to Supabase's)."""
+        return self.jwt_secret or self.supabase_jwt_secret
 
     # VAPI
     vapi_api_key: str = ""
