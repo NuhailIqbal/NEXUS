@@ -118,7 +118,7 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
       for (const p of data.parameters) {
         if (!p.name.trim()) return "Every parameter needs a name";
         if (!PARAM_NAME_PATTERN.test(p.name))
-          return `Parameter "${p.name || "unnamed"}" — only a-z, 0-9, _, - allowed`;
+          return `Parameter "${p.name || "unnamed"}" only a-z, 0-9, _, - allowed`;
         if (!p.description.trim())
           return `Parameter "${p.name}" needs a description`;
       }
@@ -316,7 +316,7 @@ function StepGeneral({
   return (
     <div className="space-y-6">
       <InfoBox title="What is a Tool?">
-        A Tool is a custom action your AI agent can call during a conversation —
+        A Tool is a custom action your AI agent can call during a conversation  
         for example, looking up a customer record or triggering a webhook.
       </InfoBox>
 
@@ -519,7 +519,7 @@ function ParamCard({
             <div className="flex items-end pb-2">
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox checked={param.required} onCheckedChange={(v) => onChange({ required: Boolean(v) })} />
-                Required — tool won't work without this
+                Required tool won't work without this
               </label>
             </div>
           </div>
@@ -573,7 +573,7 @@ function StepPlatform({
   return (
     <div className="space-y-6">
       <InfoBox title="Configure API Connection">
-        Define how the tool reaches your backend — endpoint, headers, and request body.
+        Define how the tool reaches your backend endpoint, headers, and request body.
       </InfoBox>
 
       <div className="grid grid-cols-2 gap-4">
@@ -702,7 +702,7 @@ function StepReview({ data }: { data: ToolWizardData }) {
                 <Badge variant="secondary">{p.type}</Badge>
                 <span className="font-mono">{p.name}</span>
                 {p.required && <Badge variant="outline" className="text-destructive">required</Badge>}
-                <span className="text-muted-foreground">— {p.description}</span>
+                <span className="text-muted-foreground">  {p.description}</span>
               </li>
             ))}
           </ul>

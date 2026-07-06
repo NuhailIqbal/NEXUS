@@ -124,7 +124,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
     if (historyOpen) loadServerVersions();
   }, [historyOpen, loadServerVersions]);
 
-  // Load flow from server (source of truth) — localStorage only seeds the first paint.
+  // Load flow from server (source of truth) localStorage only seeds the first paint.
   useEffect(() => {
     let cancelled = false;
     if (!flowId || flowId === "new") return;
@@ -305,7 +305,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             {historyOpen && (
               <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-2 shadow-lg">
                 <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Saved Versions {versionsLoading && <span className="ml-1 normal-case font-normal">— loading…</span>}
+                  Saved Versions {versionsLoading && <span className="ml-1 normal-case font-normal">  loading…</span>}
                 </div>
                 {serverVersions.length === 0 && !versionsLoading ? (
                   <div className="p-3 text-center text-xs text-muted-foreground">

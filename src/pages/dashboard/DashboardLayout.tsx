@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
-  LayoutDashboard, Bot, Wrench, Mic, Database,
+  LayoutDashboard, Bot, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Sparkles, Bell, Search, Menu, X, MessageSquare, Radio, CreditCard,
+  Sparkles, Bell, Search, Menu, X, MessageSquare, CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,7 +19,6 @@ type NavItem = {
 const NAV: NavItem[] = [
   { label: "Quick Setup", to: "/dashboard/quick-setup", icon: LayoutDashboard },
   { label: "AI Agents", to: "/dashboard/ai-agents", icon: Bot },
-  { label: "Tools", to: "/dashboard/tools", icon: Wrench },
   { label: "AI Voices", to: "/dashboard/ai-voices", icon: Mic },
   {
     label: "Database",
@@ -46,7 +45,6 @@ const NAV: NavItem[] = [
       { label: "Call Logs", to: "/dashboard/telephony/inbound-logs" },
     ],
   },
-  { label: "Voice Widgets", to: "/dashboard/voice-widgets", icon: Radio },
   { label: "All Conversations", to: "/dashboard/conversations", icon: MessageSquare },
   {
     label: "Analytics",

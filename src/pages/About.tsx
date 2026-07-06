@@ -37,7 +37,7 @@ const About = () => (
             The Future of <span className="text-gradient">Revenue Infrastructure</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            EDM Nexus is the AI-powered performance marketing platform that connects advertisers 
+            EDM Nexus is the AI powered performance marketing platform that connects advertisers 
             with publishers through intelligent, real-time revenue optimization.
           </p>
         </div>
@@ -46,7 +46,7 @@ const About = () => (
         <div className="glow-border rounded-2xl p-8 md:p-12 mb-16 text-center animate-slide-up" style={{ animationDelay: "0.3s" }}>
           <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-4">Our Mission</h2>
           <p className="text-muted-foreground text-lg max-w-3xl mx-auto leading-relaxed">
-            To build the world's most intelligent revenue infrastructure — where every inbound interaction 
+            To build the world's most intelligent revenue infrastructure where every inbound interaction 
             is matched, qualified, and monetized by AI, creating unprecedented value for advertisers, 
             publishers, and the consumers they serve.
           </p>

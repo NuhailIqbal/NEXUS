@@ -102,7 +102,7 @@ const CreateAIAgent = () => {
         return false;
       }
       if (form.knowledgeText.length > KNOWLEDGE_TEXT_LIMIT) {
-        toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters — upload as a file instead`);
+        toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters upload as a file instead`);
         return false;
       }
     }
@@ -511,8 +511,8 @@ function StepKnowledge({
           <div className="space-y-2 text-sm">
             <p className="font-semibold text-foreground">When to use what</p>
             <ul className="space-y-1 text-muted-foreground">
-              <li><span className="font-medium text-foreground">Paste text</span> — short FAQs, key policies, scripts (under {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters). Goes straight into the agent's instructions, available instantly on every call.</li>
-              <li><span className="font-medium text-foreground">Upload files</span> — product catalogs, full manuals, large documents. The agent retrieves relevant sections during the call.</li>
+              <li><span className="font-medium text-foreground">Paste text</span> short FAQs, key policies, scripts (under {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters). Goes straight into the agent's instructions, available instantly on every call.</li>
+              <li><span className="font-medium text-foreground">Upload files</span> product catalogs, full manuals, large documents. The agent retrieves relevant sections during the call.</li>
             </ul>
             <p className="text-xs text-muted-foreground">You can use one or both. At least one is required.</p>
           </div>
@@ -521,7 +521,7 @@ function StepKnowledge({
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Quick Text <span className="text-xs font-normal text-muted-foreground">— short content</span></span>
+          <span className="text-sm font-medium">Quick Text <span className="text-xs font-normal text-muted-foreground">  short content</span></span>
           <span className={cn("text-xs", textOver ? "text-destructive font-semibold" : "text-muted-foreground")}>
             {textLen.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()}
           </span>
@@ -544,7 +544,7 @@ function StepKnowledge({
       </div>
 
       <div className="space-y-3">
-        <span className="block text-sm font-medium">Knowledge Files <span className="text-xs font-normal text-muted-foreground">— large content</span></span>
+        <span className="block text-sm font-medium">Knowledge Files <span className="text-xs font-normal text-muted-foreground">  large content</span></span>
         <label
           htmlFor="knowledge-file-input"
           className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-input bg-muted/30 px-4 py-8 text-center transition hover:border-primary/40 hover:bg-muted/50"
@@ -552,7 +552,7 @@ function StepKnowledge({
           <Upload className="h-6 w-6 text-muted-foreground" />
           <div className="text-sm font-medium">Click to upload or drag files here</div>
           <div className="text-xs text-muted-foreground">
-            {KNOWLEDGE_FILE_TYPES.join(", ")} — up to {KNOWLEDGE_FILE_MAX_MB}MB each
+            {KNOWLEDGE_FILE_TYPES.join(", ")} up to {KNOWLEDGE_FILE_MAX_MB}MB each
           </div>
           <input
             id="knowledge-file-input"

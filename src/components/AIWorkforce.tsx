@@ -31,7 +31,7 @@ const AIWorkforce = () => (
     <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full bg-primary/3 blur-[150px] pointer-events-none" />
     <div className="container mx-auto px-4 relative z-10">
       <div className="text-center mb-16">
-        <span className="badge-pill mb-4">AI-Powered Workforce</span>
+        <span className="badge-pill mb-4">AI Powered Workforce</span>
         <h2 className="text-3xl md:text-5xl font-bold mt-4">
           AI ELASTIC <span className="text-gradient">TASK FORCE</span>
         </h2>

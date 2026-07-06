@@ -260,7 +260,7 @@ const AIVoices = () => {
             </div>
             <h3 className="mt-4 font-semibold text-foreground">{v.name}</h3>
             <p className="text-xs text-muted-foreground">
-              {v.language} · {v.accent || "—"} · {v.gender || v.category || "—"}
+              {v.language} · {v.accent || " "} · {v.gender || v.category || " "}
             </p>
             <div className="mt-4 flex items-center gap-2">
               <button
@@ -291,7 +291,7 @@ const AIVoices = () => {
             name: d.name,
             language: d.language,
             accent: d.accent,
-            gender: "—",
+            gender: " ",
             category: d.category,
             source: "local",
           });
@@ -315,7 +315,7 @@ const AIVoices = () => {
               Preview {previewVoice?.name}
             </DialogTitle>
             <DialogDescription>
-              {previewVoice?.language} · {previewVoice?.accent || "—"} · {previewVoice?.gender || previewVoice?.category || "—"}
+              {previewVoice?.language} · {previewVoice?.accent || " "} · {previewVoice?.gender || previewVoice?.category || " "}
             </DialogDescription>
           </DialogHeader>
 

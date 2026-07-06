@@ -242,7 +242,7 @@ function ReviewRow({ label, value }: { label: string; value?: string }) {
   return (
     <div>
       <span className="font-semibold">{label}:</span>{" "}
-      <span className="text-muted-foreground">{value || "—"}</span>
+      <span className="text-muted-foreground">{value || " "}</span>
     </div>
   );
 }

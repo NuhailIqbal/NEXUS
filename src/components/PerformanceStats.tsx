@@ -4,7 +4,7 @@ const stats = [
   { icon: Target, title: "Acquisition Intelligence", desc: "Matching algorithms that surface the highest-intent prospects", stat: "95%", statLabel: "intent match rate" },
   { icon: Route, title: "Lead Distribution Engine", desc: "Automated routing to the right buyer in real time", stat: "45%", statLabel: "conversion lift" },
   { icon: Phone, title: "Real-Time Call Routing", desc: "Verified inbound calls matched and delivered instantly", stat: "100%", statLabel: "verified calls" },
-  { icon: BarChart3, title: "Revenue Optimization", desc: "AI-driven pricing and bid optimization across every campaign", stat: "5X", statLabel: "return on spend" },
+  { icon: BarChart3, title: "Revenue Optimization", desc: "AI driven pricing and bid optimization across every campaign", stat: "5X", statLabel: "return on spend" },
   { icon: Zap, title: "Instant API Delivery", desc: "Sub-30-second lead delivery via API or direct integration", stat: "<30s", statLabel: "delivery time" },
   { icon: TrendingUp, title: "Elastic Infrastructure", desc: "Scale from 10 to 10,000 concurrent operations on demand", stat: "∞", statLabel: "growth potential" },
 ];

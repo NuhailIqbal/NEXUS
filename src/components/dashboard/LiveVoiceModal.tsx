@@ -63,7 +63,7 @@ export function LiveVoiceModal({
     }
     const assistantId = assistantIdOverride ?? syncedAssistantId ?? agent.vapi_assistant_id;
     if (!assistantId) {
-      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured — use the Sync button below to fix this.");
+      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured use the Sync button below to fix this.");
       setStatus("error");
       return;
     }
@@ -78,7 +78,7 @@ export function LiveVoiceModal({
 
       vapi.on("call-start", () => setStatus("in-call"));
       vapi.on("call-end", () => setStatus("ended"));
-      vapi.on("speech-start", () => {/* user starts talking — UI hint optional */});
+      vapi.on("speech-start", () => {/* user starts talking UI hint optional */});
       vapi.on("speech-end", () => {/* user stops talking */});
       vapi.on("message", (m: any) => {
         if (m?.type === "transcript" && m?.transcriptType === "final") {
@@ -110,14 +110,14 @@ export function LiveVoiceModal({
     const result = await api.syncAgentVapi(agent.id);
     setSyncing(false);
     if (result.error || !result.data?.vapi_assistant_id) {
-      setError(result.error ?? "Sync failed — no assistant ID returned. Check your VAPI configuration.");
+      setError(result.error ?? "Sync failed no assistant ID returned. Check your VAPI configuration.");
       setStatus("error");
       return;
     }
     const newId: string = result.data.vapi_assistant_id;
     setSyncedAssistantId(newId);
     onAgentSynced?.(agent.id, newId);
-    toast.success("Agent synced to VAPI — starting call…");
+    toast.success("Agent synced to VAPI starting call…");
     await startCall(newId);
   };
 
@@ -164,7 +164,7 @@ export function LiveVoiceModal({
     idle: "Ready",
     connecting: "Connecting to agent…",
     ringing: "Ringing…",
-    "in-call": "In call — just talk.",
+    "in-call": "In call just talk.",
     ended: "Call ended",
     error: error ?? "Something went wrong",
   };
@@ -196,9 +196,9 @@ export function LiveVoiceModal({
         {!agent ? null : (
           <>
             <div className="grid grid-cols-3 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-              <div><span className="text-muted-foreground">Voice: </span><span className="font-medium">{agent.voice ?? "—"}</span></div>
-              <div><span className="text-muted-foreground">Language: </span><span className="font-medium">{agent.language ?? "—"}</span></div>
-              <div><span className="text-muted-foreground">Status: </span><span className="font-medium">{agent.status ?? "—"}</span></div>
+              <div><span className="text-muted-foreground">Voice: </span><span className="font-medium">{agent.voice ?? " "}</span></div>
+              <div><span className="text-muted-foreground">Language: </span><span className="font-medium">{agent.language ?? " "}</span></div>
+              <div><span className="text-muted-foreground">Status: </span><span className="font-medium">{agent.status ?? " "}</span></div>
             </div>
 
             {status === "error" && (
@@ -304,7 +304,7 @@ export function LiveVoiceModal({
               )}
             </div>
             <p className="text-center text-xs text-muted-foreground">
-              Live web call powered by VAPI. Uses your agent's real voice, model, and tools — no phone number needed.
+              Live web call powered by VAPI. Uses your agent's real voice, model, and tools no phone number needed.
             </p>
           </>
         )}

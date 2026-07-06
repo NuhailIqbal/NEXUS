@@ -1,9 +1,14 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-supabase==2.9.1
 httpx==0.27.2
 pydantic-settings==2.4.0
 python-jose[cryptography]==3.3.0
 slowapi==0.1.9
 cryptography==43.0.1
 python-multipart==0.0.9
+# PostgreSQL (replaces Supabase Postgres/PostgREST)
+psycopg[binary]==3.3.4
+psycopg_pool==3.2.4
+# Password hashing for own auth (replaces Supabase Auth)
+passlib[bcrypt]==1.7.4
+stripe==15.3.0

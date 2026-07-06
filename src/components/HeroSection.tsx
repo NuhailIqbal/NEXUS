@@ -45,7 +45,7 @@ const HeroSection = () => {
       <div className="container mx-auto px-4 text-center relative z-10">
         <div className="badge-pill mx-auto mb-8 animate-slide-up">
           <span className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-          AI-POWERED REVENUE INFRASTRUCTURE
+          AI POWERED REVENUE INFRASTRUCTURE
         </div>
 
         <h1 className="text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
@@ -64,7 +64,7 @@ const HeroSection = () => {
 
         <p className="max-w-2xl mx-auto text-muted-foreground text-base md:text-lg mb-10 animate-slide-up" style={{ animationDelay: "0.3s" }}>
           EDM Nexus deploys <strong className="text-foreground">autonomous AI agents</strong> for real-time call routing, 
-          predictive buyer matching, and revenue optimization across millions of inbound interactions — 
+          predictive buyer matching, and revenue optimization across millions of inbound interactions 
           <strong className="text-foreground"> 24/7 in 29+ languages</strong>.
         </p>
 

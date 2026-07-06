@@ -110,7 +110,7 @@ const Inbound = () => {
     const { error } = await api.createInboundQueue(payload);
     setCreating(false);
     if (error) return toast.error(error);
-    toast.success("AI Receptionist created — phone number provisioned!");
+    toast.success("AI Receptionist created phone number provisioned!");
     setCreateOpen(false);
     setCreateForm({ name: "", agent_id: "", area_code: "" });
     fetchAll();
@@ -157,7 +157,7 @@ const Inbound = () => {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Receptionist</h1>
           <p className="text-sm text-muted-foreground">
-            AI agents that answer every inbound call — 24/7, no hold times, instant response.
+            AI agents that answer every inbound call 24/7, no hold times, instant response.
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
@@ -170,7 +170,7 @@ const Inbound = () => {
         <StatCard icon={Headphones}   label="Active Receptionists" value={activeReceptionists}             color="bg-primary/10 text-primary" />
         <StatCard icon={PhoneIncoming} label="Total Inbound Calls" value={totalCalls}                      color="bg-blue-500/10 text-blue-600" />
         <StatCard icon={CheckCircle2} label="Completed Calls"      value={completedCalls}                  color="bg-green-500/10 text-green-600" />
-        <StatCard icon={Activity}     label="Avg Duration"         value={avgDuration > 0 ? formatDuration(avgDuration) : "—"} color="bg-purple-500/10 text-purple-600" />
+        <StatCard icon={Activity}     label="Avg Duration"         value={avgDuration > 0 ? formatDuration(avgDuration) : " "} color="bg-purple-500/10 text-purple-600" />
       </div>
 
       {/* Receptionist Cards */}
@@ -181,7 +181,7 @@ const Inbound = () => {
           </div>
           <h3 className="mt-4 text-lg font-semibold text-foreground">No receptionists yet</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Create your first AI receptionist — we'll provision a phone number automatically.
+            Create your first AI receptionist we'll provision a phone number automatically.
           </p>
           <Button className="mt-4" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Create Receptionist
@@ -233,7 +233,7 @@ const Inbound = () => {
                       </button>
                     </div>
                     <div className="mt-1.5 text-[11px] text-muted-foreground">
-                      Call this number — your AI agent answers instantly
+                      Call this number your AI agent answers instantly
                     </div>
                   </div>
                 ) : (
@@ -305,7 +305,7 @@ const Inbound = () => {
                       {c.customer_number || "Unknown"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {c.agent_id ? agentsMap.get(c.agent_id)?.name ?? "—" : "—"}
+                      {c.agent_id ? agentsMap.get(c.agent_id)?.name ?? " " : " "}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
@@ -324,10 +324,10 @@ const Inbound = () => {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {c.duration ? formatDuration(c.duration) : "—"}
+                      {c.duration ? formatDuration(c.duration) : " "}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {c.call_time ? new Date(c.call_time).toLocaleString() : "—"}
+                      {c.call_time ? new Date(c.call_time).toLocaleString() : " "}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground max-w-[220px] truncate">
                       {c.ai_summary || <span className="italic opacity-50">No summary</span>}
@@ -351,7 +351,7 @@ const Inbound = () => {
               New AI Receptionist
             </DialogTitle>
             <DialogDescription>
-              Pick an AI agent — we'll provision a VAPI phone number automatically. Incoming calls to that number go straight to your agent.
+              Pick an AI agent we'll provision a VAPI phone number automatically. Incoming calls to that number go straight to your agent.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

@@ -190,15 +190,15 @@ const AIAgents = () => {
                   </div>
                   <div>
                     <h3 className="font-semibold leading-tight">{a.name}</h3>
-                    <p className="text-xs text-muted-foreground">{a.category ?? "—"}</p>
+                    <p className="text-xs text-muted-foreground">{a.category ?? " "}</p>
                   </div>
                 </div>
                 <StatusBadge status={a.status} />
               </div>
 
               <dl className="mt-5 space-y-1.5 text-sm">
-                <Row label="Voice" value={a.voice ?? "—"} />
-                <Row label="Language" value={a.language ?? "—"} />
+                <Row label="Voice" value={a.voice ?? " "} />
+                <Row label="Language" value={a.language ?? " "} />
                 <Row label="Created" value={new Date(a.created_at).toLocaleDateString()} />
               </dl>
 
@@ -369,7 +369,7 @@ const AIAgents = () => {
                 className="font-mono text-xs"
               />
               <p className="text-xs text-muted-foreground">
-                The agent's instructions. Changes apply on the next call — no need to recreate the agent.
+                The agent's instructions. Changes apply on the next call no need to recreate the agent.
               </p>
             </div>
           </div>

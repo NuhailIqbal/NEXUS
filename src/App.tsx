@@ -23,9 +23,7 @@ import DashboardIndex from "./pages/dashboard/DashboardIndex.tsx";
 import QuickSetup from "./pages/dashboard/QuickSetup.tsx";
 import AIAgents from "./pages/dashboard/AIAgents.tsx";
 import CreateAIAgent from "./pages/dashboard/CreateAIAgent.tsx";
-import Tools from "./pages/dashboard/Tools.tsx";
 import AIVoices from "./pages/dashboard/AIVoices.tsx";
-import VoiceWidgets from "./pages/dashboard/VoiceWidgets.tsx";
 import Profile from "./pages/dashboard/Profile.tsx";
 import Support from "./pages/dashboard/Support.tsx";
 import Conversations from "./pages/dashboard/Conversations.tsx";
@@ -74,9 +72,7 @@ const App = () => (
               <Route path="quick-setup" element={<QuickSetup />} />
               <Route path="ai-agents" element={<AIAgents />} />
               <Route path="ai-agents/create" element={<CreateAIAgent />} />
-              <Route path="tools" element={<Tools />} />
               <Route path="ai-voices" element={<AIVoices />} />
-              <Route path="voice-widgets" element={<VoiceWidgets />} />
               <Route path="conversations" element={<Conversations />} />
               <Route path="profile" element={<Profile />} />
               <Route path="support" element={<Support />} />

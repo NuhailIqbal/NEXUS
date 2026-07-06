@@ -70,7 +70,7 @@ const QuickSetup = () => {
             </h1>
             <p className="mt-1 text-muted-foreground">
               {completedCount === SETUP.length
-                ? "Setup complete — you're all set."
+                ? "Setup complete you're all set."
                 : "Let's get you up and running in minutes."}
             </p>
           </div>

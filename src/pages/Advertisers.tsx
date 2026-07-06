@@ -5,10 +5,10 @@ import { ArrowRight, TrendingUp, Target, Shield, BarChart3, Clock, DollarSign } 
 import { Link } from "react-router-dom";
 
 const benefits = [
-  { icon: TrendingUp, title: "Higher Conversion Rates", desc: "AI-matched leads convert 3.4x better than traditional distribution. Our neural routing finds the right buyer for every call." },
+  { icon: TrendingUp, title: "Higher Conversion Rates", desc: "AI matched leads convert 3.4x better than traditional distribution. Our neural routing finds the right buyer for every call." },
   { icon: Target, title: "Precision Targeting", desc: "Define your ideal customer profile and our ML models will filter, score, and route only qualified prospects to your team." },
   { icon: Shield, title: "Fraud Protection", desc: "Multi-layer fraud detection eliminates bot traffic, spoofed calls, and low-intent interactions before they reach you." },
-  { icon: BarChart3, title: "Real-Time Reporting", desc: "Live dashboards with conversion tracking, revenue attribution, and AI-powered recommendations for campaign optimization." },
+  { icon: BarChart3, title: "Real-Time Reporting", desc: "Live dashboards with conversion tracking, revenue attribution, and AI powered recommendations for campaign optimization." },
   { icon: Clock, title: "24/7 AI Qualification", desc: "Autonomous agents pre-qualify callers in 29+ languages, collecting intent data before transferring to your sales team." },
   { icon: DollarSign, title: "Pay-Per-Result", desc: "Performance-based pricing means you only pay for qualified, converted interactions. Zero waste, maximum ROI." },
 ];

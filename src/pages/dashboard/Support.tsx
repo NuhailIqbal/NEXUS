@@ -1,7 +1,7 @@
 import { LifeBuoy, MessageSquare, Mail } from "lucide-react";
 const faqs = [
   { q: "How do I create my first AI agent?", a: "Go to AI Agents and click + Add New Agent. Choose a template, voice, language, and goal." },
-  { q: "Can I bring my own SIP trunk?", a: "Yes — under Integrations > Voice & Telephony you can connect any compatible SIP trunk." },
+  { q: "Can I bring my own SIP trunk?", a: "Yes under Integrations > Voice & Telephony you can connect any compatible SIP trunk." },
   { q: "How does pricing work?", a: "We bill monthly per active agent and per voice minute. See the pricing page for details." },
   { q: "Is my data secure?", a: "All data is encrypted in transit and at rest. We're SOC 2 Type II certified." },
   { q: "Can I export conversation data?", a: "Yes, every report can be exported to CSV or pushed to Google Sheets in real time." },
