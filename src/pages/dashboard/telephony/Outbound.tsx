@@ -118,13 +118,13 @@ const Outbound = () => {
       const { data: agentData } = await api.getAgents();
       const agent = (agentData as any[])?.find((a: any) => a.id === c.agent_id);
       if (!agent) results[0] = { ...init[0], status: "fail", detail: "Agent not found" };
-      else if (!agent.vapi_assistant_id) results[0] = { ...init[0], status: "fail", detail: `"${agent.name}" is not synced to VAPI — open the agent and click Sync to VAPI` };
+      else if (!agent.vapi_assistant_id) results[0] = { ...init[0], status: "fail", detail: `"${agent.name}" is not synced to VAPI open the agent and click Sync to VAPI` };
       else results[0] = { ...init[0], status: "pass", detail: `${agent.name} ✓` };
     }
     setChecks([...results]);
 
     if (!c.phone_number_id) {
-      results[1] = { ...init[1], status: "fail", detail: "No phone number assigned — edit the campaign and select one" };
+      results[1] = { ...init[1], status: "fail", detail: "No phone number assigned edit the campaign and select one" };
     } else {
       const { data: numData } = await api.getPhoneNumbers();
       const num = (numData as any[])?.find((n: any) => n.id === c.phone_number_id);
@@ -135,7 +135,7 @@ const Outbound = () => {
     setChecks([...results]);
 
     if (!c.list_id) {
-      results[2] = { ...init[2], status: "fail", detail: "No contact list assigned — edit the campaign and select a list" };
+      results[2] = { ...init[2], status: "fail", detail: "No contact list assigned edit the campaign and select a list" };
     } else {
       const { data: contacts } = await api.getContacts();
       const dialable = (contacts as any[])?.filter((ct: any) => ct.list_id === c.list_id && ct.phone?.trim());
@@ -156,7 +156,7 @@ const Outbound = () => {
     const dialed: number = (data as any)?.dialed ?? 0;
     const errors: number = (data as any)?.errors ?? 0;
     const details: { phone: string; error: string }[] = (data as any)?.error_details ?? [];
-    if (dialed === 0 && errors > 0) toast.error(`0 calls connected — ${details[0]?.error ?? "Unknown VAPI error"}`);
+    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown VAPI error"}`);
     else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed`);
     else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);
     fetchCampaigns();
@@ -189,7 +189,7 @@ const Outbound = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Campaigns</h1>
-          <p className="text-sm text-muted-foreground">AI-powered outbound calling — automated, intelligent, scalable.</p>
+          <p className="text-sm text-muted-foreground">AI powered outbound calling automated, intelligent, scalable.</p>
         </div>
         <Button onClick={() => setOpen(true)}>
           <Plus className="mr-2 h-4 w-4" /> New Campaign
@@ -215,7 +215,7 @@ const Outbound = () => {
             <PhoneOutgoing className="h-7 w-7 text-primary" />
           </div>
           <h3 className="mt-4 text-lg font-semibold text-foreground">No campaigns yet</h3>
-          <p className="mt-1 text-sm text-muted-foreground">Create your first campaign to start AI-powered outbound calling.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Create your first campaign to start AI powered outbound calling.</p>
           <Button className="mt-4" onClick={() => setOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Create Campaign
           </Button>

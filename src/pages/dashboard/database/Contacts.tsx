@@ -66,7 +66,7 @@ const Contacts = () => {
           email: c.email ?? "",
           status: c.status ?? "Active",
           list_id: c.list_id ?? null,
-          list: c.list_id ? (listsMap.get(c.list_id) ?? "—") : "—",
+          list: c.list_id ? (listsMap.get(c.list_id) ?? " ") : " ",
           createdAt: c.created_at
             ? new Date(c.created_at).toISOString().slice(0, 10)
             : "",
@@ -244,9 +244,9 @@ const Contacts = () => {
           {viewTarget && (
             <dl className="grid grid-cols-3 gap-3 text-sm">
               <dt className="text-muted-foreground">Phone</dt>
-              <dd className="col-span-2 font-medium">{viewTarget.phone || "—"}</dd>
+              <dd className="col-span-2 font-medium">{viewTarget.phone || " "}</dd>
               <dt className="text-muted-foreground">Email</dt>
-              <dd className="col-span-2 font-medium">{viewTarget.email || "—"}</dd>
+              <dd className="col-span-2 font-medium">{viewTarget.email || " "}</dd>
               <dt className="text-muted-foreground">List</dt>
               <dd className="col-span-2 font-medium">{viewTarget.list}</dd>
               <dt className="text-muted-foreground">Status</dt>

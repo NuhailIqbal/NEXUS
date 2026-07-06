@@ -130,7 +130,7 @@ const CustomFields = () => {
                 </td>
                 <td className="px-4 py-3"><Badge variant="outline">{f.type}</Badge></td>
                 <td className="px-4 py-3 text-muted-foreground">{f.required ? "Yes" : "No"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{f.options?.length ? f.options.join(", ") : "—"}</td>
+                <td className="px-4 py-3 text-muted-foreground">{f.options?.length ? f.options.join(", ") : " "}</td>
                 <td className="px-4 py-3">
                   <RowActions
                     onSettings={() => openEdit(f)}

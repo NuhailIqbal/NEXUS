@@ -6,7 +6,7 @@ const features = [
   {
     icon: Brain,
     title: "Neural Call Routing",
-    description: "AI-powered routing engine that analyzes caller intent, geographic signals, and historical patterns to match calls with the highest-converting buyers in real time.",
+    description: "AI powered routing engine that analyzes caller intent, geographic signals, and historical patterns to match calls with the highest-converting buyers in real time.",
     highlight: "98.7% match accuracy",
   },
   {
@@ -54,7 +54,7 @@ const features = [
   {
     icon: Network,
     title: "API-First Architecture",
-    description: "RESTful and webhook APIs for seamless integration with your existing tech stack — CRMs, dialers, analytics platforms, and more.",
+    description: "RESTful and webhook APIs for seamless integration with your existing tech stack CRMs, dialers, analytics platforms, and more.",
     highlight: "100+ integrations",
   },
   {

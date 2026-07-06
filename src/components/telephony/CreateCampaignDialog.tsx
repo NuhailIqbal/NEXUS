@@ -192,7 +192,7 @@ function Step1({
         <Field label="Campaign Name" required>
           <Input value={data.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Q3 Cold Outreach" />
         </Field>
-        <Field label="Description" hint="Optional — internal note about this campaign">
+        <Field label="Description" hint="Optional internal note about this campaign">
           <Textarea value={data.description} onChange={(e) => update("description", e.target.value)} placeholder="What's this campaign for?" rows={3} />
         </Field>
       </Section>
@@ -222,7 +222,7 @@ function Step1({
         {phoneNumbers.length === 0 ? (
           <EmptyHint
             label="No phone numbers provisioned"
-            hint="You can still launch — VAPI will use its default outbound caller ID. Add a number in AI Telephony → Phone Numbers to use your own."
+            hint="You can still launch VAPI will use its default outbound caller ID. Add a number in AI Telephony → Phone Numbers to use your own."
             href="/dashboard/telephony/phone-numbers"
           />
         ) : (
@@ -359,16 +359,16 @@ function Step4({
   lists: ListRow[];
   phoneNumbers: PhoneNumber[];
 }) {
-  const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? "—", [agents, data.agentId]);
-  const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? "—", [lists, data.listId]);
+  const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? " ", [agents, data.agentId]);
+  const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? " ", [lists, data.listId]);
   const numberLabel  = useMemo(() => phoneNumbers.find((p) => p.id === data.phoneNumberId)?.number ?? "VAPI default", [phoneNumbers, data.phoneNumberId]);
-  const strategyName = useMemo(() => STRATEGIES.find((s) => s.id === data.strategy)?.name ?? "—", [data.strategy]);
+  const strategyName = useMemo(() => STRATEGIES.find((s) => s.id === data.strategy)?.name ?? " ", [data.strategy]);
 
   return (
     <div className="space-y-6">
       <Section icon={Mic} title="Campaign Summary">
         <div className="grid gap-3 sm:grid-cols-2">
-          <ReviewItem label="Campaign Name"    value={data.name || "—"} />
+          <ReviewItem label="Campaign Name"    value={data.name || " "} />
           <ReviewItem label="AI Agent"         value={agentName} />
           <ReviewItem label="Contact List"     value={listName} />
           <ReviewItem label="From Number"      value={numberLabel} />

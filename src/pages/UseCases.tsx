@@ -6,7 +6,7 @@ const useCases = [
   {
     icon: Shield,
     vertical: "Insurance",
-    title: "AI-Powered Insurance Lead Routing",
+    title: "AI Powered Insurance Lead Routing",
     description: "Route auto, health, life, and home insurance leads to licensed agents in real time. Our AI pre-qualifies callers, captures policy details, and matches with carriers offering the best conversion rates.",
     stats: ["$62 avg payout", "4.2x ROAS", "89% contact rate"],
   },
@@ -49,7 +49,7 @@ const useCases = [
     icon: GraduationCap,
     vertical: "Education",
     title: "Student Enrollment & Program Matching",
-    description: "AI-driven student intake matching prospective students with accredited programs based on career goals, schedule preferences, and financial aid eligibility.",
+    description: "AI driven student intake matching prospective students with accredited programs based on career goals, schedule preferences, and financial aid eligibility.",
     stats: ["$53 avg payout", "3.9x ROAS", "82% enrollment rate"],
   },
   {
@@ -78,7 +78,7 @@ const UseCases = () => (
             AI Revenue Across <span className="text-gradient">Every Vertical</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            From insurance to legal, healthcare to home services — our AI infrastructure powers 
+            From insurance to legal, healthcare to home services our AI infrastructure powers 
             revenue generation across 15+ industries.
           </p>
         </div>

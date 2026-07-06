@@ -51,9 +51,9 @@ async def timeseries(
 
     convos = (
         supabase.table("conversations")
-        .select("status, duration, call_time, created_at")
+        .select("status, duration, call_time")
         .eq("user_id", user["user_id"])
-        .gte("created_at", start.isoformat())
+        .gte("call_time", start.isoformat())
         .execute()
     )
     rows = convos.data or []

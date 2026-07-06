@@ -269,7 +269,7 @@ const Admin = () => {
                 <tr key={u.id} className="border-t border-border bg-card/30 hover:bg-muted/30 cursor-pointer"
                   onClick={() => setSelectedUser(selectedUser === u.id ? null : u.id)}>
                   <td className="px-4 py-3">
-                    <div className="font-medium text-foreground">{u.full_name || "—"}</div>
+                    <div className="font-medium text-foreground">{u.full_name || " "}</div>
                     <div className="text-xs text-muted-foreground">{u.email}</div>
                     {u.company_name && <div className="text-xs text-muted-foreground">{u.company_name}</div>}
                   </td>
@@ -345,12 +345,12 @@ const Admin = () => {
                             className="h-8 rounded border border-input bg-background px-2 text-sm"
                           >
                             <option value="free">Free (Trial)</option>
-                            <option value="payg">Pay As You Go — $0.05/min</option>
-                            <option value="starter">Starter — $25 (100 out / 200 in)</option>
-                            <option value="growth">Growth — $50 (300 out / 500 in)</option>
-                            <option value="business">Business — $100 (500 out / 700 in)</option>
+                            <option value="payg">Pay As You Go $0.05/min</option>
+                            <option value="starter">Starter $25 (100 out / 200 in)</option>
+                            <option value="growth">Growth $50 (300 out / 500 in)</option>
+                            <option value="business">Business $100 (500 out / 700 in)</option>
                           </select>
-                          <div className="text-[10px] text-muted-foreground">Admin override — no payment required</div>
+                          <div className="text-[10px] text-muted-foreground">Admin override no payment required</div>
                         </div>
 
                         {/* Reset Usage */}

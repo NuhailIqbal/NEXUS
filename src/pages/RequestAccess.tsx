@@ -5,7 +5,7 @@ import { Sparkles, ArrowRight, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 
 const benefits = [
-  "AI-powered call routing & optimization",
+  "AI powered call routing & optimization",
   "Access to 500+ premium buyers",
   "Real-time analytics dashboard",
   "Dedicated account management",
@@ -55,7 +55,7 @@ const RequestAccess = () => {
                 Request <span className="text-gradient">Platform Access</span>
               </h1>
               <p className="text-muted-foreground mb-8">
-                Join the leading AI-powered revenue platform. Our team will set you up 
+                Join the leading AI powered revenue platform. Our team will set you up 
                 with a customized solution for your business.
               </p>
               <ul className="space-y-3">

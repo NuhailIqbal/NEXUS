@@ -127,7 +127,7 @@ const InboundLogs = () => {
                     {c.customer_number || "Unknown"}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {c.agent_id ? agents.get(c.agent_id)?.name ?? "—" : "—"}
+                    {c.agent_id ? agents.get(c.agent_id)?.name ?? " " : " "}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
@@ -148,13 +148,13 @@ const InboundLogs = () => {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {c.duration ? `${Math.round(c.duration)}s` : "—"}
+                    {c.duration ? `${Math.round(c.duration)}s` : " "}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {c.call_time ? new Date(c.call_time).toLocaleString() : "—"}
+                    {c.call_time ? new Date(c.call_time).toLocaleString() : " "}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground max-w-[200px] truncate">
-                    {c.ai_summary || "—"}
+                    {c.ai_summary || " "}
                   </td>
                   <td className="px-4 py-3">
                     <button
@@ -193,11 +193,11 @@ const InboundLogs = () => {
               </div>
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">Duration</div>
-                <div className="mt-1 font-medium">{detail?.duration ? `${Math.round(detail.duration)}s` : "—"}</div>
+                <div className="mt-1 font-medium">{detail?.duration ? `${Math.round(detail.duration)}s` : " "}</div>
               </div>
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">Agent</div>
-                <div className="mt-1 font-medium">{detail?.agent_id ? agents.get(detail.agent_id)?.name ?? "—" : "—"}</div>
+                <div className="mt-1 font-medium">{detail?.agent_id ? agents.get(detail.agent_id)?.name ?? " " : " "}</div>
               </div>
             </div>
 

@@ -34,7 +34,7 @@ const Footer = () => (
             <Logo linked={false} />
           </div>
           <p className="text-sm text-muted-foreground">
-            AI-powered revenue infrastructure for inbound acquisition at scale.
+            AI powered revenue infrastructure for inbound acquisition at scale.
           </p>
         </div>
 

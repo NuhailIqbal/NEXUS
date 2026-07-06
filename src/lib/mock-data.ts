@@ -19,12 +19,12 @@ export const setupChecklist = [
 ];
 
 export const aiAgents = [
-  { id: "ag_01", name: "Lia — Lead Qualifier", status: "Active", category: "Lead Qualifying", voice: "Aria", language: "English (US)", createdBy: "Qarib Morgan", createdAt: "2025-03-12" },
-  { id: "ag_02", name: "Marco — Verifier", status: "Active", category: "Lead Verification", voice: "Marco", language: "Spanish (ES)", createdBy: "Qarib Morgan", createdAt: "2025-03-18" },
-  { id: "ag_03", name: "Nora — Appointment Setter", status: "Inactive", category: "Appointment Setting", voice: "Nora", language: "English (UK)", createdBy: "Sara Lee", createdAt: "2025-02-21" },
-  { id: "ag_04", name: "Kai — Support Concierge", status: "Active", category: "Customer Support", voice: "Kai", language: "English (US)", createdBy: "Qarib Morgan", createdAt: "2025-04-01" },
-  { id: "ag_05", name: "Eva — Re-engagement", status: "Active", category: "Re-engagement", voice: "Eva", language: "French (FR)", createdBy: "Diego R.", createdAt: "2025-04-09" },
-  { id: "ag_06", name: "Tom — Survey Bot", status: "Inactive", category: "Surveys", voice: "Tom", language: "English (US)", createdBy: "Sara Lee", createdAt: "2025-01-30" },
+  { id: "ag_01", name: "Lia Lead Qualifier", status: "Active", category: "Lead Qualifying", voice: "Aria", language: "English (US)", createdBy: "Qarib Morgan", createdAt: "2025-03-12" },
+  { id: "ag_02", name: "Marco Verifier", status: "Active", category: "Lead Verification", voice: "Marco", language: "Spanish (ES)", createdBy: "Qarib Morgan", createdAt: "2025-03-18" },
+  { id: "ag_03", name: "Nora Appointment Setter", status: "Inactive", category: "Appointment Setting", voice: "Nora", language: "English (UK)", createdBy: "Sara Lee", createdAt: "2025-02-21" },
+  { id: "ag_04", name: "Kai Support Concierge", status: "Active", category: "Customer Support", voice: "Kai", language: "English (US)", createdBy: "Qarib Morgan", createdAt: "2025-04-01" },
+  { id: "ag_05", name: "Eva Re-engagement", status: "Active", category: "Re-engagement", voice: "Eva", language: "French (FR)", createdBy: "Diego R.", createdAt: "2025-04-09" },
+  { id: "ag_06", name: "Tom Survey Bot", status: "Inactive", category: "Surveys", voice: "Tom", language: "English (US)", createdBy: "Sara Lee", createdAt: "2025-01-30" },
 ] as const;
 
 export const tools = [
@@ -99,7 +99,7 @@ export const outboundCampaigns = [
 export const inboundQueues = [
   { id: 1, name: "Sales Queue", status: "Active", agent: "Kai", waiting: 3, avgWait: "0:42" },
   { id: 2, name: "Support Queue", status: "Active", agent: "Eva", waiting: 1, avgWait: "0:18" },
-  { id: 3, name: "Billing Queue", status: "Inactive", agent: "Tom", waiting: 0, avgWait: "—" },
+  { id: 3, name: "Billing Queue", status: "Inactive", agent: "Tom", waiting: 0, avgWait: " " },
 ];
 
 export const phoneNumbers = [
@@ -157,7 +157,7 @@ export const teamMembers = [
 
 export const faqs = [
   { q: "How do I create my first AI agent?", a: "Go to AI Agents and click + Add New Agent. Choose a template, voice, language, and goal." },
-  { q: "Can I bring my own SIP trunk?", a: "Yes — under Integrations → Voice & Telephony you can connect any compatible SIP trunk." },
+  { q: "Can I bring my own SIP trunk?", a: "Yes under Integrations → Voice & Telephony you can connect any compatible SIP trunk." },
   { q: "How does pricing work?", a: "We bill monthly per active agent and per voice minute. See the pricing page for details." },
   { q: "Is my data secure?", a: "All data is encrypted in transit and at rest. We're SOC 2 Type II certified." },
   { q: "Can I export conversation data?", a: "Yes, every report can be exported to CSV or pushed to Google Sheets in real time." },

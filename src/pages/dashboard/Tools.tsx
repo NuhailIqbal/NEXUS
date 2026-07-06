@@ -255,7 +255,7 @@ const Tools = () => {
                         <span className="text-xs text-muted-foreground truncate max-w-[180px]">{t.url}</span>
                       </div>
                     ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
+                      <span className="text-xs text-muted-foreground"> </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{(t.parameters || []).length}</td>
@@ -336,12 +336,12 @@ const Tools = () => {
 
           {testState === "success" && (
             <div className="flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
-              <CheckCircle2 className="h-4 w-4" /> Endpoint reachable — tool is working.
+              <CheckCircle2 className="h-4 w-4" /> Endpoint reachable tool is working.
             </div>
           )}
           {testState === "fail" && (
             <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <XCircle className="h-4 w-4" /> Test failed — check your URL and credentials.
+              <XCircle className="h-4 w-4" /> Test failed check your URL and credentials.
             </div>
           )}
 

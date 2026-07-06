@@ -9,7 +9,7 @@ const benefits = [
   { icon: Megaphone, title: "Premium Demand Access", desc: "Connect to 500+ verified advertisers across insurance, legal, home services, financial services, and healthcare verticals." },
   { icon: Globe, title: "Multi-Channel Monetization", desc: "Monetize calls, clicks, forms, and chat interactions through a single unified platform with centralized reporting." },
   { icon: LineChart, title: "Transparent Analytics", desc: "Real-time visibility into call durations, conversion rates, revenue per call, and buyer performance with zero data lag." },
-  { icon: Layers, title: "Creative & Landing Pages", desc: "AI-generated, compliance-tested creative assets and landing pages optimized for your traffic sources and verticals." },
+  { icon: Layers, title: "Creative & Landing Pages", desc: "AI generated, compliance-tested creative assets and landing pages optimized for your traffic sources and verticals." },
   { icon: Plug, title: "Easy Integration", desc: "Drop-in tracking pixels, API endpoints, and webhook integrations. Go live in under 24 hours with dedicated onboarding support." },
 ];
 

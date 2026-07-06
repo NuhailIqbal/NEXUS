@@ -316,7 +316,7 @@ function StepReview({ data, setData }: { data: InboundQueueData; setData: React.
     <>
       <Section icon={<PhoneIncoming className="h-4 w-4" />} title="Queue Summary">
         <div className="grid grid-cols-2 gap-3">
-          <SummaryItem label="Queue Name" value={data.name || "—"} />
+          <SummaryItem label="Queue Name" value={data.name || " "} />
           <SummaryItem label="Phone Number" value={data.inboundNumber} />
           <SummaryItem label="AI Agent" value={data.aiAgent} />
           <SummaryItem label="Active Agents" value={String(data.maxAgents)} />

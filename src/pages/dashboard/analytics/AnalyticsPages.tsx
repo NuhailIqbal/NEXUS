@@ -106,7 +106,7 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
         <div className="mb-4 flex items-center justify-between">
           <h3 className="font-semibold text-foreground">Trends (last 14 days)</h3>
           {!loading && !hasData && (
-            <span className="text-xs text-muted-foreground">No call data yet — chart will populate after your first calls.</span>
+            <span className="text-xs text-muted-foreground">No call data yet chart will populate after your first calls.</span>
           )}
         </div>
         <div className="h-72 w-full">
