@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Local object storage — replaces Supabase Storage
     storage_dir: str = ""  # absolute path for uploaded files (defaults to backend/_storage)
 
-    # Supabase (legacy — optional after migration; jwt_secret still used to verify tokens)
+    # Supabase (unused — kept for backward compatibility during transition)
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""

@@ -3,11 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, Loader2, Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
-import { useEffect } from "react";
+import { useAuth, storeAuthData } from "@/contexts/AuthContext";
+import { api } from "@/services/api";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -25,13 +24,14 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await api.login(email, password);
     setLoading(false);
-    if (error) {
-      toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
-    } else {
-      navigate("/dashboard");
+    if (error || !data) {
+      toast({ title: "Sign in failed", description: error ?? "Unknown error", variant: "destructive" });
+      return;
     }
+    storeAuthData(data.access_token, data.refresh_token, data.user);
+    navigate("/dashboard");
   };
 
   const handleForgotPassword = async () => {
@@ -39,13 +39,11 @@ const Login = () => {
       toast({ title: "Enter your email first", variant: "destructive" });
       return;
     }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
+    const { error } = await api.forgotPassword(email);
     if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Error", description: error, variant: "destructive" });
     } else {
-      toast({ title: "Check your email", description: "Password reset link sent." });
+      toast({ title: "Check your email", description: "If that email exists, a reset link has been sent." });
     }
   };
 

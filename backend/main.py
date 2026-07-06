@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from config import settings
 
 from routers import (
+    auth,
     agents,
     contacts,
     lists,
@@ -91,7 +92,7 @@ class SubUserDeleteGuard(BaseHTTPMiddleware):
 app.add_middleware(SubUserDeleteGuard)
 
 
-# Health + Auth
+# Health
 @app.get("/health", tags=["System"])
 async def health():
     return {"status": "ok"}
@@ -109,6 +110,7 @@ async def me(user=Depends(get_current_user)):
 
 
 # Routers
+app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(contacts.router)
 app.include_router(lists.router)

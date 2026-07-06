@@ -1,4 +1,15 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: edm-nexus-db
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -8,9 +19,9 @@ services:
       - .env
     environment:
       - PORT=8000
-    ports:
-      - "8000:8000"
     restart: unless-stopped
+    depends_on:
+      - postgres
 
   frontend:
     build:
@@ -19,12 +30,22 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL}
         VITE_API_PUBLIC_URL: ${VITE_API_PUBLIC_URL}
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
-        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
-        VITE_SUPABASE_PROJECT_ID: ${VITE_SUPABASE_PROJECT_ID}
     container_name: edm-nexus-frontend
-    ports:
-      - "8080:80"
+    restart: unless-stopped
     depends_on:
       - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: edm-nexus-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - frontend
+      - backend
     restart: unless-stopped
+
+volumes:
+  pgdata:

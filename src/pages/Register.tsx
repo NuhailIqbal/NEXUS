@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { storeAuthData } from "@/contexts/AuthContext";
+import { api } from "@/services/api";
 
 const Register = () => {
   const [fullName, setFullName] = useState("");
@@ -23,24 +24,15 @@ const Register = () => {
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName, company_name: companyName },
-        emailRedirectTo: window.location.origin,
-      },
-    });
+    const { data, error } = await api.register(email, password, fullName, companyName);
     setLoading(false);
-    if (error) {
-      toast({ title: "Registration failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({
-        title: "Account created",
-        description: "Welcome! Redirecting you to the dashboard...",
-      });
-      navigate("/dashboard");
+    if (error || !data) {
+      toast({ title: "Registration failed", description: error ?? "Unknown error", variant: "destructive" });
+      return;
     }
+    storeAuthData(data.access_token, data.refresh_token, data.user);
+    toast({ title: "Account created", description: "Welcome! Redirecting you to the dashboard..." });
+    navigate("/dashboard");
   };
 
   return (

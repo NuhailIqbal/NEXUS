@@ -81,7 +81,7 @@ const DashboardLayout = () => {
   }
 
   const displayName =
-    (user.user_metadata?.full_name as string) || user.email || "User";
+    user.user_metadata?.full_name || user.email || "User";
   const initials = displayName
     .split(" ")
     .map((s) => s[0])

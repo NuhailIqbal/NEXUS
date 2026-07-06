@@ -1,52 +1,23 @@
-import logging
-import httpx
 import base64
+import logging
+
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError, jwk
+from jose import jwt, JWTError
+
 from config import settings
 
 logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer()
 
-_jwks_cache: dict | None = None
-
-
-def _get_jwks() -> dict:
-    global _jwks_cache
-    if _jwks_cache is None:
-        url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
-        r = httpx.get(url)
-        r.raise_for_status()
-        _jwks_cache = r.json()
-    return _jwks_cache
-
 
 def _decode_token(token: str) -> dict:
-    header = jwt.get_unverified_header(token)
-    alg = header.get("alg", "HS256")
-
-    if alg == "HS256":
-        return jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-
-    jwks = _get_jwks()
-    kid = header.get("kid")
-    for key_data in jwks.get("keys", []):
-        if key_data.get("kid") == kid:
-            public_key = jwk.construct(key_data, algorithm=alg)
-            return jwt.decode(
-                token,
-                public_key,
-                algorithms=[alg],
-                options={"verify_aud": False},
-            )
-
-    raise JWTError(f"No matching key found for kid={kid}")
+    return jwt.decode(
+        token,
+        settings.active_jwt_secret,
+        algorithms=["HS256"],
+        options={"verify_aud": False},
+    )
 
 
 async def get_current_user(

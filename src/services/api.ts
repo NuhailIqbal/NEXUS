@@ -1,10 +1,9 @@
-import { supabase } from "@/integrations/supabase/client";
+import { getStoredToken } from "@/contexts/AuthContext";
 
 const API_URL = "/api";
 
 async function getToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  return getStoredToken();
 }
 
 async function request<T = any>(
@@ -213,4 +212,16 @@ export const api = {
 
   // Health
   getHealth: () => get("/health"),
+
+  // Auth
+  login: (email: string, password: string) =>
+    post("/auth/login", { email, password }),
+  register: (email: string, password: string, full_name: string, company_name: string) =>
+    post("/auth/register", { email, password, full_name, company_name }),
+  forgotPassword: (email: string) =>
+    post("/auth/forgot-password", { email }),
+  resetPassword: (token: string, new_password: string) =>
+    post("/auth/reset-password", { token, new_password }),
+  changePassword: (current_password: string, new_password: string) =>
+    post("/auth/change-password", { current_password, new_password }),
 };
