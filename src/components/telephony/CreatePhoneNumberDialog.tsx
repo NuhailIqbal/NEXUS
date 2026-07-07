@@ -27,7 +27,7 @@ export type PhoneNumberData = {
   agentId: string;
 };
 
-const PROVIDERS = ["VAPI", "Twilio", "Telnyx", "Vonage", "Plivo", "Bandwidth", "IDT"];
+const PROVIDERS = ["VAPI", "Twilio"];
 
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
@@ -131,6 +131,14 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
                     onChange={(e) => setData({ ...data, areaCode: e.target.value.replace(/\D/g, "") })}
                   />
                   <p className="mt-1 text-xs text-muted-foreground">3-digit US area code. VAPI will provision a number in this area.</p>
+                </div>
+              )}
+
+              {data.serviceProvider.toLowerCase() === "twilio" && (
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  A US phone number will be <span className="font-medium text-foreground">purchased automatically</span> on the
+                  platform Twilio account and imported into VAPI. You can then attach it to any campaign.
+                  <span className="mt-1 block text-[11px]">Note: purchasing a number incurs Twilio charges.</span>
                 </div>
               )}
 
