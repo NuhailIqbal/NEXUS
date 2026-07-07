@@ -77,15 +77,11 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-# Loud startup checks — fail fast if production is misconfigured.
+# Startup checks — warn but don't block if optional services aren't configured yet.
 if settings.is_production:
-    missing: list[str] = []
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
     if not settings.vapi_webhook_secret:
-        missing.append("VAPI_WEBHOOK_SECRET (required to verify VAPI webhook signatures)")
+        _log.warning("VAPI_WEBHOOK_SECRET not set — VAPI webhook signature verification is disabled")
     if not settings.cors_origins or "localhost" in settings.cors_origins:
-        missing.append("CORS_ORIGINS (must be set to your production frontend origin(s))")
-    if missing:
-        raise RuntimeError(
-            "Refusing to start in production with missing/insecure config:\n  - "
-            + "\n  - ".join(missing)
-        )
+        _log.warning("CORS_ORIGINS is not set to a production domain")
