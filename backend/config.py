@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
 
+    # Twilio (platform account) — one-time server config; used to auto-purchase numbers
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+
     # Admin
     admin_emails: str = ""  # comma-separated admin emails
 
