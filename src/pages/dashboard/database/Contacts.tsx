@@ -44,6 +44,7 @@ const Contacts = () => {
   const [lists, setLists] = useState<ListRow[]>([]);
 
   const fileRef = useRef<HTMLInputElement>(null);
+  const [showImportInfo, setShowImportInfo] = useState(false);
   const [viewTarget, setViewTarget] = useState<Contact | null>(null);
   const [editTarget, setEditTarget] = useState<Contact | null>(null);
   const [editForm, setEditForm] = useState<Partial<Contact>>({});
@@ -119,25 +120,41 @@ const Contacts = () => {
   };
 
   const handleImportCsv = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      toast.error("Please upload a .csv file. In Excel: Save As → CSV (Comma delimited).");
+      return;
+    }
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter(Boolean);
     if (lines.length === 0) return toast.error("Empty file");
     const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
     let count = 0;
+    let skipped = 0;
     for (const line of lines.slice(1)) {
       const cols = line.split(",").map((c) => c.trim());
       const row: Record<string, string> = {};
       headers.forEach((h, i) => (row[h] = cols[i] ?? ""));
       const name = row.name || row.full_name || row.first_name || "Imported";
+      const phone = (row.phone ?? "").trim();
+      if (!phone) {
+        skipped++;
+        continue; // phone number is required
+      }
       const { error } = await api.createContact({
         name,
-        phone: row.phone ?? "",
+        phone,
         email: row.email ?? "",
         status: "Active",
       });
       if (!error) count++;
     }
-    toast.success(`Imported ${count} contact${count === 1 ? "" : "s"}`);
+    if (skipped > 0) {
+      toast.success(
+        `Imported ${count} contact${count === 1 ? "" : "s"} — skipped ${skipped} row${skipped === 1 ? "" : "s"} with no phone number`,
+      );
+    } else {
+      toast.success(`Imported ${count} contact${count === 1 ? "" : "s"}`);
+    }
     fetchContacts();
   };
 
@@ -160,12 +177,49 @@ const Contacts = () => {
               if (fileRef.current) fileRef.current.value = "";
             }}
           />
-          <Button variant="outline" onClick={() => fileRef.current?.click()}>
+          <Button variant="outline" onClick={() => setShowImportInfo(true)}>
             <Upload className="mr-2 h-4 w-4" />Import CSV
           </Button>
           <Button onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />Add Contact</Button>
         </div>
       </div>
+
+      {/* CSV import format disclaimer — shown when the user clicks Import CSV */}
+      <Dialog open={showImportInfo} onOpenChange={setShowImportInfo}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Import contacts from CSV</DialogTitle>
+            <DialogDescription>
+              Before you choose a file, make sure it matches this format.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div>
+              <p className="mb-1 font-medium text-foreground">1. First row must be the column headers:</p>
+              <pre className="whitespace-pre rounded-md border border-border bg-muted/50 p-3 text-xs overflow-x-auto">{`name,phone,email
+John Doe,+13105551001,john@example.com
+Jane Smith,+13105551002,jane@example.com`}</pre>
+            </div>
+            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+              <li><span className="font-medium text-foreground">name</span> and <span className="font-medium text-foreground">phone</span> are required; <span className="font-medium text-foreground">email</span> is optional.</li>
+              <li>Column order doesn&apos;t matter, and headers are case-insensitive.</li>
+              <li>Don&apos;t put commas inside a value (e.g. write <span className="font-medium text-foreground">John Doe</span>, not <span className="font-medium text-foreground">Doe, John</span>) — commas separate columns.</li>
+              <li>New contacts are added with status <span className="font-medium text-foreground">Active</span>.</li>
+            </ul>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowImportInfo(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                setShowImportInfo(false);
+                fileRef.current?.click();
+              }}
+            >
+              <Upload className="mr-2 h-4 w-4" />Choose CSV File
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input

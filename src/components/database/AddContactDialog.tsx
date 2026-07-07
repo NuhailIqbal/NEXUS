@@ -67,7 +67,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
   const next = () => {
     if (step === 1) {
       if (!basic.name.trim()) return toast.error("Name is required");
-      if (!basic.phone.trim() && !basic.email.trim()) return toast.error("Phone or email is required");
+      if (!basic.phone.trim()) return toast.error("Phone number is required");
     }
     if (step < 3) setStep((s) => (s + 1) as 1 | 2 | 3);
   };
@@ -117,7 +117,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                 <p className="text-sm text-muted-foreground">Enter the lead's basic contact information</p>
               </div>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <Field label="Phone">
+                <Field label="Phone *">
                   <Input value={basic.phone} onChange={(e) => setBasic((b) => ({ ...b, phone: e.target.value }))} placeholder="Please provide customer phone" />
                 </Field>
                 <Field label="Email">
