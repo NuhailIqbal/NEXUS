@@ -174,9 +174,9 @@ const PhoneNumbers = () => {
           };
           if (isVapi) {
             if (d.areaCode) payload.area_code = d.areaCode;
-          } else {
-            payload.number = d.title.startsWith("+") ? d.title : `+${d.title}`;
           }
+          // Twilio: no number/area code — the backend auto-purchases a US number
+          // on the platform Twilio account and imports it into VAPI.
           if (d.agentId) payload.agent_id = d.agentId;
           const { error } = await api.createPhoneNumber(payload);
           if (error) return toast.error(error);

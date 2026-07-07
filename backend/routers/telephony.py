@@ -8,7 +8,7 @@ from models.schemas import (
     PhoneNumberCreate, PhoneNumberUpdate,
     OutboundCallCreate,
 )
-from services import vapi_client
+from services import vapi_client, twilio_service
 from config import settings
 from routers.billing import check_call_quota, get_or_create_billing
 
@@ -33,38 +33,69 @@ async def list_phone_numbers(user=Depends(get_current_user)):
 
 @router.post("/phone-numbers")
 async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
+    provider = (body.provider or "vapi").lower()
     # Only include columns that exist in the phone_numbers table
     row: dict = {
         "user_id": user["user_id"],
         "number": body.number or "",
         "status": body.status or "Active",
-        "provider": body.provider or "vapi",
+        "provider": provider,
     }
     if body.agent_id:
         row["agent_id"] = body.agent_id
 
-    if settings.vapi_api_key and (body.provider or "").lower() == "vapi":
+    # Resolve the assigned agent's VAPI assistant id (to attach the number to the agent).
+    assistant_id = None
+    if body.agent_id:
+        agent = (
+            supabase.table("ai_agents")
+            .select("vapi_assistant_id")
+            .eq("id", body.agent_id)
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        if agent.data:
+            assistant_id = agent.data.get("vapi_assistant_id")
+
+    if provider == "vapi" and settings.vapi_api_key:
         try:
             vapi_payload: dict = {"provider": "vapi"}
             if body.area_code:
                 vapi_payload["numberDesiredAreaCode"] = body.area_code
-            if body.agent_id:
-                agent = (
-                    supabase.table("ai_agents")
-                    .select("vapi_assistant_id")
-                    .eq("id", body.agent_id)
-                    .eq("user_id", user["user_id"])
-                    .maybe_single()
-                    .execute()
-                )
-                if agent.data and agent.data.get("vapi_assistant_id"):
-                    vapi_payload["assistantId"] = agent.data["vapi_assistant_id"]
-
+            if assistant_id:
+                vapi_payload["assistantId"] = assistant_id
             vapi_result = await vapi_client.create_phone_number(vapi_payload)
             row["vapi_phone_id"] = vapi_result.get("id")
             row["number"] = vapi_result.get("number", body.number or "")
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+
+    elif provider == "twilio":
+        # 1) Auto-purchase an available US number on the platform Twilio account.
+        if not settings.twilio_account_sid or not settings.twilio_auth_token:
+            raise HTTPException(status_code=400, detail="Twilio account is not configured on the server.")
+        try:
+            purchased = await twilio_service.buy_us_number(sms=True, voice=True)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Twilio purchase failed: {str(e)}")
+        row["number"] = purchased["number"]
+
+        # 2) Import the purchased Twilio number into VAPI so an agent can use it.
+        if settings.vapi_api_key:
+            try:
+                vapi_payload = {
+                    "provider": "twilio",
+                    "number": purchased["number"],
+                    "twilioAccountSid": settings.twilio_account_sid,
+                    "twilioAuthToken": settings.twilio_auth_token,
+                }
+                if assistant_id:
+                    vapi_payload["assistantId"] = assistant_id
+                vapi_result = await vapi_client.create_phone_number(vapi_payload)
+                row["vapi_phone_id"] = vapi_result.get("id")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Purchased {purchased['number']} but VAPI import failed: {str(e)}")
 
     result = supabase.table("phone_numbers").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
