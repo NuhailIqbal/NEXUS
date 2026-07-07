@@ -10,6 +10,7 @@ python-multipart==0.0.9
 psycopg[binary]==3.3.4
 psycopg_pool==3.2.4
 # Password hashing for own auth (replaces Supabase Auth)
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
+bcrypt==4.0.1
 stripe==15.3.0
 email-validator==2.2.0

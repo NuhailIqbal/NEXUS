@@ -18,7 +18,7 @@ from database import supabase
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12, truncate_error=False)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24        # 1 day
 REFRESH_TOKEN_EXPIRE_DAYS = 30
