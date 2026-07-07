@@ -39,7 +39,7 @@ services:
     image: nginx:1.27-alpine
     container_name: edm-nexus-nginx
     ports:
-      - "80:80"
+      - "8080:80"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
