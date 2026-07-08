@@ -4,7 +4,6 @@ import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, Loader2, Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect } from "react";
@@ -16,7 +15,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, signIn } = useAuth();
 
   useEffect(() => {
     if (user) navigate("/dashboard");
@@ -25,28 +24,20 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await signIn(email, password);
     setLoading(false);
     if (error) {
-      toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
+      toast({ title: "Sign in failed", description: error, variant: "destructive" });
     } else {
       navigate("/dashboard");
     }
   };
 
   const handleForgotPassword = async () => {
-    if (!email) {
-      toast({ title: "Enter your email first", variant: "destructive" });
-      return;
-    }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
+    toast({
+      title: "Password reset",
+      description: "Please contact your administrator to reset your password.",
     });
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Check your email", description: "Password reset link sent." });
-    }
   };
 
   return (

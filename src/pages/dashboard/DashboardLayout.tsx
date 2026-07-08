@@ -3,11 +3,21 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Sparkles, Bell, Search, Menu, X, MessageSquare, CreditCard,
+  Sparkles, Search, Menu, X, MessageSquare, CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import ThemeToggle from "@/components/ThemeToggle";
+import NotificationBell from "@/components/NotificationBell";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type NavItem = {
   label: string;
@@ -130,19 +140,45 @@ const DashboardLayout = () => {
             />
           </div>
           <div className="flex flex-1 items-center justify-end gap-3">
-            <button className="relative rounded-md p-2 hover:bg-muted" aria-label="Notifications">
-              <Bell className="h-5 w-5" />
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-primary" />
-            </button>
-            <div className="hidden items-center gap-2 sm:flex">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
-                {profile.avatar}
-              </div>
-              <div className="text-sm leading-tight">
-                <div className="font-medium text-foreground">{profile.name}</div>
-                <div className="text-xs text-muted-foreground">{profile.role}</div>
-              </div>
-            </div>
+            <ThemeToggle />
+            <NotificationBell />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center gap-2 rounded-md p-1 pr-2 outline-none transition-colors hover:bg-muted">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+                    {profile.avatar}
+                  </div>
+                  <div className="hidden text-left text-sm leading-tight sm:block">
+                    <div className="font-medium text-foreground">{profile.name}</div>
+                    <div className="text-xs text-muted-foreground">{profile.role}</div>
+                  </div>
+                  <ChevronDown className="hidden h-4 w-4 text-muted-foreground sm:block" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <div className="text-sm font-medium text-foreground">{profile.name}</div>
+                  <div className="truncate text-xs font-normal text-muted-foreground">{profile.email}</div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/dashboard/profile")}>
+                  <Users className="mr-2 h-4 w-4" />
+                  Profile &amp; Teams
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/dashboard/billing")}>
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  Billing
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleSignOut}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Sign Out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 

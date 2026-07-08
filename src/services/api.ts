@@ -1,10 +1,17 @@
-import { supabase } from "@/integrations/supabase/client";
-
 const API_URL = "/api";
+const TOKEN_KEY = "nexus_token";
+
+export function getStoredToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setStoredToken(token: string | null): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
 
 async function getToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  return getStoredToken();
 }
 
 async function request<T = any>(
@@ -66,6 +73,11 @@ function adminPatch<T = any>(path: string, body: any) {
 }
 
 export const api = {
+  // Auth
+  register: (data: { email: string; password: string; full_name?: string }) => post("/auth/register", data),
+  login: (data: { email: string; password: string }) => post("/auth/login", data),
+  getMe: () => get("/auth/me"),
+
   // Agents
   getAgents: () => get("/agents"),
   createAgent: (data: any) => post("/agents", data),

@@ -4,8 +4,8 @@ import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Register = () => {
   const [fullName, setFullName] = useState("");
@@ -15,6 +15,7 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { signUp } = useAuth();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,17 +24,10 @@ const Register = () => {
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName, company_name: companyName },
-        emailRedirectTo: window.location.origin,
-      },
-    });
+    const { error } = await signUp(email, password, fullName);
     setLoading(false);
     if (error) {
-      toast({ title: "Registration failed", description: error.message, variant: "destructive" });
+      toast({ title: "Registration failed", description: error, variant: "destructive" });
     } else {
       toast({
         title: "Account created",
