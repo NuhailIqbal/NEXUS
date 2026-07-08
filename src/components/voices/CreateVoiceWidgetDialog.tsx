@@ -54,7 +54,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
   const [recordCalls, setRecordCalls] = useState(true);
   const [showTranscription, setShowTranscription] = useState(true);
   const [position, setPosition] = useState("Bottom Right");
-  const [primaryColor, setPrimaryColor] = useState("#10b981");
+  const [primaryColor, setPrimaryColor] = useState("#9BE3BF");
   const [autoOpen, setAutoOpen] = useState(false);
 
   useEffect(() => {

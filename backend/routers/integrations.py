@@ -132,5 +132,9 @@ async def test_integration(integration_id: str, user=Depends(get_current_user)):
                 "error": None,
             }
 
-    result = await run_test(row.data.get("name", ""), config)
+    result = await run_test(
+        row.data.get("name", ""),
+        config,
+        category=row.data.get("category", ""),
+    )
     return {"data": result, "error": None}

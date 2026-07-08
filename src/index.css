@@ -6,66 +6,132 @@
 
 @layer base {
   :root {
-    --background: 230 25% 3%;
-    --foreground: 210 40% 98%;
+    /* Brand palette — LIGHT mode (hex -> hsl):
+       #FFFFFF bg · near-black text · #22A655/#507F70 greens · #FF0C00 red */
+    --background: 0 0% 100%;
+    --foreground: 160 25% 8%;
 
-    --card: 230 22% 7%;
-    --card-foreground: 210 40% 98%;
+    --card: 0 0% 100%;
+    --card-foreground: 160 25% 8%;
 
-    --popover: 230 22% 7%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 160 25% 8%;
 
-    --primary: 250 90% 65%;
+    --primary: 152 55% 38%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 230 20% 12%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 150 30% 94%;
+    --secondary-foreground: 160 25% 15%;
 
-    --muted: 230 18% 10%;
-    --muted-foreground: 220 15% 50%;
+    --muted: 150 12% 95%;
+    --muted-foreground: 0 0% 40%;
 
-    --accent: 190 95% 50%;
-    --accent-foreground: 230 25% 3%;
+    --accent: 158 35% 42%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 3 85% 50%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 230 18% 14%;
-    --input: 230 18% 14%;
-    --ring: 250 90% 65%;
+    --border: 150 15% 88%;
+    --input: 150 15% 88%;
+    --ring: 152 55% 38%;
 
     --radius: 0.75rem;
 
-    --sidebar-background: 230 22% 5%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 250 90% 65%;
+    --sidebar-background: 150 25% 97%;
+    --sidebar-foreground: 160 25% 12%;
+    --sidebar-primary: 152 55% 38%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 230 18% 10%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 230 18% 14%;
-    --sidebar-ring: 250 90% 65%;
+    --sidebar-accent: 150 20% 92%;
+    --sidebar-accent-foreground: 160 25% 12%;
+    --sidebar-border: 150 15% 88%;
+    --sidebar-ring: 152 55% 38%;
 
-    --glow: 250 90% 65%;
-    --surface: 230 20% 8%;
-    --surface-hover: 230 20% 12%;
-    --text-secondary: 220 15% 65%;
-    --text-tertiary: 220 12% 42%;
-    --neon-cyan: 190 95% 50%;
-    --neon-purple: 270 90% 65%;
-    --neon-pink: 330 90% 65%;
+    --glow: 150 56% 55%;
+    --surface: 150 20% 98%;
+    --surface-hover: 150 20% 94%;
+    --text-secondary: 0 0% 35%;
+    --text-tertiary: 0 0% 50%;
+    --neon-cyan: 152 55% 40%;
+    --neon-purple: 161 30% 38%;
+    --neon-pink: 158 35% 45%;
 
     /* Status tokens used by the dashboard */
-    --success: 162 70% 45%;
-    --success-foreground: 230 25% 3%;
-    --warning: 40 95% 55%;
-    --warning-foreground: 230 25% 3%;
-    --info: 250 90% 65%;
+    --success: 143 60% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 40 90% 45%;
+    --warning-foreground: 0 0% 100%;
+    --info: 152 55% 38%;
     --info-foreground: 0 0% 100%;
 
     /* Sidebar muted tone for nav labels */
-    --sidebar-muted: 220 12% 50%;
-    --border-strong: 230 18% 22%;
-    --card-hover: 230 20% 12%;
+    --sidebar-muted: 0 0% 45%;
+    --border-strong: 150 15% 80%;
+    --card-hover: 150 20% 96%;
+  }
+
+  .dark {
+    /* Brand palette — DARK mode (hex -> hsl):
+       #000000 bg · #FFFFFF fg · #9BE3BF mint (primary) · #649684 accent
+       #507F70 deep green · #22A655 success · #ADADAD neutral · #FF0C00 red */
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 100%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 100%;
+
+    --primary: 150 56% 75%;
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 161 23% 16%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 68%;
+
+    --accent: 158 20% 49%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 3 100% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 161 15% 14%;
+    --input: 161 15% 14%;
+    --ring: 150 56% 75%;
+
+    --sidebar-background: 0 0% 3%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 150 56% 75%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 0 0% 10%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 161 15% 14%;
+    --sidebar-ring: 150 56% 75%;
+
+    --glow: 150 56% 75%;
+    --surface: 0 0% 5%;
+    --surface-hover: 0 0% 10%;
+    --text-secondary: 0 0% 68%;
+    --text-tertiary: 0 0% 45%;
+    --neon-cyan: 143 66% 39%;
+    --neon-purple: 161 23% 41%;
+    --neon-pink: 158 20% 49%;
+
+    /* Status tokens used by the dashboard */
+    --success: 143 66% 39%;
+    --success-foreground: 0 0% 100%;
+    --warning: 40 95% 55%;
+    --warning-foreground: 0 0% 0%;
+    --info: 150 56% 75%;
+    --info-foreground: 0 0% 0%;
+
+    /* Sidebar muted tone for nav labels */
+    --sidebar-muted: 0 0% 50%;
+    --border-strong: 0 0% 22%;
+    --card-hover: 0 0% 10%;
   }
 }
 

@@ -55,11 +55,11 @@ const PALETTES: Record<FlowNodeKind, Palette> = {
   split: { bg: "bg-amber-500/10", border: "border-amber-500", iconBg: "bg-amber-500/20", iconColor: "text-amber-400", group: "Operator", icon: Split },
   delay: { bg: "bg-amber-500/10", border: "border-amber-500", iconBg: "bg-amber-500/20", iconColor: "text-amber-400", group: "Operator", icon: Clock },
   condition: { bg: "bg-amber-500/10", border: "border-amber-500", iconBg: "bg-amber-500/20", iconColor: "text-amber-400", group: "Condition", icon: GitBranch },
-  webhook: { bg: "bg-blue-500/10", border: "border-blue-500", iconBg: "bg-blue-500/20", iconColor: "text-blue-400", group: "Action", icon: Webhook },
-  call: { bg: "bg-blue-500/10", border: "border-blue-500", iconBg: "bg-blue-500/20", iconColor: "text-blue-400", group: "Action", icon: Phone },
-  "connect-agent": { bg: "bg-blue-500/10", border: "border-blue-500", iconBg: "bg-blue-500/20", iconColor: "text-blue-400", group: "Action", icon: PhoneCall },
-  sms: { bg: "bg-violet-500/10", border: "border-violet-500", iconBg: "bg-violet-500/20", iconColor: "text-violet-400", group: "Action", icon: MessageSquare },
-  email: { bg: "bg-blue-500/10", border: "border-blue-500", iconBg: "bg-blue-500/20", iconColor: "text-blue-400", group: "Action", icon: Mail },
+  webhook: { bg: "bg-teal-500/10", border: "border-teal-500", iconBg: "bg-teal-500/20", iconColor: "text-teal-400", group: "Action", icon: Webhook },
+  call: { bg: "bg-teal-500/10", border: "border-teal-500", iconBg: "bg-teal-500/20", iconColor: "text-teal-400", group: "Action", icon: Phone },
+  "connect-agent": { bg: "bg-teal-500/10", border: "border-teal-500", iconBg: "bg-teal-500/20", iconColor: "text-teal-400", group: "Action", icon: PhoneCall },
+  sms: { bg: "bg-teal-500/10", border: "border-teal-500", iconBg: "bg-teal-500/20", iconColor: "text-teal-400", group: "Action", icon: MessageSquare },
+  email: { bg: "bg-teal-500/10", border: "border-teal-500", iconBg: "bg-teal-500/20", iconColor: "text-teal-400", group: "Action", icon: Mail },
   "update-contact": { bg: "bg-emerald-500/10", border: "border-emerald-500", iconBg: "bg-emerald-500/20", iconColor: "text-emerald-400", group: "Action", icon: UserCog },
 };
 

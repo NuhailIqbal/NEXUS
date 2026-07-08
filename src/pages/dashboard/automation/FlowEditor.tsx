@@ -178,8 +178,8 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             ...c,
             type: "smoothstep",
             animated: true,
-            style: { stroke: c.sourceHandle === "no" ? "#94a3b8" : "#10b981", strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: c.sourceHandle === "no" ? "#94a3b8" : "#10b981" },
+            style: { stroke: c.sourceHandle === "no" ? "#ADADAD" : "#22A655", strokeWidth: 2 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: c.sourceHandle === "no" ? "#ADADAD" : "#22A655" },
           },
           eds,
         ),
@@ -399,8 +399,8 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
               defaultEdgeOptions={{
                 type: "smoothstep",
                 animated: true,
-                style: { stroke: "#10b981", strokeWidth: 2 },
-                markerEnd: { type: MarkerType.ArrowClosed, color: "#10b981" },
+                style: { stroke: "#22A655", strokeWidth: 2 },
+                markerEnd: { type: MarkerType.ArrowClosed, color: "#22A655" },
               }}
               deleteKeyCode={["Backspace", "Delete"]}
             >

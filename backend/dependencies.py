@@ -29,7 +29,7 @@ def _decode_token(token: str) -> dict:
     if alg == "HS256":
         return jwt.decode(
             token,
-            settings.supabase_jwt_secret,
+            settings.active_jwt_secret,
             algorithms=["HS256"],
             options={"verify_aud": False},
         )

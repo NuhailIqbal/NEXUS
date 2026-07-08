@@ -26,6 +26,7 @@ from routers import (
     billing,
     stripe_webhook,
     admin,
+    auth,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -127,3 +128,4 @@ app.include_router(agent_tool_callbacks.router)
 app.include_router(billing.router)
 app.include_router(stripe_webhook.router)
 app.include_router(admin.router)
+app.include_router(auth.router)

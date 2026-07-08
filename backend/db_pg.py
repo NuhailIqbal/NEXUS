@@ -80,9 +80,17 @@ def _close_pool() -> None:
 
 
 def _adapt(value: Any) -> Any:
-    """Wrap dict/list so psycopg stores them as JSONB (mirrors supabase-py auto-JSON)."""
-    if isinstance(value, (dict, list)):
+    """Wrap dict/list so psycopg stores them as JSONB (mirrors supabase-py auto-JSON).
+
+    Plain lists of scalars (str, int, float) are left as-is so psycopg maps
+    them to native Postgres arrays (text[], int[], etc.) rather than jsonb.
+    """
+    if isinstance(value, dict):
         return Json(value)
+    if isinstance(value, list):
+        if value and isinstance(value[0], dict):
+            return Json(value)
+        return value
     return value
 
 

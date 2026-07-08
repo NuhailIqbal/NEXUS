@@ -3,6 +3,7 @@ import { Menu, X, Sparkles, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "react-router-dom";
 import Logo from "@/components/Logo";
+import ThemeToggle from "@/components/ThemeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 
 const navLinks = [
@@ -42,6 +43,7 @@ const Navbar = () => {
         </div>
 
         <div className="hidden lg:flex items-center gap-3">
+          <ThemeToggle />
           {user ? (
             <Link to="/dashboard">
               <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5">
