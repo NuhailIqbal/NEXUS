@@ -105,7 +105,6 @@ def _vapi_tool_payload(preset: dict) -> dict:
         },
         "server": {
             "url": f"{base}{preset['callback_path']}",
-            "method": "POST",
         },
     }
 

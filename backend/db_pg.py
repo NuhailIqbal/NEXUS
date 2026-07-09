@@ -80,8 +80,8 @@ def _close_pool() -> None:
 
 
 def _adapt(value: Any) -> Any:
-    """Wrap dict/list so psycopg stores them as JSONB (mirrors supabase-py auto-JSON)."""
-    if isinstance(value, (dict, list)):
+    """Wrap dicts as JSONB. Lists are passed as-is so psycopg sends them as PG arrays (text[], uuid[], etc.)."""
+    if isinstance(value, dict):
         return Json(value)
     return value
 
