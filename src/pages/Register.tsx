@@ -5,8 +5,7 @@ import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { storeAuthData } from "@/contexts/AuthContext";
-import { api } from "@/services/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Register = () => {
   const [fullName, setFullName] = useState("");
@@ -16,6 +15,7 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { signUp } = useAuth();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,15 +24,17 @@ const Register = () => {
       return;
     }
     setLoading(true);
-    const { data, error } = await api.register(email, password, fullName, companyName);
+    const { error } = await signUp(email, password, fullName);
     setLoading(false);
-    if (error || !data) {
-      toast({ title: "Registration failed", description: error ?? "Unknown error", variant: "destructive" });
-      return;
+    if (error) {
+      toast({ title: "Registration failed", description: error, variant: "destructive" });
+    } else {
+      toast({
+        title: "Account created",
+        description: "Welcome! Redirecting you to the dashboard...",
+      });
+      navigate("/dashboard");
     }
-    storeAuthData(data.access_token, data.refresh_token, data.user);
-    toast({ title: "Account created", description: "Welcome! Redirecting you to the dashboard..." });
-    navigate("/dashboard");
   };
 
   return (

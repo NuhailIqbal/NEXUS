@@ -83,6 +83,10 @@ def _adapt(value: Any) -> Any:
     """Wrap dicts as JSONB. Lists are passed as-is so psycopg sends them as PG arrays (text[], uuid[], etc.)."""
     if isinstance(value, dict):
         return Json(value)
+    if isinstance(value, list):
+        if value and isinstance(value[0], dict):
+            return Json(value)
+        return value
     return value
 
 

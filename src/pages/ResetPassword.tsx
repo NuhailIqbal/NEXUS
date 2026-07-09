@@ -22,16 +22,11 @@ const ResetPassword = () => {
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
-    setLoading(true);
-    const { error } = await api.resetPassword(token, password);
-    setLoading(false);
-    if (error) {
-      toast({ title: "Error", description: error, variant: "destructive" });
-    } else {
-      toast({ title: "Password updated", description: "You can now sign in with your new password." });
-      navigate("/login");
-    }
+    // Email-link password reset is not available yet; direct users to support.
+    toast({
+      title: "Password reset unavailable",
+      description: "Please contact your administrator to reset your password.",
+    });
   };
 
   if (!token) {

@@ -58,7 +58,10 @@ const QuickSetup = () => {
   const completedCount = Object.values(done).filter(Boolean).length;
   const percent = Math.round((completedCount / SETUP.length) * 100);
   const milestones = [0, 20, 40, 60, 80, 100];
-  const firstName = ((user?.user_metadata?.full_name as string) || user?.email || "there").split(" ")[0];
+  const fullName = (user?.user_metadata?.full_name as string | undefined)?.trim();
+  const firstName = fullName
+    ? fullName.split(" ")[0]
+    : user?.email?.split("@")[0] || "there";
 
   return (
     <div className="space-y-6">

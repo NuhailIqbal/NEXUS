@@ -12,12 +12,16 @@ bearer_scheme = HTTPBearer()
 
 
 def _decode_token(token: str) -> dict:
-    return jwt.decode(
-        token,
-        settings.active_jwt_secret,
-        algorithms=["HS256"],
-        options={"verify_aud": False},
-    )
+    header = jwt.get_unverified_header(token)
+    alg = header.get("alg", "HS256")
+
+    if alg == "HS256":
+        return jwt.decode(
+            token,
+            settings.active_jwt_secret,
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
 
 
 async def get_current_user(

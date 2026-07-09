@@ -20,7 +20,7 @@ export function AgentCreatedSuccessModal({
 
     const duration = 3000;
     const end = Date.now() + duration;
-    const colors = ["#3b82f6", "#60a5fa", "#93c5fd", "#2563eb", "#1d4ed8", "#ffffff"];
+    const colors = ["#9BE3BF", "#649684", "#507F70", "#22A655", "#ADADAD", "#ffffff"];
 
     confetti({
       particleCount: 120,

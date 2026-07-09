@@ -214,26 +214,30 @@ PROVIDERS = [
 ]
 
 
-def detect_provider(integration_name: str) -> tuple[str, callable] | None:
-    name = (integration_name or "").lower()
+def detect_provider(integration_name: str, category: str = "") -> tuple[str, callable] | None:
+    haystack = f"{integration_name} {category}".lower()
     for keyword, prober, label in PROVIDERS:
-        if keyword in name:
+        if keyword in haystack:
             return label, prober
     return None
 
 
-async def run_test(integration_name: str, config: dict) -> dict:
+SUPPORTED_LABELS = ", ".join(sorted({label for _, _, label in PROVIDERS}))
+
+
+async def run_test(integration_name: str, config: dict, category: str = "") -> dict:
     """
     Returns:
         { ok: bool, message: str, latency_ms: int | None, provider: str | None }
     """
-    match = detect_provider(integration_name)
+    match = detect_provider(integration_name, category)
     if not match:
         return {
             "ok": False,
             "message": (
-                "Test Connection is not yet supported for this provider. "
-                "Currently supported: Brevo, SendGrid, Mailgun, Twilio, Telnyx, Vonage."
+                f"Provider not recognised from the integration name or category. "
+                f"Include the provider name (e.g. 'Gemini', 'OpenAI', 'Twilio') in the integration name or category. "
+                f"Supported: {SUPPORTED_LABELS}."
             ),
             "latency_ms": None,
             "provider": None,

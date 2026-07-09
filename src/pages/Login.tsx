@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, Loader2, Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth, storeAuthData } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
@@ -15,7 +15,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, signIn } = useAuth();
 
   useEffect(() => {
     if (user) navigate("/dashboard");
@@ -24,27 +24,20 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { data, error } = await api.login(email, password);
+    const { error } = await signIn(email, password);
     setLoading(false);
-    if (error || !data) {
-      toast({ title: "Sign in failed", description: error ?? "Unknown error", variant: "destructive" });
-      return;
+    if (error) {
+      toast({ title: "Sign in failed", description: error, variant: "destructive" });
+    } else {
+      navigate("/dashboard");
     }
-    storeAuthData(data.access_token, data.refresh_token, data.user);
-    navigate("/dashboard");
   };
 
   const handleForgotPassword = async () => {
-    if (!email) {
-      toast({ title: "Enter your email first", variant: "destructive" });
-      return;
-    }
-    const { error } = await api.forgotPassword(email);
-    if (error) {
-      toast({ title: "Error", description: error, variant: "destructive" });
-    } else {
-      toast({ title: "Check your email", description: "If that email exists, a reset link has been sent." });
-    }
+    toast({
+      title: "Password reset",
+      description: "Please contact your administrator to reset your password.",
+    });
   };
 
   return (
