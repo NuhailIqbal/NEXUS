@@ -288,7 +288,7 @@ async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
 async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     campaign = (
         supabase.table("outbound_campaigns")
-        .select("*, ai_agents!outbound_campaigns_agent_id_fkey(vapi_assistant_id)")
+        .select("*")
         .eq("id", campaign_id)
         .eq("user_id", user["user_id"])
         .maybe_single()
@@ -299,8 +299,17 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
 
     camp = campaign.data
     vapi_assistant_id = None
-    if camp.get("ai_agents"):
-        vapi_assistant_id = camp["ai_agents"].get("vapi_assistant_id")
+    if camp.get("agent_id"):
+        agent_res = (
+            supabase.table("ai_agents")
+            .select("vapi_assistant_id")
+            .eq("id", camp["agent_id"])
+            .eq("user_id", user["user_id"])
+            .maybe_single()
+            .execute()
+        )
+        if agent_res.data:
+            vapi_assistant_id = agent_res.data.get("vapi_assistant_id")
 
     if not vapi_assistant_id:
         raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
