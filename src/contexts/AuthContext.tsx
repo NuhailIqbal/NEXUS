@@ -27,52 +27,14 @@ const AuthContext = createContext<AuthContextType>({
 
 export const useAuth = () => useContext(AuthContext);
 
-const TOKEN_KEY = "nexus_access_token";
-const REFRESH_KEY = "nexus_refresh_token";
-const USER_KEY = "nexus_user";
-
-export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function storeAuthData(accessToken: string, refreshToken: string, user: AuthUser) {
-  localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem(REFRESH_KEY, refreshToken);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+// Compatibility helpers used by a few pages. A single token system is used
+// (via api's getStoredToken/setStoredToken); these are thin wrappers over it.
+export function storeAuthData(accessToken: string, _refreshToken?: string, _user?: AuthUser) {
+  setStoredToken(accessToken);
 }
 
 export function clearAuthData() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
-  localStorage.removeItem(USER_KEY);
-}
-
-function isTokenExpired(token: string): boolean {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.exp * 1000 < Date.now() + 60_000; // 60s buffer
-  } catch {
-    return true;
-  }
-}
-
-async function tryRefresh(): Promise<{ user: AuthUser; access_token: string } | null> {
-  const refreshToken = localStorage.getItem(REFRESH_KEY);
-  if (!refreshToken) return null;
-  try {
-    const res = await fetch("/api/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!res.ok) return null;
-    const body = await res.json();
-    const { access_token, refresh_token, user } = body.data;
-    storeAuthData(access_token, refresh_token, user);
-    return { user, access_token };
-  } catch {
-    return null;
-  }
+  setStoredToken(null);
 }
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -103,12 +65,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     });
   }, []);
-
-  const applyToken = (accessToken: string, email: string, extra?: Record<string, unknown>) => {
-    setStoredToken(accessToken);
-    setSession({ access_token: accessToken });
-    setUser({ id: (extra?.id as string) ?? "", email, user_metadata: extra ?? {} });
-  };
 
   const signIn = async (email: string, password: string) => {
     const { data, error } = await api.login({ email, password });

@@ -73,7 +73,7 @@ function adminPatch<T = any>(path: string, body: any) {
 }
 
 export const api = {
-  // Auth
+  // Auth — each takes a single object payload (AuthContext calls api.login({ email, password }))
   register: (data: { email: string; password: string; full_name?: string }) => post("/auth/register", data),
   login: (data: { email: string; password: string }) => post("/auth/login", data),
   getMe: () => get("/auth/me"),
@@ -226,11 +226,8 @@ export const api = {
   // Health
   getHealth: () => get("/health"),
 
-  // Auth
-  login: (email: string, password: string) =>
-    post("/auth/login", { email, password }),
-  register: (email: string, password: string, full_name: string, company_name: string) =>
-    post("/auth/register", { email, password, full_name, company_name }),
+  // Auth — password flows (login/register/getMe are defined above; do not redefine
+  // them here or the duplicate keys override those with an incompatible signature)
   forgotPassword: (email: string) =>
     post("/auth/forgot-password", { email }),
   resetPassword: (token: string, new_password: string) =>
