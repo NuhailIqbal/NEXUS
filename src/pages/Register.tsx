@@ -31,9 +31,9 @@ const Register = () => {
     } else {
       toast({
         title: "Account created",
-        description: "Welcome! Redirecting you to the dashboard...",
+        description: "Please sign in to continue.",
       });
-      navigate("/dashboard");
+      navigate("/login");
     }
   };
 

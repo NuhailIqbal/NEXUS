@@ -133,7 +133,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signUp = async (email: string, password: string, fullName?: string) => {
     const { data, error } = await api.register({ email, password, full_name: fullName });
     if (error || !data?.access_token) return { error: error || "Registration failed" };
-    applyToken(data.access_token, data.user?.email ?? email, { id: data.user?.id, full_name: fullName });
+    // Account created but intentionally NOT signed in — the user must log in
+    // explicitly on the login page.
     return { error: null };
   };
 
