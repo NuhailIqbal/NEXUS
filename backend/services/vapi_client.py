@@ -176,6 +176,33 @@ def _resolve_language(language: str | None) -> str:
     return lookup.get(raw.lower(), raw if len(raw) <= 5 else "en")
 
 
+import re
+
+
+def _tool_name_slug(agent_name: str | None) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", (agent_name or "agent").strip()).strip("_")
+    return slug or "agent"
+
+
+def build_transfer_tool_payload(agent_name: str | None, number: str) -> dict:
+    """A standalone VAPI transferCall tool that forwards a qualified call to `number`.
+
+    Created via POST /tool and attached to the assistant by toolId — so it shows up
+    as its own entry in the VAPI Tools library (e.g. transfer_call_tool_<agent>).
+    """
+    return {
+        "type": "transferCall",
+        "function": {"name": f"transfer_call_tool_{_tool_name_slug(agent_name)}"},
+        "destinations": [{
+            "type": "number",
+            "number": number.strip(),
+            "callerId": "{{customer.number}}",
+            "message": "Please hold while I connect you.",
+            "description": "Transfer to this destination",
+        }],
+    }
+
+
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
                              system_prompt: str = None, first_message: str = None,
                              tool_ids: list[str] | None = None) -> dict:

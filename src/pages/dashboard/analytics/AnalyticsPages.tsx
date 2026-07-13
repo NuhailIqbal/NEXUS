@@ -6,6 +6,8 @@ import { Loader2 } from "lucide-react";
 type OverviewStats = {
   total_calls: number;
   completed_calls: number;
+  qualified_calls: number;
+  qualified_rate: number;
   active_agents: number;
   total_campaigns: number;
   total_contacts: number;
@@ -21,8 +23,8 @@ type SeriesPoint = {
   duration_min: number;
 };
 
-type AgentRow = { id: string; name: string; total_calls: number; completed: number; failed: number };
-type CampaignRow = { id: string; name: string; contacts_count: number; completed_count: number; status: string };
+type AgentRow = { id: string; name: string; total_calls: number; completed: number; failed: number; qualified: number };
+type CampaignRow = { id: string; name: string; contacts_count: number; completed_count: number; qualified_count: number; status: string };
 type ChannelMap = Record<string, { total: number; completed: number; failed: number }>;
 
 type Variant = "channel" | "campaign" | "scenario" | "flow";
@@ -71,12 +73,14 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
     ? [
         { label: "Total calls",     value: stats.total_calls.toLocaleString() },
         { label: "Completed calls", value: stats.completed_calls.toLocaleString() },
+        { label: "Qualified calls", value: `${stats.qualified_calls.toLocaleString()} (${stats.qualified_rate}%)` },
         { label: "Active agents",   value: stats.active_agents.toLocaleString() },
         { label: "Total campaigns", value: stats.total_campaigns.toLocaleString() },
       ]
     : [
         { label: "Total calls", value: "--" },
         { label: "Completed calls", value: "--" },
+        { label: "Qualified calls", value: "--" },
         { label: "Active agents", value: "--" },
         { label: "Total campaigns", value: "--" },
       ];
@@ -91,7 +95,7 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
         <p className="text-sm text-muted-foreground">{subtitle}</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {statCards.map((s) => (
           <div key={s.label} className="rounded-xl border border-border bg-card p-4">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">{s.label}</div>
@@ -181,7 +185,7 @@ function CampaignBreakdown({ campaigns }: { campaigns: CampaignRow[] }) {
       <h3 className="mb-4 font-semibold text-foreground">Campaigns</h3>
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr><th className="py-2">Name</th><th>Status</th><th>Contacts</th><th>Completed</th><th>Progress</th></tr>
+          <tr><th className="py-2">Name</th><th>Status</th><th>Contacts</th><th>Completed</th><th>Qualified</th><th>Progress</th></tr>
         </thead>
         <tbody>
           {campaigns.map((c) => {
@@ -192,6 +196,7 @@ function CampaignBreakdown({ campaigns }: { campaigns: CampaignRow[] }) {
                 <td>{c.status}</td>
                 <td>{c.contacts_count.toLocaleString()}</td>
                 <td>{c.completed_count.toLocaleString()}</td>
+                <td className="font-medium text-success">{(c.qualified_count ?? 0).toLocaleString()}</td>
                 <td>
                   <div className="flex items-center gap-2">
                     <div className="h-1.5 w-24 rounded-full bg-muted">
@@ -216,7 +221,7 @@ function AgentBreakdown({ agents }: { agents: AgentRow[] }) {
       <h3 className="mb-4 font-semibold text-foreground">By Agent</h3>
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr><th className="py-2">Agent</th><th>Total</th><th>Completed</th><th>Failed</th></tr>
+          <tr><th className="py-2">Agent</th><th>Total</th><th>Completed</th><th>Failed</th><th>Qualified</th></tr>
         </thead>
         <tbody>
           {agents.map((a) => (
@@ -225,6 +230,7 @@ function AgentBreakdown({ agents }: { agents: AgentRow[] }) {
               <td>{a.total_calls.toLocaleString()}</td>
               <td>{a.completed.toLocaleString()}</td>
               <td>{a.failed.toLocaleString()}</td>
+              <td className="font-medium text-success">{(a.qualified ?? 0).toLocaleString()}</td>
             </tr>
           ))}
         </tbody>

@@ -65,6 +65,32 @@ def _extract_phone_number(payload: dict) -> str | None:
     return customer.get("number")
 
 
+# A call counts as "qualified" when the AI handed it off to a human — VAPI
+# reports this via endedReason (e.g. "assistant-forwarded-call", "transfer").
+def _is_qualified(ended_reason: str) -> bool:
+    r = (ended_reason or "").lower()
+    return "transfer" in r or "forwarded" in r
+
+
+def _extract_transfer_destination(payload: dict) -> str | None:
+    """Best-effort: pull the number the call was transferred to, if VAPI reports it.
+
+    The transfer target is configured on the VAPI assistant, so it may or may not
+    appear in the webhook. We check the common shapes and return None otherwise.
+    """
+    msg = payload.get("message", {})
+    call_obj = msg.get("call", {})
+    for src in (msg, call_obj):
+        dest = src.get("destination") or src.get("transferDestination")
+        if isinstance(dest, dict):
+            num = dest.get("number") or dest.get("sipUri") or dest.get("extension")
+            if num:
+                return str(num)
+        elif isinstance(dest, str) and dest.strip():
+            return dest.strip()
+    return None
+
+
 async def _handle_call_started(payload: dict):
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
@@ -152,6 +178,15 @@ async def _handle_call_ended(payload: dict):
         "recording_url": recording_url,
         "duration": duration_str,
     }
+
+    # Qualified = call was transferred/forwarded to a human (mirrors the "pings"
+    # service, which marks IsQualified when endedReason is transfer/forwarded).
+    if _is_qualified(ended_reason):
+        updates["qualified"] = True
+        dest = _extract_transfer_destination(payload)
+        if dest:
+            updates["transferred_to"] = dest
+        logger.info(f"call-ended qualified (transferred): {vapi_call_id} -> {dest or 'unknown'}")
 
     existing = (
         supabase.table("conversations")

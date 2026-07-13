@@ -57,10 +57,23 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
         "main_goal": body.main_goal,
         "website": body.website,
         "selected_tool_keys": body.selected_tool_keys or [],
+        "transfer_number": body.transfer_number,
     }
 
     if settings.vapi_api_key:
         tool_ids = await provision_tools_for_agent(user["user_id"], body.selected_tool_keys or [])
+        # Standalone transferCall tool (shows up in VAPI's Tools library, attached by id)
+        if body.transfer_number and body.transfer_number.strip():
+            try:
+                t = await vapi_client.create_tool(
+                    vapi_client.build_transfer_tool_payload(body.name, body.transfer_number)
+                )
+                transfer_tool_id = t.get("id")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"VAPI transfer tool error: {str(e)}")
+            if transfer_tool_id:
+                tool_ids = (tool_ids or []) + [transfer_tool_id]
+                row["transfer_tool_id"] = transfer_tool_id
         try:
             payload = vapi_client.build_assistant_payload(
                 name=body.name,
@@ -113,6 +126,17 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
         return {"data": agent, "error": None}
 
     tool_ids = await provision_tools_for_agent(user["user_id"], agent.get("selected_tool_keys") or [])
+    transfer_tool_id = agent.get("transfer_tool_id")
+    if agent.get("transfer_number") and str(agent["transfer_number"]).strip() and not transfer_tool_id:
+        try:
+            t = await vapi_client.create_tool(
+                vapi_client.build_transfer_tool_payload(agent["name"], agent["transfer_number"])
+            )
+            transfer_tool_id = t.get("id")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"VAPI transfer tool error: {str(e)}")
+    if transfer_tool_id:
+        tool_ids = (tool_ids or []) + [transfer_tool_id]
     try:
         payload = vapi_client.build_assistant_payload(
             name=agent["name"],
@@ -129,7 +153,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
 
     result = (
         supabase.table("ai_agents")
-        .update({"vapi_assistant_id": vapi_assistant_id})
+        .update({"vapi_assistant_id": vapi_assistant_id, "transfer_tool_id": transfer_tool_id})
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
         .execute()
@@ -158,7 +182,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
 
     agent_res = (
         supabase.table("ai_agents")
-        .select("vapi_assistant_id")
+        .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, name, selected_tool_keys")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
         .maybe_single()
@@ -171,6 +195,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
     db_updates = {k: v for k, v in updates.items() if k in (
         "name", "voice", "language", "category", "status",
         "system_prompt", "first_message", "main_goal", "website", "selected_tool_keys",
+        "transfer_number",
     )}
 
     # If system_prompt is explicitly provided, use it as-is — the UI shows and edits
@@ -202,12 +227,48 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                 vapi_payload["name"] = updates["name"]
             if "first_message" in updates:
                 vapi_payload["firstMessage"] = updates["first_message"]
-            if "system_prompt" in updates:
-                vapi_payload["model"] = {
+            # Rebuild the model block when the prompt OR the transfer number changes.
+            # The transfer is a standalone VAPI transferCall tool attached by id, so we
+            # recompute the full toolIds (preset tools + transfer tool) to avoid dropping them.
+            if "system_prompt" in updates or "transfer_number" in updates:
+                preset_ids = await provision_tools_for_agent(
+                    user["user_id"],
+                    updates.get("selected_tool_keys") or agent.get("selected_tool_keys") or [],
+                )
+                transfer_tool_id = agent.get("transfer_tool_id")
+                if "transfer_number" in updates:
+                    new_num = (updates.get("transfer_number") or "").strip()
+                    agent_name = updates.get("name") or agent.get("name") or ""
+                    if new_num:
+                        t_payload = vapi_client.build_transfer_tool_payload(agent_name, new_num)
+                        if transfer_tool_id:
+                            await vapi_client.update_tool(transfer_tool_id, t_payload)
+                        else:
+                            created = await vapi_client.create_tool(t_payload)
+                            transfer_tool_id = created.get("id")
+                            db_updates["transfer_tool_id"] = transfer_tool_id
+                    else:
+                        if transfer_tool_id:
+                            try:
+                                await vapi_client.delete_tool(transfer_tool_id)
+                            except Exception:
+                                pass
+                        transfer_tool_id = None
+                        db_updates["transfer_tool_id"] = None
+
+                all_tool_ids = list(preset_ids or [])
+                if transfer_tool_id:
+                    all_tool_ids.append(transfer_tool_id)
+
+                effective_prompt = updates.get("system_prompt", agent.get("system_prompt")) or ""
+                model_block: dict = {
                     "provider": "openai",
                     "model": "gpt-4o-mini",
-                    "messages": [{"role": "system", "content": updates["system_prompt"]}],
+                    "messages": [{"role": "system", "content": effective_prompt}],
                 }
+                if all_tool_ids:
+                    model_block["toolIds"] = all_tool_ids
+                vapi_payload["model"] = model_block
             if "voice" in updates:
                 vapi_payload["voice"] = vapi_client._resolve_voice(updates["voice"])
             if "language" in updates:
@@ -234,7 +295,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
 async def delete_agent(agent_id: str, user=Depends(get_current_user)):
     agent_res = (
         supabase.table("ai_agents")
-        .select("vapi_assistant_id")
+        .select("vapi_assistant_id, transfer_tool_id")
         .eq("id", agent_id)
         .eq("user_id", user["user_id"])
         .maybe_single()
@@ -244,6 +305,12 @@ async def delete_agent(agent_id: str, user=Depends(get_current_user)):
     if agent and settings.vapi_api_key and agent.get("vapi_assistant_id"):
         try:
             await vapi_client.delete_assistant(agent["vapi_assistant_id"])
+        except Exception:
+            pass
+    # Clean up the standalone transferCall tool so it doesn't orphan in VAPI's Tools list.
+    if agent and settings.vapi_api_key and agent.get("transfer_tool_id"):
+        try:
+            await vapi_client.delete_tool(agent["transfer_tool_id"])
         except Exception:
             pass
 

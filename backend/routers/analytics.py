@@ -119,7 +119,24 @@ async def campaign_analytics(user=Depends(get_current_user)):
         .eq("user_id", user["user_id"])
         .execute()
     )
-    return {"data": campaigns.data or [], "error": None}
+    rows = campaigns.data or []
+
+    # Qualified (transferred) count per campaign, aggregated from conversations.
+    convos = (
+        supabase.table("conversations")
+        .select("campaign_id, qualified")
+        .eq("user_id", user["user_id"])
+        .execute()
+    )
+    qualified_by_campaign: dict[str, int] = {}
+    for c in convos.data or []:
+        if c.get("qualified") and c.get("campaign_id"):
+            qualified_by_campaign[c["campaign_id"]] = qualified_by_campaign.get(c["campaign_id"], 0) + 1
+
+    for r in rows:
+        r["qualified_count"] = qualified_by_campaign.get(r["id"], 0)
+
+    return {"data": rows, "error": None}
 
 
 @router.get("/agent")
@@ -136,7 +153,7 @@ async def agent_analytics(user=Depends(get_current_user)):
     for agent in agent_list:
         convos = (
             supabase.table("conversations")
-            .select("status")
+            .select("status, qualified")
             .eq("user_id", user["user_id"])
             .eq("agent_id", agent["id"])
             .execute()
@@ -149,6 +166,7 @@ async def agent_analytics(user=Depends(get_current_user)):
             "total_calls": len(calls),
             "completed": sum(1 for c in calls if c.get("status") == "Completed"),
             "failed": sum(1 for c in calls if c.get("status") == "Failed"),
+            "qualified": sum(1 for c in calls if c.get("qualified")),
         })
 
     return {"data": result, "error": None}
@@ -158,7 +176,7 @@ async def agent_analytics(user=Depends(get_current_user)):
 async def overview_analytics(user=Depends(get_current_user)):
     convos = (
         supabase.table("conversations")
-        .select("status, direction, duration, call_time")
+        .select("status, direction, duration, call_time, qualified")
         .eq("user_id", user["user_id"])
         .execute()
     )
@@ -168,10 +186,15 @@ async def overview_analytics(user=Depends(get_current_user)):
     campaigns = supabase.table("outbound_campaigns").select("id", count="exact").eq("user_id", user["user_id"]).execute()
     contacts = supabase.table("contacts").select("id", count="exact").eq("user_id", user["user_id"]).execute()
 
+    total = len(data)
+    qualified = sum(1 for c in data if c.get("qualified"))
+
     return {
         "data": {
-            "total_calls": len(data),
+            "total_calls": total,
             "completed_calls": sum(1 for c in data if c.get("status") == "Completed"),
+            "qualified_calls": qualified,
+            "qualified_rate": round(qualified / total * 100, 1) if total else 0,
             "active_agents": agents.count or 0,
             "total_campaigns": campaigns.count or 0,
             "total_contacts": contacts.count or 0,

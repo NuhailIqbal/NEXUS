@@ -38,6 +38,7 @@ type Agent = {
   vapi_assistant_id?: string | null;
   system_prompt?: string | null;
   first_message?: string | null;
+  transfer_number?: string | null;
   user_id?: string | null;
 };
 
@@ -134,6 +135,7 @@ const AIAgents = () => {
       category: a.category,
       system_prompt: a.system_prompt,
       first_message: a.first_message,
+      transfer_number: a.transfer_number,
     });
   };
 
@@ -147,6 +149,7 @@ const AIAgents = () => {
       category: editForm.category,
       system_prompt: editForm.system_prompt,
       first_message: editForm.first_message,
+      transfer_number: editForm.transfer_number,
     });
     if (error) return toast.error(error);
     toast.success("Settings saved");
@@ -356,6 +359,19 @@ const AIAgents = () => {
                 placeholder="Hi! How can I help you today?"
               />
               <p className="text-xs text-muted-foreground">What the agent says at the very start of a call.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="agent-transfer-number">Transfer number</Label>
+              <Input
+                id="agent-transfer-number"
+                value={editForm.transfer_number ?? ""}
+                onChange={(e) => setEditForm((f) => ({ ...f, transfer_number: e.target.value }))}
+                placeholder="+15551234567"
+              />
+              <p className="text-xs text-muted-foreground">
+                When a call is qualified, the agent transfers it to this number (E.164, e.g. +1…). Leave blank for no transfer.
+              </p>
             </div>
 
             <div className="space-y-2">

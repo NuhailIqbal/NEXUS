@@ -41,7 +41,7 @@ async def list_conversations(
 async def conversation_stats(user=Depends(get_current_user)):
     all_convos = (
         supabase.table("conversations")
-        .select("status, duration, direction")
+        .select("status, duration, direction, qualified")
         .eq("user_id", user["user_id"])
         .execute()
     )
@@ -52,6 +52,7 @@ async def conversation_stats(user=Depends(get_current_user)):
     in_progress = sum(1 for c in data if c.get("status") == "In Progress")
     inbound = sum(1 for c in data if c.get("direction") == "inbound")
     outbound = sum(1 for c in data if c.get("direction") == "outbound")
+    qualified = sum(1 for c in data if c.get("qualified"))
 
     return {
         "data": {
@@ -61,6 +62,7 @@ async def conversation_stats(user=Depends(get_current_user)):
             "in_progress": in_progress,
             "inbound": inbound,
             "outbound": outbound,
+            "qualified": qualified,
         },
         "error": None,
     }

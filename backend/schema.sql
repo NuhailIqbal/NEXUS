@@ -201,7 +201,9 @@ CREATE TABLE IF NOT EXISTS public.ai_agents (
     first_message text,
     main_goal text,
     website text,
-    selected_tool_keys text[] DEFAULT '{}'::text[] NOT NULL
+    selected_tool_keys text[] DEFAULT '{}'::text[] NOT NULL,
+    transfer_number text,
+    transfer_tool_id text
 );
 
 
@@ -322,6 +324,8 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     direction text DEFAULT 'outbound'::text,
     duration_seconds integer DEFAULT 0,
     call_cost numeric(8,4) DEFAULT 0.00,
+    qualified boolean DEFAULT false,
+    transferred_to text,
     CONSTRAINT conversations_direction_check CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))
 );
 

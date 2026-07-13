@@ -110,6 +110,7 @@ class AgentCreate(BaseModel):
     website: Optional[str] = None
     knowledge_text: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
+    transfer_number: Optional[str] = None
 
 
 class AgentUpdate(BaseModel):
@@ -123,6 +124,7 @@ class AgentUpdate(BaseModel):
     main_goal: Optional[str] = None
     website: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
+    transfer_number: Optional[str] = None
 
 
 # ── Tools ──

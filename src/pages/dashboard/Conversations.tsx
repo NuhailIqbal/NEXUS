@@ -27,6 +27,8 @@ type Conversation = {
   duration: string;
   status: string;
   conversion: string;
+  qualified: boolean;
+  transferred_to: string | null;
   call_time: string;
   transcript: string | null;
   recording_url: string | null;
@@ -59,6 +61,7 @@ const Conversations = () => {
           { label: "Completed", count: s.completed ?? 0 },
           { label: "Failed", count: s.failed ?? 0 },
           { label: "In Progress", count: s.in_progress ?? 0 },
+          { label: "Qualified", count: s.qualified ?? 0 },
           { label: "Inbound", count: s.inbound ?? 0 },
           { label: "Outbound", count: s.outbound ?? 0 },
         ]);
@@ -94,6 +97,7 @@ const Conversations = () => {
               <th className="px-4 py-3">Duration</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Conversion</th>
+              <th className="px-4 py-3">Qualified</th>
               <th className="px-4 py-3">Time</th>
               <th className="px-4 py-3 w-12"></th>
             </tr>
@@ -101,11 +105,11 @@ const Conversations = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
             ) : conversations.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No conversations found.</td>
+                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No conversations found.</td>
               </tr>
             ) : (
               conversations.map((c) => (
@@ -119,6 +123,13 @@ const Conversations = () => {
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={c.conversion === "Yes" ? "default" : "outline"}>{c.conversion}</Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.qualified ? (
+                      <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Qualified</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{c.call_time}</td>
                   <td className="px-4 py-3">
@@ -154,6 +165,14 @@ const Conversations = () => {
               <dd className="col-span-2">{viewing.status}</dd>
               <dt className="text-muted-foreground">Conversion</dt>
               <dd className="col-span-2">{viewing.conversion}</dd>
+              <dt className="text-muted-foreground">Qualified</dt>
+              <dd className="col-span-2">{viewing.qualified ? "Yes" : "No"}</dd>
+              {viewing.transferred_to && (
+                <>
+                  <dt className="text-muted-foreground">Transferred to</dt>
+                  <dd className="col-span-2 font-mono">{viewing.transferred_to}</dd>
+                </>
+              )}
               <dt className="text-muted-foreground">Direction</dt>
               <dd className="col-span-2">{viewing.direction}</dd>
               <dt className="text-muted-foreground">Recording</dt>

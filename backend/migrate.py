@@ -35,13 +35,31 @@ def bootstrap_schema() -> None:
             exists = conn.execute("SELECT to_regclass('public.users')").fetchone()[0]
             if exists:
                 logger.info("auto-migrate: schema already present — skipping bootstrap")
-                return
-            logger.info("auto-migrate: empty database detected — bootstrapping schema…")
-            conn.execute(_SCHEMA_FILE.read_text(encoding="utf-8"))
-            n = conn.execute(
-                "SELECT count(*) FROM information_schema.tables "
-                "WHERE table_schema='public' AND table_type='BASE TABLE'"
-            ).fetchone()[0]
-            logger.info("auto-migrate: schema bootstrapped — %s tables created", n)
+            else:
+                logger.info("auto-migrate: empty database detected — bootstrapping schema…")
+                conn.execute(_SCHEMA_FILE.read_text(encoding="utf-8"))
+                n = conn.execute(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema='public' AND table_type='BASE TABLE'"
+                ).fetchone()[0]
+                logger.info("auto-migrate: schema bootstrapped — %s tables created", n)
+            # Always apply incremental, idempotent column additions so existing
+            # (already-provisioned) databases pick up new fields on deploy.
+            _ensure_columns(conn)
     except Exception as e:  # noqa: BLE001 — never block startup on migration errors
         logger.error("auto-migrate: schema bootstrap failed: %s", e)
+
+
+def _ensure_columns(conn) -> None:
+    """Idempotent ALTERs for columns added after initial provisioning."""
+    statements = [
+        'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS qualified boolean DEFAULT false',
+        'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS transferred_to text',
+        'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_number text',
+        'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_tool_id text',
+    ]
+    for stmt in statements:
+        try:
+            conn.execute(stmt)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("auto-migrate: column ensure skipped (%s): %s", stmt.split("EXISTS", 1)[-1].strip(), e)

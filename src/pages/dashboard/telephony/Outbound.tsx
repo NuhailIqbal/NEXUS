@@ -64,6 +64,7 @@ const Outbound = () => {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [agentsById, setAgentsById] = useState<Map<string, string>>(new Map());
   const [phoneNumbersById, setPhoneNumbersById] = useState<Map<string, string>>(new Map());
+  const [qualified, setQualified] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const [settingsTarget, setSettingsTarget] = useState<Campaign | null>(null);
@@ -74,14 +75,15 @@ const Outbound = () => {
   const [launching, setLaunching] = useState(false);
 
   const fetchCampaigns = async () => {
-    const [campaignsRes, agentsRes, phonesRes] = await Promise.all([
-      api.getCampaigns(), api.getAgents(), api.getPhoneNumbers(),
+    const [campaignsRes, agentsRes, phonesRes, overviewRes] = await Promise.all([
+      api.getCampaigns(), api.getAgents(), api.getPhoneNumbers(), api.getAnalyticsOverview(),
     ]);
     if (Array.isArray(campaignsRes.data)) setCampaigns(campaignsRes.data);
     if (Array.isArray(agentsRes.data))
       setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
     if (Array.isArray(phonesRes.data))
       setPhoneNumbersById(new Map(phonesRes.data.map((p: any) => [p.id, p.number])));
+    if (overviewRes.data) setQualified((overviewRes.data as any).qualified_calls ?? 0);
     setLoading(false);
   };
 
@@ -197,11 +199,12 @@ const Outbound = () => {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatCard icon={Radio}        label="Total Campaigns"  value={campaigns.length}  color="bg-primary/10 text-primary" />
         <StatCard icon={TrendingUp}   label="Active Now"       value={activeCampaigns}   color="bg-green-500/10 text-green-600" />
         <StatCard icon={Users}        label="Total Contacts"   value={totalContacts.toLocaleString()} color="bg-blue-500/10 text-blue-600" />
         <StatCard icon={BarChart2}    label="Calls Dialed"     value={totalDialed.toLocaleString()}   color="bg-purple-500/10 text-purple-600" />
+        <StatCard icon={CheckCircle2} label="Qualified"        value={qualified.toLocaleString()}     color="bg-success/10 text-success" />
       </div>
 
       {/* Campaign Cards */}
