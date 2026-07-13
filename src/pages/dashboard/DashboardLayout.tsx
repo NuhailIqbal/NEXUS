@@ -3,13 +3,14 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Sparkles, Search, Menu, X, MessageSquare, CreditCard,
+  Search, Menu, X, MessageSquare, CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
+import Logo from "@/components/Logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -225,11 +226,8 @@ function Sidebar({
       )}
     >
       <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-5">
-        <Link to="/dashboard/quick-setup" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <span className="text-base font-bold tracking-wide text-foreground">EDM NEXUS</span>
+        <Link to="/dashboard/quick-setup" className="flex items-center">
+          <Logo linked={false} />
         </Link>
         <button
           onClick={onClose}

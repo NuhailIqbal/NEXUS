@@ -1,11 +1,12 @@
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import Logo from "@/components/Logo";
 
 const Register = () => {
   const [fullName, setFullName] = useState("");
@@ -46,8 +47,8 @@ const Register = () => {
 
         <div className="w-full max-w-md mx-auto px-4 relative z-10">
           <div className="text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
-              <Sparkles size={24} className="text-primary" />
+            <div className="flex justify-center mb-4">
+              <Logo linked={false} size="lg" />
             </div>
             <h1 className="text-3xl font-black text-foreground mb-2">Create Account</h1>
             <p className="text-muted-foreground text-sm">Join EDM Nexus and start growing</p>
