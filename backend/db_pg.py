@@ -115,6 +115,7 @@ class _Query:
         self._offset: int | None = None
         self._single = False
         self._maybe_single = False
+        self._negate_next = False
 
     # ---- operation selectors -------------------------------------------------
     def select(self, columns: str = "*", count: str | None = None) -> "_Query":
@@ -144,7 +145,19 @@ class _Query:
         return self
 
     # ---- filters -------------------------------------------------------------
+    @property
+    def not_(self) -> "_Query":
+        """PostgREST-style negation: the next filter is wrapped in NOT (...).
+
+        e.g. query.not_.is_("phone", "null") -> "phone" IS NOT NULL
+        """
+        self._negate_next = True
+        return self
+
     def _add(self, frag: str, val: Any = _NOPARAM) -> "_Query":
+        if self._negate_next:
+            frag = f"NOT ({frag})"
+            self._negate_next = False
         self._filters.append((frag, val))
         return self
 
