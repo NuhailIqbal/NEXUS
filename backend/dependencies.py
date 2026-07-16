@@ -1,4 +1,3 @@
-import base64
 import logging
 
 from fastapi import Depends, HTTPException, Request, status
@@ -39,22 +38,25 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
 
-ADMIN_USERNAME = "qarib"
-ADMIN_PASSWORD = "test123"
-
-
 async def get_admin_user(request: Request) -> dict:
-    auth_header = request.headers.get("X-Admin-Auth", "")
-    if not auth_header:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin credentials required")
+    """Authenticate an admin via a short-lived admin JWT (obtained from POST /admin/login).
+
+    The token is sent in the X-Admin-Auth header. The admin password is never shipped
+    to the browser — only this server-issued token is, so it cannot be read from the bundle.
+    """
+    token = request.headers.get("X-Admin-Auth", "").strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required")
+    # Tolerate a "Bearer " prefix if a client adds one.
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
     try:
-        decoded = base64.b64decode(auth_header).decode("utf-8")
-        uname, pwd = decoded.split(":", 1)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
-    if uname != ADMIN_USERNAME or pwd != ADMIN_PASSWORD:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin credentials")
-    return {"admin": True, "username": uname}
+        payload = _decode_token(token)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired admin session")
+    if not payload or payload.get("adm") is not True:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not an admin session")
+    return {"admin": True, "username": payload.get("sub", "admin")}
 
 
 def require_owner(user=Depends(get_current_user)) -> dict:

@@ -34,6 +34,21 @@ type Num = {
   created_at: string;
 };
 
+// A number's paid month runs from its purchase date to one calendar month later.
+function numberExpiry(createdAt?: string) {
+  if (!createdAt) return null;
+  const d = new Date(createdAt);
+  if (isNaN(d.getTime())) return null;
+  const day = d.getDate();
+  const exp = new Date(d);
+  exp.setDate(1);
+  exp.setMonth(exp.getMonth() + 1);
+  const lastDay = new Date(exp.getFullYear(), exp.getMonth() + 1, 0).getDate();
+  exp.setDate(Math.min(day, lastDay));
+  const daysLeft = Math.floor((exp.getTime() - Date.now()) / 86400000);
+  return { date: exp, daysLeft };
+}
+
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
   const [numbers, setNumbers] = useState<Num[]>([]);
@@ -51,6 +66,34 @@ const PhoneNumbers = () => {
   };
 
   useEffect(() => { fetchNumbers(); }, []);
+
+  // Handle the return from Stripe checkout (low-balance number purchase).
+  const confirming = useRef(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const purchase = params.get("purchase");
+    if (!purchase) return;
+    const cleanUrl = () => window.history.replaceState({}, "", window.location.pathname);
+
+    if (purchase === "canceled") {
+      toast.info("Purchase canceled — no number was created.");
+      cleanUrl();
+      return;
+    }
+    if (purchase === "success") {
+      const sessionId = params.get("session_id");
+      if (!sessionId || confirming.current) { cleanUrl(); return; }
+      confirming.current = true;
+      const t = toast.loading("Payment received — provisioning your number…");
+      api.confirmPhonePurchase(sessionId).then(({ data, error }) => {
+        toast.dismiss(t);
+        if (error || !data) toast.error(error || "Could not provision the number after payment.");
+        else toast.success(`Number ${data.number || ""} purchased and provisioned.`);
+        cleanUrl();
+        fetchNumbers();
+      });
+    }
+  }, []);
 
   const handleDelete = async (n: Num) => {
     const { error } = await api.deletePhoneNumber(n.id);
@@ -123,17 +166,19 @@ const PhoneNumbers = () => {
               <th className="px-4 py-3">Provider</th>
               <th className="px-4 py-3">Assigned Agent</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Purchased</th>
+              <th className="px-4 py-3">Expires</th>
               <th className="px-4 py-3 w-32"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
             ) : numbers.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No phone numbers found.</td>
+                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No phone numbers found.</td>
               </tr>
             ) : (
               numbers.map((n) => (
@@ -147,6 +192,25 @@ const PhoneNumbers = () => {
                   <td className="px-4 py-3 text-muted-foreground">{n.agent_id}</td>
                   <td className="px-4 py-3">
                     <NumberStatus num={n} />
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {n.created_at ? new Date(n.created_at).toLocaleDateString() : "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const e = numberExpiry(n.created_at);
+                      if (!e) return <span className="text-muted-foreground">—</span>;
+                      const expired = e.daysLeft < 0;
+                      const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
+                      return (
+                        <>
+                          <div className="text-foreground">{e.date.toLocaleDateString()}</div>
+                          <div className={`text-xs ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
+                            {expired ? "expired" : `${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"} left`}
+                          </div>
+                        </>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <RowActions
@@ -166,20 +230,21 @@ const PhoneNumbers = () => {
         open={open}
         onOpenChange={setOpen}
         onCreate={async (d) => {
-          const isVapi = d.serviceProvider.toLowerCase() === "vapi";
           const payload: Record<string, any> = {
             label: d.title,
             status: d.active ? "Active" : "Inactive",
             provider: d.serviceProvider,
           };
-          if (isVapi) {
-            if (d.areaCode) payload.area_code = d.areaCode;
-          }
-          // Twilio: no number/area code — the backend auto-purchases a US number
-          // on the platform Twilio account and imports it into VAPI.
+          if (d.serviceProvider.toLowerCase() === "vapi" && d.areaCode) payload.area_code = d.areaCode;
           if (d.agentId) payload.agent_id = d.agentId;
-          const { error } = await api.createPhoneNumber(payload);
+          // Twilio: if the wallet has ≥ $3 it's deducted from balance; otherwise the
+          // backend returns a Stripe checkout URL to pay for this number directly.
+          const { data, error } = await api.createPhoneNumber(payload);
           if (error) return toast.error(error);
+          if (data?.checkout_url) {
+            window.location.href = data.checkout_url;
+            return;
+          }
           toast.success(`Phone number "${d.title}" created`);
           fetchNumbers();
         }}

@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # Gemini
     gemini_api_key: str = ""
 
+    # OpenAI (used for the agent "Test" feature)
+    openai_api_key: str = ""
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
@@ -60,6 +63,10 @@ class Settings(BaseSettings):
 
     # Admin
     admin_emails: str = ""  # comma-separated admin emails
+    # Admin-portal login. Defaults keep local dev working; PRODUCTION MUST override
+    # ADMIN_PASSWORD (and ideally ADMIN_USERNAME) with a strong secret via env.
+    admin_username: str = "qarib"
+    admin_password: str = "test123"
 
     # Server
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
@@ -89,3 +96,5 @@ if settings.is_production:
         _log.warning("VAPI_WEBHOOK_SECRET not set — VAPI webhook signature verification is disabled")
     if not settings.cors_origins or "localhost" in settings.cors_origins:
         _log.warning("CORS_ORIGINS is not set to a production domain")
+    if settings.admin_password == "test123":
+        _log.warning("ADMIN_PASSWORD is still the default — set a strong ADMIN_PASSWORD in production")

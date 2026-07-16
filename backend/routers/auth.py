@@ -48,14 +48,18 @@ class LoginBody(BaseModel):
     password: str
 
 
-def _issue_token(user_id: str, email: str) -> str:
+def _issue_token(user_id: str, email: str, *, ttl_seconds: int | None = None,
+                 extra_claims: dict | None = None) -> str:
+    now = int(time.time())
     payload = {
         "sub": user_id,
         "email": email,
         "role": "authenticated",
-        "iat": int(time.time()),
-        "exp": int(time.time()) + TOKEN_TTL_SECONDS,
+        "iat": now,
+        "exp": now + (ttl_seconds or TOKEN_TTL_SECONDS),
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, settings.active_jwt_secret, algorithm="HS256")
 
 

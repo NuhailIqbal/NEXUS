@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { api, getStoredToken, setStoredToken } from "@/services/api";
+import { clearImpersonation } from "@/lib/impersonation";
 
 interface AuthUser {
   id: string;
@@ -35,6 +36,7 @@ export function storeAuthData(accessToken: string, _refreshToken?: string, _user
 
 export function clearAuthData() {
   setStoredToken(null);
+  clearImpersonation();
 }
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -58,9 +60,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           user_metadata: { full_name: data.profile?.full_name },
         });
       } else {
-        // Token invalid/expired — clear it.
+        // Token invalid/expired — clear it (and any impersonation bookkeeping,
+        // so a stale banner can't reappear over the next real session).
         setStoredToken(null);
         setSession(null);
+        clearImpersonation();
       }
       setLoading(false);
     });
@@ -69,6 +73,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signIn = async (email: string, password: string) => {
     const { data, error } = await api.login({ email, password });
     if (error || !data?.access_token) return { error: error || "Login failed" };
+    // A real login is never an impersonation — drop any leftover flag.
+    clearImpersonation();
     setStoredToken(data.access_token);
     setSession({ access_token: data.access_token });
     // Resolve the profile so the display name (full_name) is available
@@ -98,6 +104,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setStoredToken(null);
     setSession(null);
     setUser(null);
+    clearImpersonation();
   };
 
   return (

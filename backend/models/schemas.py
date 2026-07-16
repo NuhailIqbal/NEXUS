@@ -113,6 +113,12 @@ class AgentCreate(BaseModel):
     transfer_number: Optional[str] = None
 
 
+class AgentTest(BaseModel):
+    message: str
+    system_prompt: Optional[str] = None
+    first_message: Optional[str] = None
+
+
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
     voice: Optional[str] = None

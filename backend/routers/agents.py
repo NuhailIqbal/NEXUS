@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from dependencies import get_current_user
 from database import supabase
-from models.schemas import AgentCreate, AgentUpdate
+from models.schemas import AgentCreate, AgentUpdate, AgentTest
 from services import vapi_client
+from services.openai_client import chat_reply, OpenAIError
 from services.agent_tools import provision_tools_for_agent
 from config import settings
 from routers.billing import check_agent_quota, get_or_create_billing
@@ -103,6 +104,22 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
             pass
 
     return {"data": agent, "error": None}
+
+
+@router.post("/test")
+async def test_agent(body: AgentTest, user=Depends(get_current_user)):
+    """Run a quick text test of an agent's prompt (used by the Create-agent wizard)."""
+    if not body.message or not body.message.strip():
+        raise HTTPException(status_code=400, detail="Enter a test message.")
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="AI testing is not configured — add OPENAI_API_KEY on the server.")
+    try:
+        reply = await chat_reply(body.system_prompt, body.message, body.first_message)
+    except OpenAIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    if not reply:
+        raise HTTPException(status_code=502, detail="The AI returned an empty response — please try again.")
+    return {"data": {"reply": reply}, "error": None}
 
 
 @router.post("/{agent_id}/sync-vapi")

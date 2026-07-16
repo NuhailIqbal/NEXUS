@@ -16,15 +16,15 @@ PLANS = [
         "id": "payg",
         "name": "Pay As You Go",
         "price": 0,
-        "price_display": "$0.05/min",
+        "price_display": "$0.10/min",
         "description": "Only pay for what you use",
         "outbound_limit": 999999,
         "inbound_limit": 999999,
         "agents_limit": 10,
-        "rate_per_minute": 0.05,
+        "rate_per_minute": 0.10,
         "features": [
             "Unlimited calls",
-            "$0.05 per minute",
+            "$0.10 per minute",
             "Up to 10 AI Agents",
             "Pay only for usage",
             "No monthly commitment",
@@ -39,12 +39,12 @@ PLANS = [
         "outbound_limit": 100,
         "inbound_limit": 200,
         "agents_limit": 25,
-        "rate_per_minute": 0.03,
+        "rate_per_minute": 0.10,
         "features": [
             "100 outbound calls/mo",
             "200 inbound calls/mo",
             "Up to 25 AI Agents",
-            "Lower per-minute rate ($0.03)",
+            "$0.10 per minute",
             "Email support",
         ],
     },
@@ -57,12 +57,12 @@ PLANS = [
         "outbound_limit": 300,
         "inbound_limit": 500,
         "agents_limit": 50,
-        "rate_per_minute": 0.02,
+        "rate_per_minute": 0.10,
         "features": [
             "300 outbound calls/mo",
             "500 inbound calls/mo",
             "Up to 50 AI Agents",
-            "Lowest per-minute rate ($0.02)",
+            "$0.10 per minute",
             "Priority support",
         ],
         "popular": True,
@@ -76,18 +76,21 @@ PLANS = [
         "outbound_limit": 500,
         "inbound_limit": 700,
         "agents_limit": 100,
-        "rate_per_minute": 0.01,
+        "rate_per_minute": 0.10,
         "features": [
             "500 outbound calls/mo",
             "700 inbound calls/mo",
             "Up to 100 AI Agents",
-            "Best per-minute rate ($0.01)",
+            "$0.10 per minute",
             "Dedicated account manager",
         ],
     },
 ]
 
-DEFAULT_RATE_PER_MINUTE = 0.05
+DEFAULT_RATE_PER_MINUTE = 0.10
+
+# Monthly cost charged to the client for each Twilio phone number they provision.
+PHONE_NUMBER_MONTHLY_COST = 3.00
 
 FREE_TIER = {
     "agents_limit": 10,
@@ -115,15 +118,91 @@ def get_or_create_billing(user_id: str) -> dict:
         "outbound_used": 0,
         "inbound_used": 0,
         "credits": 0,
+        "rate_per_minute": DEFAULT_RATE_PER_MINUTE,
         "is_active": True,
     }
     insert = supabase.table("billing").insert(row).execute()
     return insert.data[0] if insert.data else row
 
 
+def add_charge(user_id: str, amount: float, note: str | None = None) -> float:
+    """Add a one-off charge (e.g. a phone-number monthly fee) to the user's running total."""
+    if not amount or amount <= 0:
+        return 0.0
+    billing = get_or_create_billing(user_id)
+    current_charges = float(billing.get("total_charges") or 0)
+    new_total = round(current_charges + float(amount), 2)
+    supabase.table("billing").update({"total_charges": new_total}).eq("user_id", user_id).execute()
+    return new_total
+
+
+# ── Wallet / prepaid balance ──
+
+def get_balance(user_id: str) -> float:
+    billing = get_or_create_billing(user_id)
+    return float(billing.get("balance") or 0)
+
+
+def has_balance(user_id: str, min_amount: float) -> bool:
+    return get_balance(user_id) >= float(min_amount)
+
+
+def _record_wallet_txn(user_id, kind, amount, balance_after, description,
+                       stripe_session_id=None, ref_id=None):
+    try:
+        supabase.table("wallet_transactions").insert({
+            "user_id": user_id,
+            "kind": kind,
+            "amount": round(float(amount), 2),
+            "balance_after": round(float(balance_after), 2),
+            "description": description,
+            "stripe_session_id": stripe_session_id,
+            "ref_id": ref_id,
+        }).execute()
+    except Exception:
+        pass
+
+
+def credit_balance(user_id, amount, kind, description,
+                   stripe_session_id=None, ref_id=None) -> float:
+    """Add funds to the wallet. Idempotent on stripe_session_id (no double-credit)."""
+    amount = float(amount or 0)
+    if amount <= 0:
+        return get_balance(user_id)
+    if stripe_session_id:
+        existing = (
+            supabase.table("wallet_transactions")
+            .select("id").eq("stripe_session_id", stripe_session_id).execute()
+        )
+        if existing.data:
+            return get_balance(user_id)
+    billing = get_or_create_billing(user_id)
+    new_balance = round(float(billing.get("balance") or 0) + amount, 2)
+    supabase.table("billing").update({"balance": new_balance}).eq("user_id", user_id).execute()
+    _record_wallet_txn(user_id, kind, amount, new_balance, description, stripe_session_id, ref_id)
+    return new_balance
+
+
+def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
+    """Deduct from the wallet (records a negative-amount ledger entry)."""
+    amount = float(amount or 0)
+    if amount <= 0:
+        return get_balance(user_id)
+    billing = get_or_create_billing(user_id)
+    new_balance = round(float(billing.get("balance") or 0) - amount, 2)
+    supabase.table("billing").update({"balance": new_balance}).eq("user_id", user_id).execute()
+    _record_wallet_txn(user_id, kind, -amount, new_balance, description, None, ref_id)
+    return new_balance
+
+
 def check_call_quota(user_id: str, direction: str) -> bool:
     billing = get_or_create_billing(user_id)
     if not billing.get("is_active", True):
+        return False
+
+    # Prepaid wallet: placing an outbound call requires a positive balance
+    # (the exact per-minute cost is metered and debited when the call ends).
+    if direction == "outbound" and float(billing.get("balance") or 0) <= 0:
         return False
 
     if direction == "outbound":
@@ -179,6 +258,9 @@ def record_call_cost(user_id: str, vapi_call_id: str, duration_seconds: int) -> 
         supabase.table("billing").update({
             "total_charges": round(current_charges + cost, 2),
         }).eq("user_id", user_id).execute()
+
+        # Deduct the metered cost from the prepaid wallet balance.
+        debit_balance(user_id, cost, "call", "Call charge", ref_id=vapi_call_id)
     return cost
 
 
@@ -370,6 +452,141 @@ async def create_portal_session(user=Depends(get_current_user)):
         return {"data": {"portal_url": session.url}, "error": None}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Stripe portal error: {str(e)}")
+
+
+class TopupRequest(BaseModel):
+    amount: float
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
+TOPUP_MIN = 5.0
+TOPUP_MAX = 1000.0
+_BILLING_BASE_URL = "http://localhost:8080/dashboard/billing"
+
+
+def _get_or_create_stripe_customer(user) -> str:
+    billing = get_or_create_billing(user["user_id"])
+    customer_id = billing.get("stripe_customer_id")
+    if customer_id:
+        return customer_id
+    customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": user["user_id"]})
+    supabase.table("billing").update({"stripe_customer_id": customer.id}).eq("user_id", user["user_id"]).execute()
+    return customer.id
+
+
+@router.post("/topup/checkout")
+async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
+    """Create a Stripe Checkout session to load funds into the wallet balance."""
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    amount = round(float(body.amount or 0), 2)
+    if amount < TOPUP_MIN or amount > TOPUP_MAX:
+        raise HTTPException(status_code=400, detail=f"Amount must be between ${TOPUP_MIN:.0f} and ${TOPUP_MAX:.0f}")
+
+    try:
+        customer_id = _get_or_create_stripe_customer(user)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+    base = body.success_url or _BILLING_BASE_URL
+    success_url = f"{base}?topup=success&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = (body.cancel_url or _BILLING_BASE_URL) + "?topup=canceled"
+    try:
+        session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=["card"],
+            mode="payment",
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": "EDM Nexus — Account Balance", "description": "Add funds to your wallet"},
+                    "unit_amount": int(round(amount * 100)),
+                },
+                "quantity": 1,
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"type": "wallet_topup", "user_id": user["user_id"], "amount": f"{amount:.2f}"},
+        )
+        return {"data": {"checkout_url": session.url, "session_id": session.id}, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe checkout error: {str(e)}")
+
+
+class TopupConfirm(BaseModel):
+    session_id: str
+
+
+@router.post("/topup/confirm")
+async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
+    """Called when the user returns from Stripe. Verify payment, then credit the wallet."""
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    try:
+        session = stripe.checkout.Session.retrieve(body.session_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+    meta = dict(session.get("metadata") or {})
+    if meta.get("user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
+    if session.get("payment_status") != "paid":
+        raise HTTPException(status_code=402, detail="Payment not completed")
+
+    amount = float(meta.get("amount") or 0)
+    new_balance = credit_balance(
+        user["user_id"], amount, "topup",
+        f"Added ${amount:.2f} to balance", stripe_session_id=body.session_id,
+    )
+    return {"data": {"balance": new_balance, "added": amount}, "error": None}
+
+
+@router.get("/transactions")
+async def list_transactions(user=Depends(get_current_user)):
+    result = (
+        supabase.table("wallet_transactions")
+        .select("id, kind, amount, balance_after, description, created_at")
+        .eq("user_id", user["user_id"])
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+    return {"data": result.data or [], "error": None}
+
+
+class SubscribeBalance(BaseModel):
+    plan_id: str
+
+
+@router.post("/subscribe-with-balance")
+async def subscribe_with_balance(body: SubscribeBalance, user=Depends(get_current_user)):
+    """Activate a plan by paying its monthly price from the wallet balance."""
+    plan = get_plan_by_id(body.plan_id)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    price = round(float(plan["price"]) / 100.0, 2)  # plan["price"] is in cents
+
+    # Paid plans are charged to the wallet; $0 plans (e.g. Pay As You Go) activate free.
+    if price > 0:
+        if not has_balance(user["user_id"], price):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Insufficient balance. This plan costs ${price:.2f}/mo — add funds first.",
+            )
+        debit_balance(user["user_id"], price, "plan", f"{plan['name']} plan (1 month)")
+    supabase.table("billing").update({
+        "plan": plan["id"],
+        "status": "active",
+        "outbound_limit": plan["outbound_limit"],
+        "inbound_limit": plan["inbound_limit"],
+        "agents_limit": plan["agents_limit"],
+        "rate_per_minute": plan.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
+        "outbound_used": 0,
+        "inbound_used": 0,
+    }).eq("user_id", user["user_id"]).execute()
+
+    return {"data": {"plan": plan["id"], "balance": get_balance(user["user_id"])}, "error": None}
 
 
 @router.get("/call-costs")

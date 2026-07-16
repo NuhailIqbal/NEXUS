@@ -2,12 +2,18 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   CreditCard, Check, Loader2, ExternalLink, Receipt,
-  Sparkles, Zap, Building2, PhoneOutgoing, PhoneIncoming, Bot, Clock, DollarSign, Timer,
+  Sparkles, Zap, Building2, PhoneOutgoing, PhoneIncoming, Bot, Clock, DollarSign, Timer, Wallet, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { api } from "@/services/api";
 import { toast } from "sonner";
+
+const TOPUP_PRESETS = [10, 25, 50, 100];
 
 type Plan = {
   id: string;
@@ -126,50 +132,73 @@ const Billing = () => {
   const [totalCost, setTotalCost] = useState(0);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [checkingOut, setCheckingOut] = useState<string | null>(null);
+  const [subscribing, setSubscribing] = useState<string | null>(null);
+  const [showTopup, setShowTopup] = useState(false);
+  const [topupAmount, setTopupAmount] = useState(25);
+  const [toppingUp, setToppingUp] = useState(false);
 
-  useEffect(() => {
-    if (searchParams.get("success") === "true") {
-      toast.success("Payment successful! Your plan is now active.");
+  const fetchAll = async () => {
+    const [plansRes, statusRes, invoicesRes, costsRes] = await Promise.all([
+      api.getBillingPlans(),
+      api.getBillingStatus(),
+      api.getBillingInvoices(),
+      api.getBillingCallCosts(),
+    ]);
+    if (Array.isArray(plansRes.data)) setPlans(plansRes.data);
+    if (statusRes.data) setBilling(statusRes.data);
+    if (Array.isArray(invoicesRes.data)) setInvoices(invoicesRes.data);
+    if (costsRes.data) {
+      setCallCosts(costsRes.data.calls || []);
+      setTotalCost(costsRes.data.total_cost || 0);
+      setTotalMinutes(costsRes.data.total_minutes || 0);
     }
-    if (searchParams.get("canceled") === "true") {
-      toast.info("Checkout was canceled.");
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchAll(); }, []);
+
+  // Handle the return from a Stripe wallet top-up.
+  useEffect(() => {
+    const topup = searchParams.get("topup");
+    if (!topup) return;
+    const clean = () => window.history.replaceState({}, "", window.location.pathname);
+    if (topup === "canceled") {
+      toast.info("Top-up canceled — no funds added.");
+      clean();
+      return;
+    }
+    if (topup === "success") {
+      const sessionId = searchParams.get("session_id");
+      if (!sessionId) { clean(); return; }
+      const t = toast.loading("Payment received — updating your balance…");
+      api.topupConfirm(sessionId).then(({ data, error }) => {
+        toast.dismiss(t);
+        if (error) toast.error(error);
+        else toast.success(`Added $${(data?.added ?? 0).toFixed(2)} to your balance.`);
+        clean();
+        fetchAll();
+      });
     }
   }, [searchParams]);
 
-  useEffect(() => {
-    const fetchAll = async () => {
-      const [plansRes, statusRes, invoicesRes, costsRes] = await Promise.all([
-        api.getBillingPlans(),
-        api.getBillingStatus(),
-        api.getBillingInvoices(),
-        api.getBillingCallCosts(),
-      ]);
-      if (Array.isArray(plansRes.data)) setPlans(plansRes.data);
-      if (statusRes.data) setBilling(statusRes.data);
-      if (Array.isArray(invoicesRes.data)) setInvoices(invoicesRes.data);
-      if (costsRes.data) {
-        setCallCosts(costsRes.data.calls || []);
-        setTotalCost(costsRes.data.total_cost || 0);
-        setTotalMinutes(costsRes.data.total_minutes || 0);
-      }
-      setLoading(false);
-    };
-    fetchAll();
-  }, []);
+  const handleAddFunds = async () => {
+    if (topupAmount < 5) return toast.error("Minimum top-up is $5");
+    setToppingUp(true);
+    const { data, error } = await api.topupCheckout(topupAmount);
+    setToppingUp(false);
+    if (error || !data?.checkout_url) return toast.error(error || "Could not start checkout");
+    window.location.href = data.checkout_url;
+  };
 
-  const handleCheckout = async (planId: string) => {
-    setCheckingOut(planId);
-    const { data, error } = await api.createCheckout({
-      plan_id: planId,
-      success_url: `${window.location.origin}/dashboard/billing?success=true`,
-      cancel_url: `${window.location.origin}/dashboard/billing?canceled=true`,
-    });
-    setCheckingOut(null);
+  const handleSubscribeBalance = async (plan: Plan) => {
+    const price = plan.price / 100;
+    if (price > 0 && !confirm(`Activate ${plan.name} for $${price.toFixed(2)} from your balance?`)) return;
+    setSubscribing(plan.id);
+    const { error } = await api.subscribeWithBalance(plan.id);
+    setSubscribing(null);
     if (error) return toast.error(error);
-    if (data?.checkout_url) {
-      window.location.href = data.checkout_url;
-    }
+    toast.success(`${plan.name} activated.`);
+    fetchAll();
   };
 
   const handlePortal = async () => {
@@ -226,7 +255,7 @@ const Billing = () => {
             </Badge>
             {billing?.rate_per_minute && (
               <div className="mt-1 text-xs text-primary font-medium">
-                ${billing.rate_per_minute}/min
+                ${billing.rate_per_minute.toFixed(2)}/min
               </div>
             )}
             {billing?.current_period_end && (
@@ -240,6 +269,27 @@ const Billing = () => {
               </div>
             ) : null}
           </div>
+        </div>
+      </div>
+
+      {/* Account Balance / Wallet */}
+      <div className="rounded-xl border border-primary/40 bg-primary/5 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <Wallet className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="text-sm text-muted-foreground">Account Balance</div>
+              <div className="text-3xl font-bold text-foreground">${(billing?.balance ?? 0).toFixed(2)}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                Used for calls, phone numbers and plans
+              </div>
+            </div>
+          </div>
+          <Button onClick={() => { setTopupAmount(25); setShowTopup(true); }}>
+            <Plus className="mr-2 h-4 w-4" /> Add Funds
+          </Button>
         </div>
       </div>
 
@@ -266,7 +316,7 @@ const Billing = () => {
             <Clock className="h-4 w-4 text-purple-500" />
             <span className="text-sm font-medium text-foreground">Rate Per Minute</span>
           </div>
-          <div className="text-2xl font-bold text-foreground">${billing?.rate_per_minute?.toFixed(2) || "0.05"}</div>
+          <div className="text-2xl font-bold text-foreground">${billing?.rate_per_minute?.toFixed(2) || "0.10"}</div>
           <div className="text-xs text-muted-foreground mt-1">Per minute of call time</div>
         </div>
       </div>
@@ -350,7 +400,7 @@ const Billing = () => {
                 </div>
                 {plan.rate_per_minute && plan.price > 0 && (
                   <div className="mt-1 text-xs text-primary font-medium">
-                    + ${plan.rate_per_minute}/min for calls
+                    + ${plan.rate_per_minute.toFixed(2)}/min for calls
                   </div>
                 )}
                 <ul className="mt-5 space-y-2.5">
@@ -366,24 +416,39 @@ const Billing = () => {
                     <Button variant="outline" className="w-full" disabled>
                       Current Plan
                     </Button>
-                  ) : (
-                    <Button
-                      className="w-full"
-                      variant={plan.popular ? "default" : plan.id === "payg" ? "default" : "outline"}
-                      onClick={() => handleCheckout(plan.id)}
-                      disabled={checkingOut === plan.id}
-                    >
-                      {checkingOut === plan.id ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Redirecting...
-                        </>
-                      ) : plan.id === "payg" ? (
-                        "Start Pay As You Go"
-                      ) : (
-                        `Subscribe to ${plan.name}`
-                      )}
-                    </Button>
-                  )}
+                  ) : (() => {
+                    const priceUsd = plan.price / 100;
+                    const canAfford = (billing?.balance ?? 0) >= priceUsd;
+                    if (priceUsd > 0 && !canAfford) {
+                      return (
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          onClick={() => { setTopupAmount(Math.max(25, Math.ceil(priceUsd))); setShowTopup(true); }}
+                        >
+                          <Wallet className="mr-2 h-4 w-4" /> Add funds to subscribe
+                        </Button>
+                      );
+                    }
+                    return (
+                      <Button
+                        className="w-full"
+                        variant={plan.popular ? "default" : plan.id === "payg" ? "default" : "outline"}
+                        onClick={() => handleSubscribeBalance(plan)}
+                        disabled={subscribing === plan.id}
+                      >
+                        {subscribing === plan.id ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Activating...
+                          </>
+                        ) : plan.id === "payg" ? (
+                          "Start Pay As You Go"
+                        ) : (
+                          `Subscribe — $${priceUsd.toFixed(0)}/mo from balance`
+                        )}
+                      </Button>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -523,6 +588,53 @@ const Billing = () => {
           </div>
         </div>
       )}
+
+      {/* Add Funds dialog */}
+      <Dialog open={showTopup} onOpenChange={setShowTopup}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Funds</DialogTitle>
+            <DialogDescription>
+              Load your account balance. It's used for calls, phone numbers and plans.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-4 gap-2">
+              {TOPUP_PRESETS.map((amt) => (
+                <Button
+                  key={amt}
+                  type="button"
+                  variant={topupAmount === amt ? "default" : "outline"}
+                  onClick={() => setTopupAmount(amt)}
+                >
+                  ${amt}
+                </Button>
+              ))}
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">Custom amount (USD)</label>
+              <Input
+                type="number"
+                min={5}
+                max={1000}
+                value={topupAmount}
+                onChange={(e) => setTopupAmount(parseFloat(e.target.value) || 0)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">Minimum $5. You'll pay securely via Stripe.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTopup(false)}>Cancel</Button>
+            <Button onClick={handleAddFunds} disabled={toppingUp || topupAmount < 5}>
+              {toppingUp ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Redirecting…</>
+              ) : (
+                <>Pay ${topupAmount.toFixed(2)}</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

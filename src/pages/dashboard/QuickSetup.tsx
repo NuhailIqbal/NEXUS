@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CheckCircle2, Circle, Bot, Phone, Rocket, Plug, Workflow, BarChart3, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Bot, Phone, Rocket, Users, PhoneIncoming, BarChart3, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
 
-type ChecklistKey = "agent" | "phone" | "campaign" | "integration" | "flow" | "analytics";
+type ChecklistKey = "agent" | "phone" | "contacts" | "campaign" | "inbound" | "analytics";
 
 type ChecklistItem = {
   key: ChecklistKey;
@@ -15,41 +15,41 @@ type ChecklistItem = {
   href: string;
 };
 
-const ICONS = { Bot, Phone, Rocket, Plug, Workflow, BarChart3 } as const;
+const ICONS = { Bot, Phone, Rocket, Users, PhoneIncoming, BarChart3 } as const;
 
 const SETUP: ChecklistItem[] = [
-  { key: "agent",       title: "Create your first AI Agent",       description: "Configure an agent for lead qualification", time: "5 min",  icon: "Bot",       href: "/dashboard/ai-agents/create" },
-  { key: "phone",       title: "Get a phone number",               description: "Provision a number for inbound or outbound calls", time: "2 min",  icon: "Phone",     href: "/dashboard/telephony/phone-numbers" },
-  { key: "campaign",    title: "Launch your first campaign",       description: "Start a dialer campaign with your agent", time: "10 min", icon: "Rocket",    href: "/dashboard/telephony/campaigns" },
-  { key: "integration", title: "Connect an integration",           description: "Add Brevo, Twilio, HubSpot, or another tool", time: "8 min",  icon: "Plug",      href: "/dashboard/integrations" },
-  { key: "flow",        title: "Build your first automation flow", description: "No-code automation triggered by call events", time: "12 min", icon: "Workflow",  href: "/dashboard/automation" },
-  { key: "analytics",   title: "Review your analytics",            description: "Track KPIs across channels and campaigns", time: "3 min",  icon: "BarChart3", href: "/dashboard/analytics/channel" },
+  { key: "agent",     title: "Create your first AI Agent",        description: "Configure an agent for lead qualification", time: "5 min",  icon: "Bot",           href: "/dashboard/ai-agents/create" },
+  { key: "phone",     title: "Get a phone number",                description: "Provision a number for inbound or outbound calls", time: "2 min",  icon: "Phone",         href: "/dashboard/telephony/phone-numbers" },
+  { key: "contacts",  title: "Add your contacts",                 description: "Import or add contacts to call", time: "3 min",  icon: "Users",         href: "/dashboard/database/contacts" },
+  { key: "campaign",  title: "Launch your first campaign",        description: "Start a dialer campaign with your agent", time: "10 min", icon: "Rocket",        href: "/dashboard/telephony/campaigns" },
+  { key: "inbound",   title: "Set up an inbound receptionist",    description: "Let an AI agent answer incoming calls", time: "5 min",  icon: "PhoneIncoming", href: "/dashboard/telephony/inbound" },
+  { key: "analytics", title: "Review your analytics",             description: "Track KPIs across channels and campaigns", time: "3 min",  icon: "BarChart3",     href: "/dashboard/analytics/channel" },
 ];
 
 const QuickSetup = () => {
   const { user } = useAuth();
   const [done, setDone] = useState<Record<ChecklistKey, boolean>>({
-    agent: false, phone: false, campaign: false, integration: false, flow: false, analytics: false,
+    agent: false, phone: false, contacts: false, campaign: false, inbound: false, analytics: false,
   });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const [agents, phones, camps, ints, flows, convos] = await Promise.all([
+      const [agents, phones, contacts, camps, inbound, convos] = await Promise.all([
         api.getAgents(),
         api.getPhoneNumbers(),
+        api.getContacts(),
         api.getCampaigns(),
-        api.getIntegrations(),
-        api.getFlows(),
+        api.getInboundQueues(),
         api.getConversations(),
       ]);
       setDone({
-        agent:       (agents.data?.length ?? 0) > 0,
-        phone:       (phones.data?.length ?? 0) > 0,
-        campaign:    (camps.data?.length ?? 0) > 0,
-        integration: (ints.data?.length ?? 0) > 0,
-        flow:        (flows.data?.length ?? 0) > 0,
-        analytics:   (convos.data?.length ?? 0) > 0,
+        agent:     (agents.data?.length ?? 0) > 0,
+        phone:     (phones.data?.length ?? 0) > 0,
+        contacts:  (contacts.data?.length ?? 0) > 0,
+        campaign:  (camps.data?.length ?? 0) > 0,
+        inbound:   (inbound.data?.length ?? 0) > 0,
+        analytics: (convos.data?.length ?? 0) > 0,
       });
       setLoading(false);
     })();
@@ -121,9 +121,10 @@ const QuickSetup = () => {
               const Icon = ICONS[item.icon];
               const isDone = done[item.key];
               return (
-                <div
+                <Link
                   key={item.key}
-                  className="group rounded-xl border border-border bg-card p-5 card-interactive"
+                  to={item.href}
+                  className="group block rounded-xl border border-border bg-card p-5 card-interactive"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -144,12 +145,12 @@ const QuickSetup = () => {
                         ✓ Done
                       </span>
                     ) : (
-                      <Link to={item.href} className="font-medium text-primary hover:underline">
+                      <span className="font-medium text-primary group-hover:underline">
                         Start →
-                      </Link>
+                      </span>
                     )}
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>

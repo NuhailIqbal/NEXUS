@@ -1,4 +1,6 @@
 import asyncio
+import stripe
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user
 from database import supabase
@@ -10,7 +12,14 @@ from models.schemas import (
 )
 from services import vapi_client, twilio_service
 from config import settings
-from routers.billing import check_call_quota, get_or_create_billing
+from routers.billing import (
+    check_call_quota,
+    get_or_create_billing,
+    has_balance,
+    debit_balance,
+    get_balance,
+    PHONE_NUMBER_MONTHLY_COST,
+)
 
 CAMPAIGN_BATCH_SIZE = 20
 
@@ -31,48 +40,56 @@ async def list_phone_numbers(user=Depends(get_current_user)):
     return {"data": result.data, "error": None}
 
 
-@router.post("/phone-numbers")
-async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
-    provider = (body.provider or "vapi").lower()
-    # Only include columns that exist in the phone_numbers table
+async def _resolve_assistant_id(user_id: str, agent_id: str | None) -> str | None:
+    if not agent_id:
+        return None
+    agent = (
+        supabase.table("ai_agents")
+        .select("vapi_assistant_id")
+        .eq("id", agent_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    return agent.data.get("vapi_assistant_id") if (agent and agent.data) else None
+
+
+async def _provision_phone_number(*, user_id: str, provider: str, number: str | None = None,
+                                  area_code: str | None = None, agent_id: str | None = None,
+                                  status: str = "Active", monthly_cost: float = 0.0,
+                                  stripe_session_id: str | None = None) -> dict:
+    """Provision a phone number (VAPI-native or Twilio→VAPI import) and store the row.
+
+    Shared by the direct create endpoint (VAPI) and the post-payment confirm endpoint (Twilio).
+    """
+    provider = (provider or "vapi").lower()
     row: dict = {
-        "user_id": user["user_id"],
-        "number": body.number or "",
-        "status": body.status or "Active",
+        "user_id": user_id,
+        "number": number or "",
+        "status": status or "Active",
         "provider": provider,
     }
-    if body.agent_id:
-        row["agent_id"] = body.agent_id
+    if agent_id:
+        row["agent_id"] = agent_id
+    if stripe_session_id:
+        row["stripe_session_id"] = stripe_session_id
 
-    # Resolve the assigned agent's VAPI assistant id (to attach the number to the agent).
-    assistant_id = None
-    if body.agent_id:
-        agent = (
-            supabase.table("ai_agents")
-            .select("vapi_assistant_id")
-            .eq("id", body.agent_id)
-            .eq("user_id", user["user_id"])
-            .maybe_single()
-            .execute()
-        )
-        if agent.data:
-            assistant_id = agent.data.get("vapi_assistant_id")
+    assistant_id = await _resolve_assistant_id(user_id, agent_id)
 
     if provider == "vapi" and settings.vapi_api_key:
         try:
             vapi_payload: dict = {"provider": "vapi"}
-            if body.area_code:
-                vapi_payload["numberDesiredAreaCode"] = body.area_code
+            if area_code:
+                vapi_payload["numberDesiredAreaCode"] = area_code
             if assistant_id:
                 vapi_payload["assistantId"] = assistant_id
             vapi_result = await vapi_client.create_phone_number(vapi_payload)
             row["vapi_phone_id"] = vapi_result.get("id")
-            row["number"] = vapi_result.get("number", body.number or "")
+            row["number"] = vapi_result.get("number", number or "")
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
 
     elif provider == "twilio":
-        # 1) Auto-purchase an available US number on the platform Twilio account.
         if not settings.twilio_account_sid or not settings.twilio_auth_token:
             raise HTTPException(status_code=400, detail="Twilio account is not configured on the server.")
         try:
@@ -81,7 +98,6 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
             raise HTTPException(status_code=502, detail=f"Twilio purchase failed: {str(e)}")
         row["number"] = purchased["number"]
 
-        # 2) Import the purchased Twilio number into VAPI so an agent can use it.
         if settings.vapi_api_key:
             try:
                 vapi_payload = {
@@ -97,8 +113,134 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Purchased {purchased['number']} but VAPI import failed: {str(e)}")
 
+        row["monthly_cost"] = monthly_cost or PHONE_NUMBER_MONTHLY_COST
+
     result = supabase.table("phone_numbers").insert(row).execute()
-    return {"data": result.data[0] if result.data else None, "error": None}
+    return result.data[0] if result.data else row
+
+
+def _phone_checkout_session(user, body) -> dict:
+    """Create a Stripe Checkout session to pay for a Twilio number (low-balance fallback)."""
+    stripe.api_key = settings.stripe_secret_key
+    billing = get_or_create_billing(user["user_id"])
+    customer_id = billing.get("stripe_customer_id")
+    if not customer_id:
+        customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": user["user_id"]})
+        customer_id = customer.id
+        supabase.table("billing").update({"stripe_customer_id": customer_id}).eq("user_id", user["user_id"]).execute()
+
+    base = "http://localhost:8080/dashboard/telephony/phone-numbers"
+    session = stripe.checkout.Session.create(
+        customer=customer_id,
+        payment_method_types=["card"],
+        mode="payment",
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {"name": "EDM Nexus — Phone Number", "description": "Twilio phone number"},
+                "unit_amount": int(round(PHONE_NUMBER_MONTHLY_COST * 100)),
+            },
+            "quantity": 1,
+        }],
+        success_url=f"{base}?purchase=success&session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{base}?purchase=canceled",
+        metadata={
+            "type": "phone_number",
+            "user_id": user["user_id"],
+            "provider": "twilio",
+            "area_code": body.area_code or "",
+            "agent_id": body.agent_id or "",
+            "status": body.status or "Active",
+        },
+    )
+    return {"checkout_url": session.url, "session_id": session.id}
+
+
+@router.post("/phone-numbers")
+async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
+    provider = (body.provider or "vapi").lower()
+
+    if provider == "twilio":
+        # Enough balance → pay from the wallet and provision immediately.
+        if has_balance(user["user_id"], PHONE_NUMBER_MONTHLY_COST):
+            row = await _provision_phone_number(
+                user_id=user["user_id"],
+                provider="twilio",
+                agent_id=body.agent_id,
+                status=body.status or "Active",
+                monthly_cost=PHONE_NUMBER_MONTHLY_COST,
+            )
+            debit_balance(
+                user["user_id"], PHONE_NUMBER_MONTHLY_COST, "phone",
+                f"Phone number {row.get('number')}", ref_id=row.get("id"),
+            )
+            return {"data": row, "error": None}
+
+        # Low balance → send the user to Stripe checkout to pay for this number.
+        # (The number is provisioned in /phone-numbers/confirm after payment.)
+        if not settings.stripe_secret_key:
+            raise HTTPException(status_code=402, detail="Insufficient balance and Stripe is not configured.")
+        checkout = _phone_checkout_session(user, body)
+        return {"data": {"needs_payment": True, **checkout}, "error": None}
+
+    # VAPI numbers are free to provision.
+    row = await _provision_phone_number(
+        user_id=user["user_id"],
+        provider=provider,
+        number=body.number,
+        area_code=body.area_code,
+        agent_id=body.agent_id,
+        status=body.status or "Active",
+    )
+    return {"data": row, "error": None}
+
+
+class PhoneConfirm(BaseModel):
+    session_id: str
+
+
+@router.post("/phone-numbers/confirm")
+async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_user)):
+    """After Stripe payment (low-balance path): verify payment, then provision the number.
+
+    No wallet debit here — the number was paid for directly via Stripe.
+    """
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    stripe.api_key = settings.stripe_secret_key
+
+    # Idempotency: a given Stripe session provisions exactly one number.
+    existing = (
+        supabase.table("phone_numbers")
+        .select("*")
+        .eq("stripe_session_id", body.session_id)
+        .eq("user_id", user["user_id"])
+        .execute()
+    )
+    if existing.data:
+        return {"data": existing.data[0], "error": None}
+
+    try:
+        session = stripe.checkout.Session.retrieve(body.session_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+    meta = dict(session.get("metadata") or {})
+    if meta.get("user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
+    if session.get("payment_status") != "paid":
+        raise HTTPException(status_code=402, detail="Payment not completed")
+
+    row = await _provision_phone_number(
+        user_id=user["user_id"],
+        provider="twilio",
+        area_code=meta.get("area_code") or None,
+        agent_id=meta.get("agent_id") or None,
+        status=meta.get("status") or "Active",
+        monthly_cost=PHONE_NUMBER_MONTHLY_COST,
+        stripe_session_id=body.session_id,
+    )
+    return {"data": row, "error": None}
 
 
 @router.patch("/phone-numbers/{number_id}")

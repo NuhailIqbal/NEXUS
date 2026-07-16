@@ -112,10 +112,7 @@ const CreateAIAgent = () => {
       if (!form.systemPrompt.trim()) { toast.error("System prompt is required"); return false; }
       if (!form.greeting.trim()) { toast.error("Greeting message is required"); return false; }
     }
-    if (currentStep.key === "testing" && !form.testMessage.trim()) {
-      toast.error("Send a test message to validate the agent");
-      return false;
-    }
+    // Testing step is optional — no validation; users can run a test or skip.
     return true;
   };
 
@@ -650,6 +647,29 @@ function StepPrompt({
 function StepTesting({
   form, update,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+  const [reply, setReply] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const runTest = async () => {
+    if (!form.testMessage.trim()) {
+      toast.error("Type a test message first");
+      return;
+    }
+    setLoading(true);
+    setReply(null);
+    const { data, error } = await api.testAgent({
+      message: form.testMessage,
+      system_prompt: form.systemPrompt || null,
+      first_message: form.greeting || null,
+    });
+    setLoading(false);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setReply(data?.reply ?? "");
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -658,10 +678,10 @@ function StepTesting({
         </div>
         <h3 className="mt-3 text-lg font-bold">Test Your Agent</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Send a sample message to verify everything works as expected
+          Send a sample message to preview how your agent replies (optional — you can skip this step).
         </p>
       </div>
-      <Field label="Test Message" required>
+      <Field label="Test Message">
         <textarea
           value={form.testMessage}
           onChange={(e) => update("testMessage", e.target.value)}
@@ -670,8 +690,21 @@ function StepTesting({
           className="w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
         />
       </Field>
-      <div className="rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-        Mock response will appear here once the agent goes live.
+      <Button type="button" onClick={runTest} disabled={loading || !form.testMessage.trim()}>
+        <PlayCircle className="mr-2 h-4 w-4" />
+        {loading ? "Testing…" : "Run test"}
+      </Button>
+      <div className="rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm">
+        {loading ? (
+          <span className="text-muted-foreground">Getting a response from your agent…</span>
+        ) : reply ? (
+          <div>
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent reply</div>
+            <p className="whitespace-pre-wrap text-foreground">{reply}</p>
+          </div>
+        ) : (
+          <span className="text-muted-foreground">The agent's response will appear here after you run a test.</span>
+        )}
       </div>
     </div>
   );

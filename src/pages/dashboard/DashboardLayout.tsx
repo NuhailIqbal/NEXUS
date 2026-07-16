@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
 import Logo from "@/components/Logo";
+import ImpersonationBanner from "@/components/ImpersonationBanner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,6 +111,7 @@ const DashboardLayout = () => {
 
   return (
     <div className="flex min-h-screen w-full bg-background">
+      <ImpersonationBanner />
       {mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"

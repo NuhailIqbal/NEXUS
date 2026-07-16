@@ -71,7 +71,8 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto p-0 gap-0">
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto p-0 gap-0 [&>button]:hidden">
+        {/* [&>button]:hidden removes shadcn's built-in close X — this dialog has its own in the header */}
         <VisuallyHidden>
           <DialogTitle>Create Phone Number</DialogTitle>
           <DialogDescription>Provision a new phone number</DialogDescription>
@@ -136,9 +137,9 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
               {data.serviceProvider.toLowerCase() === "twilio" && (
                 <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  A US phone number will be <span className="font-medium text-foreground">purchased automatically</span> on the
-                  platform Twilio account and imported into VAPI. You can then attach it to any campaign.
-                  <span className="mt-1 block text-[11px]">Note: purchasing a number incurs Twilio charges.</span>
+                  This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
+                  covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
+                  <span className="mt-1 block text-[11px]">The number is provisioned once payment is settled.</span>
                 </div>
               )}
 

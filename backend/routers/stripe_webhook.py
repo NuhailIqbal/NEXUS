@@ -69,7 +69,7 @@ def _handle_checkout_completed(session: dict):
         billing_data["outbound_limit"] = plan["outbound_limit"]
         billing_data["inbound_limit"] = plan["inbound_limit"]
         billing_data["agents_limit"] = plan["agents_limit"]
-        billing_data["rate_per_minute"] = plan.get("rate_per_minute", 0.05)
+        billing_data["rate_per_minute"] = plan.get("rate_per_minute", 0.10)
         billing_data["total_charges"] = 0
 
     existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()

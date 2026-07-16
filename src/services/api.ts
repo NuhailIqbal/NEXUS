@@ -56,8 +56,11 @@ function del<T = any>(path: string) {
   return request<T>(path, { method: "DELETE" });
 }
 
+export const ADMIN_TOKEN_KEY = "nexus_admin_token";
+
 function getAdminAuthHeader(): Record<string, string> {
-  return { "X-Admin-Auth": btoa("qarib:test123") };
+  const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+  return token ? { "X-Admin-Auth": token } : {};
 }
 
 function adminGet<T = any>(path: string) {
@@ -81,6 +84,7 @@ export const api = {
   // Agents
   getAgents: () => get("/agents"),
   createAgent: (data: any) => post("/agents", data),
+  testAgent: (data: { message: string; system_prompt?: string | null; first_message?: string | null }) => post("/agents/test", data),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
   deleteAgent: (id: string) => del(`/agents/${id}`),
   syncAgentVapi: (id: string) => post(`/agents/${id}/sync-vapi`),
@@ -140,6 +144,7 @@ export const api = {
   // Telephony - Phone Numbers
   getPhoneNumbers: () => get("/telephony/phone-numbers"),
   createPhoneNumber: (data: any) => post("/telephony/phone-numbers", data),
+  confirmPhonePurchase: (session_id: string) => post("/telephony/phone-numbers/confirm", { session_id }),
   updatePhoneNumber: (id: string, data: any) => patch(`/telephony/phone-numbers/${id}`, data),
   deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
 
@@ -213,12 +218,27 @@ export const api = {
   getBillingCallCosts: () => get("/billing/call-costs"),
   createCheckout: (data: any) => post("/billing/checkout", data),
   createPortalSession: () => post("/billing/portal"),
+  // Wallet / balance
+  topupCheckout: (amount: number) => post("/billing/topup/checkout", { amount }),
+  topupConfirm: (session_id: string) => post("/billing/topup/confirm", { session_id }),
+  subscribeWithBalance: (plan_id: string) => post("/billing/subscribe-with-balance", { plan_id }),
+  getWalletTransactions: () => get("/billing/transactions"),
 
   // Admin
+  adminLogin: (username: string, password: string) => post("/admin/login", { username, password }),
   getAdminStats: () => adminGet("/admin/stats"),
   getAdminUsers: () => adminGet("/admin/users"),
+  getAdminPlans: () => adminGet("/admin/plans"),
+  getAdminAgents: () => adminGet("/admin/agents"),
+  getAdminPhoneNumbers: () => adminGet("/admin/phone-numbers"),
+  getAdminPayments: () => adminGet("/admin/payments"),
+  getAdminRevenue: () => adminGet("/admin/revenue"),
+  getAdminAgentsReport: () => adminGet("/admin/agents-report"),
+  getAdminUsersReport: () => adminGet("/admin/users-report"),
   getAdminUser: (id: string) => adminGet(`/admin/users/${id}`),
   updateAdminUser: (id: string, data: any) => adminPatch(`/admin/users/${id}`, data),
+  deleteAdminUser: (id: string) => request(`/admin/users/${id}`, { method: "DELETE", headers: getAdminAuthHeader() }),
+  impersonateUser: (id: string) => adminPost(`/admin/users/${id}/impersonate`),
   adjustCredits: (id: string, data: any) => adminPost(`/admin/users/${id}/credits`, data),
   toggleAccess: (id: string) => adminPost(`/admin/users/${id}/toggle-access`),
   resetUsage: (id: string) => adminPost(`/admin/users/${id}/reset-usage`),

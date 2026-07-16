@@ -57,6 +57,28 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS transferred_to text',
         'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_number text',
         'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_tool_id text',
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS monthly_cost numeric DEFAULT 0',
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS stripe_session_id text',
+        # Wallet: dollar balance + transaction ledger.
+        'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS balance numeric(10,2) DEFAULT 0',
+        '''CREATE TABLE IF NOT EXISTS public.wallet_transactions (
+            id uuid DEFAULT gen_random_uuid() NOT NULL,
+            user_id uuid NOT NULL,
+            kind text NOT NULL,
+            amount numeric(10,2) NOT NULL,
+            balance_after numeric(10,2),
+            description text,
+            stripe_session_id text,
+            ref_id text,
+            created_at timestamp with time zone DEFAULT now() NOT NULL
+        )''',
+        '''CREATE UNIQUE INDEX IF NOT EXISTS wallet_transactions_stripe_session_id_key
+            ON public.wallet_transactions (stripe_session_id) WHERE stripe_session_id IS NOT NULL''',
+        '''CREATE INDEX IF NOT EXISTS wallet_transactions_user_id_idx
+            ON public.wallet_transactions (user_id, created_at DESC)''',
+        'ALTER TABLE public.billing ALTER COLUMN rate_per_minute SET DEFAULT 0.10',
+        # Flat pricing: bump any legacy sub-$0.10 client to the current $0.10/min rate.
+        'UPDATE public.billing SET rate_per_minute = 0.10 WHERE rate_per_minute IS NULL OR rate_per_minute < 0.10',
     ]
     for stmt in statements:
         try:

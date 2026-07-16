@@ -276,10 +276,36 @@ CREATE TABLE IF NOT EXISTS public.billing (
     agents_limit integer DEFAULT 10,
     credits integer DEFAULT 0,
     is_active boolean DEFAULT true,
-    rate_per_minute numeric(6,4) DEFAULT 0.05,
+    rate_per_minute numeric(6,4) DEFAULT 0.10,
     total_charges numeric(10,2) DEFAULT 0.00,
     balance numeric(10,2) DEFAULT 0.00
 );
+
+
+--
+-- Name: wallet_transactions; Type: TABLE; Schema: public; Owner: -
+-- Ledger of wallet credits (top-ups) and debits (calls/numbers/plans). Also
+-- provides idempotency for Stripe top-ups via a unique stripe_session_id.
+--
+
+CREATE TABLE IF NOT EXISTS public.wallet_transactions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    kind text NOT NULL,
+    amount numeric(10,2) NOT NULL,
+    balance_after numeric(10,2),
+    description text,
+    stripe_session_id text,
+    ref_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS wallet_transactions_stripe_session_id_key
+    ON public.wallet_transactions (stripe_session_id)
+    WHERE stripe_session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS wallet_transactions_user_id_idx
+    ON public.wallet_transactions (user_id, created_at DESC);
 
 
 --
@@ -495,7 +521,8 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     twilio_sid text,
     monthly_cost numeric(6,2) DEFAULT 1.15,
-    label text
+    label text,
+    stripe_session_id text
 );
 
 

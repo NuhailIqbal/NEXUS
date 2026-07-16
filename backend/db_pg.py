@@ -337,6 +337,12 @@ class _AuthAdmin:
                 for r in cur.fetchall()
             ]
 
+    def delete_user(self, user_id: str) -> None:
+        """Delete an auth user. All user-owned tables cascade via ON DELETE CASCADE."""
+        with _get_pool().connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE id = %s", [user_id])
+            conn.commit()
+
     def get_user_by_id(self, user_id: str) -> SimpleNamespace:
         with _get_pool().connection() as conn, conn.cursor() as cur:
             cur.execute(
