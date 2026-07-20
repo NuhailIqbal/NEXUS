@@ -17,7 +17,8 @@ import { api, ADMIN_TOKEN_KEY } from "@/services/api";
 import { toast } from "sonner";
 import Logo from "@/components/Logo";
 import { cn } from "@/lib/utils";
-import { startImpersonation } from "@/lib/impersonation";
+import { startImpersonation, prepImpersonation } from "@/lib/impersonation";
+import ThemeToggle from "@/components/ThemeToggle";
 
 type AdminUser = {
   id: string;
@@ -37,6 +38,7 @@ type AdminUser = {
   credits: number;
   rate_per_minute?: number;
   total_charges?: number;
+  balance?: number;
   total_conversations: number;
   phone_numbers?: number;
   stripe_customer_id: string | null;
@@ -169,6 +171,7 @@ const Admin = () => {
   const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [creditAmount, setCreditAmount] = useState(10);
+  const [balanceAmount, setBalanceAmount] = useState(10);
   const [editingLimits, setEditingLimits] = useState<string | null>(null);
   const [limitForm, setLimitForm] = useState({ outbound_limit: 0, inbound_limit: 0, agents_limit: 0, rate_per_minute: 0.1, total_charges: 0 });
 
@@ -209,12 +212,25 @@ const Admin = () => {
     setAuthenticated(false);
   };
 
+  // The admin session token (from /admin/login) is short-lived. If it has expired,
+  // force a re-login instead of showing an empty dashboard.
+  const isAuthError = (err: string | null | undefined) =>
+    !!err && /admin (login|session)|expired|not an admin|401|unauthor/i.test(err);
+
+  const forceReLogin = () => {
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    setAuthenticated(false);
+    setLoading(false);
+    toast.error("Admin session expired — please log in again.");
+  };
+
   const fetchData = async () => {
     const [statsRes, usersRes, plansRes] = await Promise.all([
       api.getAdminStats(),
       api.getAdminUsers(),
       api.getAdminPlans(),
     ]);
+    if (isAuthError(statsRes.error)) return forceReLogin();
     if (statsRes.data) setStats(statsRes.data);
     if (Array.isArray(usersRes.data)) setUsers(usersRes.data);
     if (Array.isArray(plansRes.data)) { setPlans(plansRes.data); setPlansLoaded(true); }
@@ -227,6 +243,11 @@ const Admin = () => {
 
   // Lazily load data the first time each section is opened.
   useEffect(() => {
+    if (!authenticated) return; // don't fire admin calls until logged in (avoids 401 + stuck "loaded" flags)
+    if (section === "overview") {
+      if (!revenueLoaded) api.getAdminRevenue().then((res) => { if (res.data) setRevenue(res.data); setRevenueLoaded(true); });
+      if (!userReportLoaded) api.getAdminUsersReport().then((res) => { if (res.data) setUserReport(res.data); setUserReportLoaded(true); });
+    }
     if (section === "agents" && !agentsLoaded) {
       api.getAdminAgents().then((res) => {
         if (Array.isArray(res.data)) setAgents(res.data);
@@ -254,7 +275,7 @@ const Admin = () => {
     if (section === "user-report" && !userReportLoaded) {
       api.getAdminUsersReport().then((res) => { if (res.data) setUserReport(res.data); setUserReportLoaded(true); });
     }
-  }, [section, agentsLoaded, phoneNumbersLoaded, plansLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded]);
+  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, plansLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -280,6 +301,14 @@ const Admin = () => {
     const { error } = await api.adjustCredits(userId, { amount: -creditAmount, reason: "Admin adjustment" });
     if (error) return toast.error(error);
     toast.success(`Removed ${creditAmount} credits`);
+    fetchData();
+  };
+
+  const handleAddBalance = async (userId: string) => {
+    if (!balanceAmount) return toast.error("Enter an amount");
+    const { data, error } = await api.adjustUserBalance(userId, balanceAmount, "Admin credit");
+    if (error) return toast.error(error);
+    toast.success(`Added $${balanceAmount.toFixed(2)} — new balance $${(data?.balance ?? 0).toFixed(2)}`);
     fetchData();
   };
 
@@ -325,9 +354,23 @@ const Admin = () => {
   };
 
   const handleImpersonate = async (userId: string, email: string) => {
+    // Open the blank tab synchronously (inside the click) so the popup blocker
+    // doesn't kill it after the await. We point it to the dashboard once the
+    // impersonation token is installed in shared localStorage.
+    const w = window.open("about:blank", "_blank");
     const { data, error } = await api.impersonateUser(userId);
-    if (error || !data?.access_token) return toast.error(error || "Could not start impersonation");
-    startImpersonation(data.access_token, email);
+    if (error || !data?.access_token) {
+      if (w) w.close();
+      return toast.error(error || "Could not start impersonation");
+    }
+    prepImpersonation(data.access_token, email);
+    if (w) {
+      w.location.href = "/dashboard/quick-setup";
+      toast.success(`Opened ${email}'s dashboard in a new tab`);
+    } else {
+      // Popup blocked → fall back to same-tab impersonation.
+      startImpersonation(data.access_token, email);
+    }
   };
 
   const handleDeleteUser = async (userId: string, label: string) => {
@@ -443,21 +486,29 @@ const Admin = () => {
             <Logo linked={false} />
             <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">Admin</span>
           </div>
-          <select
-            value={section}
-            onChange={(e) => setSection(e.target.value as SectionKey)}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            {NAV.map((n) =>
-              isNavGroup(n) ? (
-                <optgroup key={n.group} label={n.group}>
-                  {n.children.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                </optgroup>
-              ) : (
-                <option key={n.key} value={n.key}>{n.label}</option>
-              )
-            )}
-          </select>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <select
+              value={section}
+              onChange={(e) => setSection(e.target.value as SectionKey)}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {NAV.map((n) =>
+                isNavGroup(n) ? (
+                  <optgroup key={n.group} label={n.group}>
+                    {n.children.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </optgroup>
+                ) : (
+                  <option key={n.key} value={n.key}>{n.label}</option>
+                )
+              )}
+            </select>
+          </div>
+        </header>
+
+        {/* Desktop top bar — theme toggle at the top right */}
+        <header className="sticky top-0 z-30 hidden h-14 items-center justify-end border-b border-border bg-background/95 px-6 backdrop-blur lg:flex">
+          <ThemeToggle />
         </header>
 
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
@@ -700,6 +751,10 @@ const Admin = () => {
   }
 
   function renderOverview() {
+    const paidSubs = users.filter((u) => (u.plan || "free") !== "free").length;
+    const totalNumbers = users.reduce((s, u) => s + (u.phone_numbers || 0), 0);
+    const totalCharges = users.reduce((s, u) => s + (u.total_charges || 0), 0);
+    const maxPlan = Math.max(1, ...plans.map((p) => p.user_count || 0));
     return (
       <div>
         <SectionHeader title="Overview" subtitle="Platform snapshot across all users." />
@@ -711,6 +766,71 @@ const Admin = () => {
             <StatCard label="Active Subscriptions" value={stats.active_subscriptions} icon={TrendingUp} />
           </div>
         )}
+
+        {/* Second row — derived from live user/plan/revenue data */}
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Paid Subscribers" value={paidSubs} icon={UserCheck} />
+          <StatCard label="Phone Numbers" value={totalNumbers} icon={Phone} />
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><DollarSign className="h-5 w-5" /></div>
+              <div>
+                <div className="text-2xl font-bold text-foreground">{money(totalCharges)}</div>
+                <div className="text-xs text-muted-foreground">Lifetime Charges</div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><CreditCard className="h-5 w-5" /></div>
+              <div>
+                <div className="text-2xl font-bold text-foreground">{revenue ? money(revenue.totals.mrr) : "—"}</div>
+                <div className="text-xs text-muted-foreground">MRR</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+          {/* Users by plan */}
+          <div className="rounded-xl border border-border bg-card p-5">
+            <h3 className="mb-4 font-semibold text-foreground">Users by plan</h3>
+            <div className="space-y-3">
+              {plans.map((p) => (
+                <div key={p.id}>
+                  <div className="mb-1 flex items-center justify-between text-sm">
+                    <span className="text-foreground">{p.name}</span>
+                    <span className="text-muted-foreground">{p.user_count}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${((p.user_count || 0) / maxPlan) * 100}%` }} />
+                  </div>
+                </div>
+              ))}
+              {plans.length === 0 && <div className="text-sm text-muted-foreground">No plan data.</div>}
+            </div>
+          </div>
+
+          {/* Sign-ups chart */}
+          <div className="rounded-xl border border-border bg-card p-5">
+            <h3 className="mb-4 font-semibold text-foreground">Sign-ups (last 30 days)</h3>
+            {userReport ? (
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={userReport.signups}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
+                    <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
+                    <Line type="monotone" dataKey="signups" name="Sign-ups" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <ReportLoading />
+            )}
+          </div>
+        </div>
       </div>
     );
   }
@@ -1080,6 +1200,28 @@ const Admin = () => {
                               </Button>
                               <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleRemoveCredits(u.id); }}>
                                 <Minus className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Wallet Balance (real, spendable — numbers/calls/plans) */}
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold text-muted-foreground uppercase">
+                              Balance (${(u.balance ?? 0).toFixed(2)})
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-sm text-muted-foreground">$</span>
+                              <input
+                                type="number"
+                                min={1}
+                                step="0.01"
+                                value={balanceAmount}
+                                onChange={e => setBalanceAmount(parseFloat(e.target.value) || 0)}
+                                onClick={e => e.stopPropagation()}
+                                className="h-8 w-20 rounded border border-input bg-background px-2 text-sm"
+                              />
+                              <Button size="sm" onClick={(e) => { e.stopPropagation(); handleAddBalance(u.id); }}>
+                                <Plus className="mr-1 h-3 w-3" /> Add
                               </Button>
                             </div>
                           </div>

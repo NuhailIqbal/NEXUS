@@ -5,7 +5,10 @@ from dependencies import get_admin_user
 from database import supabase
 from pydantic import BaseModel
 from typing import Optional
-from routers.billing import PLANS as BILLING_PLANS, FREE_TIER, DEFAULT_RATE_PER_MINUTE, PHONE_NUMBER_MONTHLY_COST
+from routers.billing import (
+    PLANS as BILLING_PLANS, FREE_TIER, DEFAULT_RATE_PER_MINUTE, PHONE_NUMBER_MONTHLY_COST,
+    credit_balance, debit_balance, get_balance,
+)
 from services import vapi_client
 from config import settings
 
@@ -152,6 +155,7 @@ async def list_users(admin=Depends(get_admin_user)):
             "credits": b.get("credits", 0),
             "rate_per_minute": float(b.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE),
             "total_charges": float(b.get("total_charges") or 0),
+            "balance": float(b.get("balance") or 0),
             "total_conversations": conversation_counts.get(uid, 0),
             "phone_numbers": phone_counts.get(uid, 0),
             "stripe_customer_id": b.get("stripe_customer_id"),
@@ -400,6 +404,29 @@ async def adjust_credits(user_id: str, body: CreditAdjust, admin=Depends(get_adm
         "data": {"credits": new_credits, "adjustment": body.amount, "reason": body.reason},
         "error": None,
     }
+
+
+class BalanceAdjust(BaseModel):
+    amount: float
+    reason: Optional[str] = None
+
+
+@router.post("/users/{user_id}/balance")
+async def adjust_balance(user_id: str, body: BalanceAdjust, admin=Depends(get_admin_user)):
+    """Admin manually adds (or removes, if negative) wallet balance for a user.
+
+    Recorded in the wallet_transactions ledger as an `admin` entry. This is
+    real, spendable balance — the user can use it for numbers, calls and plans.
+    """
+    amount = round(float(body.amount or 0), 2)
+    if amount == 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-zero")
+    note = body.reason or "Admin balance adjustment"
+    if amount > 0:
+        new_balance = credit_balance(user_id, amount, "admin", note)
+    else:
+        new_balance = debit_balance(user_id, -amount, "admin", note)
+    return {"data": {"balance": new_balance, "added": amount}, "error": None}
 
 
 @router.post("/users/{user_id}/toggle-access")

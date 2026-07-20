@@ -9,8 +9,9 @@ const TOKEN_KEY = "nexus_token";            // must match api.ts
 const RETURN_KEY = "nexus_impersonator_token";
 const FLAG_KEY = "nexus_impersonating";      // holds the impersonated user's email
 
-/** Begin impersonating: back up the current token, install the user token, reload into the dashboard. */
-export function startImpersonation(token: string, email: string) {
+/** Install the impersonation token into shared storage WITHOUT navigating.
+ *  Used when opening the impersonated dashboard in a new tab. */
+export function prepImpersonation(token: string, email: string) {
   // Only back up the caller's token the FIRST time — if we're already
   // impersonating (e.g. admin re-entered the portal and picked another user),
   // keep the original backup so Exit still restores the real admin session.
@@ -19,6 +20,11 @@ export function startImpersonation(token: string, email: string) {
   }
   localStorage.setItem(FLAG_KEY, email);
   localStorage.setItem(TOKEN_KEY, token);
+}
+
+/** Begin impersonating in the CURRENT tab (fallback when a new tab is blocked). */
+export function startImpersonation(token: string, email: string) {
+  prepImpersonation(token, email);
   window.location.href = "/dashboard/quick-setup";
 }
 

@@ -240,6 +240,7 @@ export const api = {
   deleteAdminUser: (id: string) => request(`/admin/users/${id}`, { method: "DELETE", headers: getAdminAuthHeader() }),
   impersonateUser: (id: string) => adminPost(`/admin/users/${id}/impersonate`),
   adjustCredits: (id: string, data: any) => adminPost(`/admin/users/${id}/credits`, data),
+  adjustUserBalance: (id: string, amount: number, reason?: string) => adminPost(`/admin/users/${id}/balance`, { amount, reason }),
   toggleAccess: (id: string) => adminPost(`/admin/users/${id}/toggle-access`),
   resetUsage: (id: string) => adminPost(`/admin/users/${id}/reset-usage`),
 
