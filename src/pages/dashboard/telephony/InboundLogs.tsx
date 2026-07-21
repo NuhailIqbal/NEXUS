@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   PhoneIncoming, CheckCircle2, XCircle, Clock, Loader2,
   FileText, Play,
@@ -14,17 +14,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api } from "@/services/api";
+import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
+import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
 
 type CallLog = {
   id: string;
   status: string;
-  duration?: number;
+  duration?: string;
+  duration_seconds?: number;
   call_time?: string;
   customer_number?: string;
   agent_id?: string;
   ai_summary?: string;
   transcript?: string;
+  transcript_messages?: TranscriptMessage[] | null;
   recording_url?: string;
+  stereo_recording_url?: string;
   direction?: string;
   sentiment?: string;
 };
@@ -37,6 +42,10 @@ const InboundLogs = () => {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<CallLog | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [playerTime, setPlayerTime] = useState(0);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const playerRef = useRef<CallAudioPlayerHandle | null>(null);
+  const openIdRef = useRef<string | null>(null);
 
   const fetchLogs = useCallback(async () => {
     const [cRes, aRes] = await Promise.all([
@@ -48,15 +57,37 @@ const InboundLogs = () => {
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+  useEffect(() => {
+    fetchLogs();
+    // Silently refresh so background-synced inbound calls appear without a manual reload.
+    const t = setInterval(() => fetchLogs(), 30000);
+    return () => clearInterval(t);
+  }, [fetchLogs]);
 
   const openDetail = async (log: CallLog) => {
     setDetail(log);
-    if (!log.transcript && !log.ai_summary) {
+    setPlayerTime(0);
+    openIdRef.current = log.id;
+    setRecordingUrl(null);
+    if (log.recording_url || log.stereo_recording_url) {
+      api.getConversationRecordingUrl(log.id).then(({ data }) => {
+        if (openIdRef.current === log.id) setRecordingUrl((data as any)?.url ?? null);
+      });
+    }
+    if (!log.transcript_messages || log.transcript_messages.length === 0) {
       setDetailLoading(true);
       const { data } = await api.getConversationTranscript(log.id);
+      // Ignore a stale fetch if the user already opened a different row.
+      if (openIdRef.current !== log.id) return;
       if (data) {
-        setDetail((d) => d ? { ...d, transcript: data.transcript, ai_summary: data.ai_summary } : d);
+        setDetail((d) => d && d.id === log.id ? {
+          ...d,
+          transcript: (data as any).transcript ?? d.transcript,
+          transcript_messages: (data as any).transcript_messages ?? d.transcript_messages,
+          recording_url: (data as any).recording_url ?? d.recording_url,
+          stereo_recording_url: (data as any).stereo_recording_url ?? d.stereo_recording_url,
+          ai_summary: (data as any).ai_summary ?? d.ai_summary,
+        } : d);
       }
       setDetailLoading(false);
     }
@@ -64,7 +95,7 @@ const InboundLogs = () => {
 
   const completed = logs.filter((l) => l.status === "Completed").length;
   const failed = logs.filter((l) => l.status === "Failed").length;
-  const totalDuration = logs.reduce((sum, l) => sum + (l.duration || 0), 0);
+  const totalDuration = logs.reduce((sum, l) => sum + (l.duration_seconds || 0), 0);
 
   if (loading) {
     return (
@@ -148,7 +179,7 @@ const InboundLogs = () => {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {c.duration ? `${Math.round(c.duration)}s` : " "}
+                    {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {c.call_time ? new Date(c.call_time).toLocaleString() : " "}
@@ -174,7 +205,7 @@ const InboundLogs = () => {
 
       {/* Detail Modal */}
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <PhoneIncoming className="h-5 w-5 text-primary" />
@@ -193,7 +224,7 @@ const InboundLogs = () => {
               </div>
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">Duration</div>
-                <div className="mt-1 font-medium">{detail?.duration ? `${Math.round(detail.duration)}s` : " "}</div>
+                <div className="mt-1 font-medium">{detail?.duration || (detail?.duration_seconds ? `${detail.duration_seconds}s` : "—")}</div>
               </div>
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">Agent</div>
@@ -208,27 +239,38 @@ const InboundLogs = () => {
               </div>
             )}
 
-            {detail?.recording_url && (
-              <div>
-                <h4 className="text-sm font-semibold text-foreground mb-1">Recording</h4>
-                <audio controls className="w-full" src={detail.recording_url}>
-                  Your browser does not support audio playback.
-                </audio>
-              </div>
-            )}
-
-            {detailLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading transcript...
-              </div>
-            ) : detail?.transcript ? (
-              <div>
-                <h4 className="text-sm font-semibold text-foreground mb-1">Transcript</h4>
-                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
-                  {detail.transcript}
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-1">Recording</h4>
+              {(detail?.recording_url || detail?.stereo_recording_url) && recordingUrl === null ? (
+                <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading recording…
                 </div>
-              </div>
-            ) : null}
+              ) : (
+                <CallAudioPlayer
+                  ref={playerRef}
+                  src={recordingUrl}
+                  onTimeUpdate={setPlayerTime}
+                />
+              )}
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-1">Transcript</h4>
+              {detailLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading transcript...
+                </div>
+              ) : (
+                <div className="rounded-lg border border-border bg-muted/20 p-3 max-h-72 overflow-y-auto">
+                  <CallTranscript
+                    messages={detail?.transcript_messages}
+                    transcript={detail?.transcript}
+                    activeTime={playerTime}
+                    onSeek={(s) => playerRef.current?.seek(s)}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <DialogFooter>

@@ -352,6 +352,8 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     call_cost numeric(8,4) DEFAULT 0.00,
     qualified boolean DEFAULT false,
     transferred_to text,
+    stereo_recording_url text,
+    transcript_messages jsonb DEFAULT '[]'::jsonb,
     CONSTRAINT conversations_direction_check CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))
 );
 

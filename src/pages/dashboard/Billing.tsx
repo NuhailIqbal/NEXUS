@@ -70,6 +70,22 @@ type Invoice = {
   pdf: string | null;
 };
 
+type PurchaseTxn = {
+  id: string;
+  kind: string;
+  amount: number;
+  balance_after: number | null;
+  description: string | null;
+  created_at: string;
+};
+
+const TXN_LABELS: Record<string, string> = {
+  topup: "Top-up",
+  phone: "Phone Number",
+  plan: "Subscription",
+  admin: "Adjustment",
+};
+
 const planIcons: Record<string, typeof Sparkles> = {
   payg: DollarSign,
   starter: Sparkles,
@@ -129,6 +145,7 @@ const Billing = () => {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [callCosts, setCallCosts] = useState<CallCostEntry[]>([]);
+  const [transactions, setTransactions] = useState<PurchaseTxn[]>([]);
   const [totalCost, setTotalCost] = useState(0);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -138,11 +155,12 @@ const Billing = () => {
   const [toppingUp, setToppingUp] = useState(false);
 
   const fetchAll = async () => {
-    const [plansRes, statusRes, invoicesRes, costsRes] = await Promise.all([
+    const [plansRes, statusRes, invoicesRes, costsRes, txnRes] = await Promise.all([
       api.getBillingPlans(),
       api.getBillingStatus(),
       api.getBillingInvoices(),
       api.getBillingCallCosts(),
+      api.getWalletTransactions(),
     ]);
     if (Array.isArray(plansRes.data)) setPlans(plansRes.data);
     if (statusRes.data) setBilling(statusRes.data);
@@ -152,6 +170,7 @@ const Billing = () => {
       setTotalCost(costsRes.data.total_cost || 0);
       setTotalMinutes(costsRes.data.total_minutes || 0);
     }
+    if (Array.isArray(txnRes.data)) setTransactions(txnRes.data);
     setLoading(false);
   };
 
@@ -182,7 +201,7 @@ const Billing = () => {
   }, [searchParams]);
 
   const handleAddFunds = async () => {
-    if (topupAmount < 5) return toast.error("Minimum top-up is $5");
+    if (topupAmount < 10) return toast.error("Minimum top-up is $10");
     setToppingUp(true);
     const { data, error } = await api.topupCheckout(topupAmount);
     setToppingUp(false);
@@ -467,6 +486,56 @@ const Billing = () => {
         </div>
       )}
 
+      {/* Purchase History */}
+      {transactions.length > 0 && (
+        <div>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-foreground">
+            <Receipt className="h-5 w-5 text-primary" />
+            Purchase History
+          </h2>
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3">Date</th>
+                    <th className="px-4 py-3">Type</th>
+                    <th className="px-4 py-3">Description</th>
+                    <th className="px-4 py-3">Amount</th>
+                    <th className="px-4 py-3">Balance After</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((t) => {
+                    const credit = t.amount >= 0;
+                    return (
+                      <tr key={t.id} className="border-t border-border bg-card/30">
+                        <td className="px-4 py-3 text-foreground">
+                          {new Date(t.created_at).toLocaleDateString()}{" "}
+                          <span className="text-muted-foreground text-xs">
+                            {new Date(t.created_at).toLocaleTimeString()}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant="outline">{TXN_LABELS[t.kind] || t.kind}</Badge>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{t.description || "—"}</td>
+                        <td className={`px-4 py-3 font-medium ${credit ? "text-green-500" : "text-destructive"}`}>
+                          {credit ? "+" : "-"}${Math.abs(t.amount).toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-foreground">
+                          {t.balance_after != null ? `$${t.balance_after.toFixed(2)}` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Call Cost History */}
       {callCosts.length > 0 && (
         <div>
@@ -615,17 +684,17 @@ const Billing = () => {
               <label className="mb-1.5 block text-sm font-medium text-foreground">Custom amount (USD)</label>
               <Input
                 type="number"
-                min={5}
+                min={10}
                 max={1000}
                 value={topupAmount}
                 onChange={(e) => setTopupAmount(parseFloat(e.target.value) || 0)}
               />
-              <p className="mt-1 text-xs text-muted-foreground">Minimum $5. You'll pay securely via Stripe.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Minimum $10. You'll pay securely via Stripe.</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowTopup(false)}>Cancel</Button>
-            <Button onClick={handleAddFunds} disabled={toppingUp || topupAmount < 5}>
+            <Button onClick={handleAddFunds} disabled={toppingUp || topupAmount < 10}>
               {toppingUp ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Redirecting…</>
               ) : (

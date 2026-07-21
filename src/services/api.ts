@@ -138,7 +138,9 @@ export const api = {
   getConversations: (params?: string) => get(`/conversations${params ? `?${params}` : ""}`),
   getConversation: (id: string) => get(`/conversations/${id}`),
   getConversationTranscript: (id: string) => get(`/conversations/${id}/transcript`),
+  getConversationRecordingUrl: (id: string) => get(`/conversations/${id}/recording-url`),
   getConversationStats: () => get("/conversations/stats"),
+  syncConversationsFromVapi: () => post("/conversations/sync-from-vapi"),
   deleteConversation: (id: string) => del(`/conversations/${id}`),
 
   // Telephony - Phone Numbers

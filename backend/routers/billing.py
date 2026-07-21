@@ -1,5 +1,5 @@
 import stripe
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
 from database import supabase
 from config import settings
@@ -185,7 +185,7 @@ def credit_balance(user_id, amount, kind, description,
 
 def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
     """Deduct from the wallet (records a negative-amount ledger entry)."""
-    amount = float(amount or 0)
+    amount = round(float(amount or 0), 2)  # charge whole cents so ledger == balance delta
     if amount <= 0:
         return get_balance(user_id)
     billing = get_or_create_billing(user_id)
@@ -241,25 +241,48 @@ def calculate_call_cost(user_id: str, duration_seconds: int) -> float:
     billing = get_or_create_billing(user_id)
     rate = billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE
     duration_minutes = duration_seconds / 60.0
-    cost = round(duration_minutes * float(rate), 4)
+    # Bill in whole cents so the per-call cost, the breakdown total, the wallet
+    # debit and the balance all reconcile exactly (no sub-cent drift).
+    cost = round(duration_minutes * float(rate), 2)
     return cost
 
 
-def record_call_cost(user_id: str, vapi_call_id: str, duration_seconds: int) -> float:
-    cost = calculate_call_cost(user_id, duration_seconds)
-    if cost > 0:
-        supabase.table("conversations").update({
-            "duration_seconds": duration_seconds,
-            "call_cost": cost,
-        }).eq("vapi_call_id", vapi_call_id).execute()
+def _call_already_charged(vapi_call_id: str) -> bool:
+    """A call is charged at most once — guard against re-billing on re-sync/re-import.
+    The wallet ledger (kind='call', ref_id=vapi_call_id) is the source of truth."""
+    if not vapi_call_id:
+        return True
+    existing = (
+        supabase.table("wallet_transactions")
+        .select("id")
+        .eq("ref_id", vapi_call_id)
+        .eq("kind", "call")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(existing)
 
+
+def record_call_cost(user_id: str, vapi_call_id: str, duration_seconds: int) -> float:
+    """Compute the call's cost, store it on the conversation (for the Cost Breakdown),
+    and debit the wallet — the debit happens exactly once per call (idempotent by the
+    ledger), so both the webhook and the background sync can call this freely."""
+    cost = calculate_call_cost(user_id, duration_seconds)
+
+    # Always keep the row's displayed cost + duration in sync (even on re-import).
+    supabase.table("conversations").update({
+        "duration_seconds": duration_seconds,
+        "call_cost": cost,
+    }).eq("vapi_call_id", vapi_call_id).execute()
+
+    # Charge the wallet once per call.
+    if cost > 0 and not _call_already_charged(vapi_call_id):
         billing = get_or_create_billing(user_id)
         current_charges = float(billing.get("total_charges") or 0)
         supabase.table("billing").update({
             "total_charges": round(current_charges + cost, 2),
         }).eq("user_id", user_id).execute()
-
-        # Deduct the metered cost from the prepaid wallet balance.
         debit_balance(user_id, cost, "call", "Call charge", ref_id=vapi_call_id)
     return cost
 
@@ -460,7 +483,7 @@ class TopupRequest(BaseModel):
     cancel_url: Optional[str] = None
 
 
-TOPUP_MIN = 5.0
+TOPUP_MIN = 10.0
 TOPUP_MAX = 1000.0
 _BILLING_BASE_URL = "http://localhost:8080/dashboard/billing"
 
@@ -528,10 +551,11 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
 
-    meta = dict(session.get("metadata") or {})
+    # Stripe SDK objects: attribute access + .to_dict() (dict() / .get() don't work).
+    meta = session.metadata.to_dict() if session.metadata is not None else {}
     if meta.get("user_id") != user["user_id"]:
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
-    if session.get("payment_status") != "paid":
+    if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed")
 
     amount = float(meta.get("amount") or 0)
@@ -543,15 +567,17 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
 
 
 @router.get("/transactions")
-async def list_transactions(user=Depends(get_current_user)):
-    result = (
+async def list_transactions(user=Depends(get_current_user), include_calls: bool = Query(False)):
+    """Wallet ledger for the Purchase History. Excludes per-call charges by default
+    (those live in the Call Cost Breakdown); pass ?include_calls=true for the full ledger."""
+    query = (
         supabase.table("wallet_transactions")
         .select("id, kind, amount, balance_after, description, created_at")
         .eq("user_id", user["user_id"])
-        .order("created_at", desc=True)
-        .limit(50)
-        .execute()
     )
+    if not include_calls:
+        query = query.neq("kind", "call")
+    result = query.order("created_at", desc=True).limit(50).execute()
     return {"data": result.data or [], "error": None}
 
 
@@ -593,13 +619,18 @@ async def subscribe_with_balance(body: SubscribeBalance, user=Depends(get_curren
 async def get_call_costs(user=Depends(get_current_user)):
     result = (
         supabase.table("conversations")
-        .select("id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, created_at")
+        # NB: the conversations table timestamps calls in `call_time`, not `created_at`.
+        .select("id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, call_time")
         .eq("user_id", user["user_id"])
-        .order("created_at", desc=True)
+        .order("call_time", desc=True)
         .limit(50)
         .execute()
     )
     calls = result.data or []
+    # Exclude seeded demo/sample rows so the breakdown only reflects real calls.
+    calls = [c for c in calls if not str(c.get("contact_name") or "").startswith("[SAMPLE]")]
+    for c in calls:
+        c["created_at"] = c.get("call_time")  # the UI reads `created_at`
     total_cost = sum(float(c.get("call_cost") or 0) for c in calls)
     total_minutes = sum(int(c.get("duration_seconds") or 0) for c in calls) / 60.0
     return {

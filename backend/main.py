@@ -46,6 +46,16 @@ def _auto_migrate() -> None:
     bootstrap_schema()
 
 
+@app.on_event("startup")
+async def _start_vapi_sync() -> None:
+    """Poll VAPI in the background so new calls (recording + transcript) appear in
+    Conversations automatically, without the manual 'Sync from VAPI' button."""
+    import asyncio
+    if settings.vapi_api_key and settings.vapi_sync_interval_seconds > 0:
+        from services.vapi_sync import sync_loop
+        asyncio.create_task(sync_loop())
+
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

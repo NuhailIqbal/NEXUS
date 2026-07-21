@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
@@ -39,6 +40,7 @@ type FormState = {
   industry: string;
   language: string;
   voice: string;
+  transferEnabled: boolean;
   transferNumber: string;
   selectedTools: string[];
   knowledgeText: string;
@@ -68,7 +70,7 @@ const CreateAIAgent = () => {
     setup: false, tools: false, knowledge: false, prompt: false, testing: false,
   });
   const [form, setForm] = useState<FormState>({
-    agentName: "", website: "", mainGoal: "", transferNumber: "", industry: "", language: "English (US)", voice: "Aria",
+    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English (US)", voice: "Aria",
     selectedTools: [],
     knowledgeText: "",
     knowledgeFiles: [],
@@ -89,7 +91,7 @@ const CreateAIAgent = () => {
     if (currentStep.key === "setup") {
       if (!form.agentName.trim()) { toast.error("Agent name is required"); return false; }
       if (!form.mainGoal.trim()) { toast.error("Main goal is required"); return false; }
-      if (!form.transferNumber.trim()) { toast.error("Transfer number is required"); return false; }
+      if (form.transferEnabled && !form.transferNumber.trim()) { toast.error("Enter a transfer number or turn off call transfer"); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
     if (currentStep.key === "tools" && form.selectedTools.length === 0) {
@@ -127,7 +129,7 @@ const CreateAIAgent = () => {
       first_message: form.greeting || null,
       main_goal: form.mainGoal || null,
       website: form.website || null,
-      transfer_number: form.transferNumber || null,
+      transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
       knowledge_text: form.knowledgeText || null,
       selected_tool_keys: form.selectedTools,
     });
@@ -350,17 +352,31 @@ function StepSetup({
             className="w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
           />
         </Field>
-        <Field label="Transfer Number" required className="mt-4">
-          <input
-            value={form.transferNumber}
-            onChange={(e) => update("transferNumber", e.target.value)}
-            placeholder="+15551234567 — where to transfer a qualified call"
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            When the AI qualifies a call, it will transfer to this number (E.164 format, e.g. +1…).
-          </p>
-        </Field>
+        <div className="mt-4">
+          <div className="flex items-center justify-between gap-4 rounded-md border border-input bg-background/40 p-3">
+            <div>
+              <span className="block text-sm font-medium text-foreground">Call transfer</span>
+              <p className="text-xs text-muted-foreground">Transfer qualified calls to a human phone number.</p>
+            </div>
+            <Switch
+              checked={form.transferEnabled}
+              onCheckedChange={(v) => update("transferEnabled", v)}
+            />
+          </div>
+          {form.transferEnabled && (
+            <Field label="Transfer Number" required className="mt-3">
+              <input
+                value={form.transferNumber}
+                onChange={(e) => update("transferNumber", e.target.value)}
+                placeholder="+15551234567"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                When a call is qualified, it will be transferred to this number. Use international format, like +15551234567.
+              </p>
+            </Field>
+          )}
+        </div>
       </div>
 
       <div>

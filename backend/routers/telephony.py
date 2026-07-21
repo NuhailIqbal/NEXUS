@@ -225,10 +225,11 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
 
-    meta = dict(session.get("metadata") or {})
+    # Stripe SDK objects: attribute access + .to_dict() (dict() / .get() don't work).
+    meta = session.metadata.to_dict() if session.metadata is not None else {}
     if meta.get("user_id") != user["user_id"]:
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
-    if session.get("payment_status") != "paid":
+    if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed")
 
     row = await _provision_phone_number(
@@ -359,6 +360,49 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
 
 # ── Outbound Campaigns ──
 
+def _phone_key(phone: str) -> str:
+    """Last 10 digits — tolerant phone matching across formats (+1..., spaces, dashes)."""
+    d = "".join(ch for ch in (phone or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else d
+
+
+def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
+    """Fill each campaign's `contacts_count` (size of its list) and `completed_count`
+    (distinct contacts in that list who have a Completed call). Computed live from
+    conversations so the progress bar reflects actual call results, not a stale counter."""
+    if not campaigns:
+        return
+    from collections import defaultdict
+
+    contacts = (
+        supabase.table("contacts").select("id, list_id, phone").eq("user_id", user_id).execute().data or []
+    )
+    by_list: dict = defaultdict(list)
+    for c in contacts:
+        if c.get("list_id"):
+            by_list[c["list_id"]].append(c)
+
+    convos = (
+        supabase.table("conversations").select("contact_id, phone, status").eq("user_id", user_id).execute().data or []
+    )
+    contacted_ids: set = set()
+    contacted_phones: set = set()
+    for cv in convos:
+        if cv.get("status") == "Completed":
+            if cv.get("contact_id"):
+                contacted_ids.add(cv["contact_id"])
+            if cv.get("phone"):
+                contacted_phones.add(_phone_key(cv["phone"]))
+
+    for camp in campaigns:
+        lc = by_list.get(camp.get("list_id"), [])
+        camp["contacts_count"] = len(lc)
+        camp["completed_count"] = sum(
+            1 for c in lc
+            if c["id"] in contacted_ids or (c.get("phone") and _phone_key(c["phone"]) in contacted_phones)
+        )
+
+
 @router.get("/campaigns")
 async def list_campaigns(user=Depends(get_current_user)):
     result = (
@@ -368,7 +412,9 @@ async def list_campaigns(user=Depends(get_current_user)):
         .order("created_at", desc=True)
         .execute()
     )
-    return {"data": result.data, "error": None}
+    campaigns = result.data or []
+    _enrich_campaign_progress(user["user_id"], campaigns)
+    return {"data": campaigns, "error": None}
 
 
 @router.post("/campaigns")
@@ -402,7 +448,9 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    return {"data": result.data, "error": None}
+    camp = result.data
+    _enrich_campaign_progress(user["user_id"], [camp])
+    return {"data": camp, "error": None}
 
 
 @router.patch("/campaigns/{campaign_id}")

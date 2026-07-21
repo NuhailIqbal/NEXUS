@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { Eye } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Eye, Loader2, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/services/api";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -11,6 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
+import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
 
 const colorFor = (s: string) =>
   s === "Completed" ? "bg-success/15 text-success" :
@@ -31,7 +34,9 @@ type Conversation = {
   transferred_to: string | null;
   call_time: string;
   transcript: string | null;
+  transcript_messages: TranscriptMessage[] | null;
   recording_url: string | null;
+  stereo_recording_url: string | null;
   ai_summary: string | null;
   direction: string;
 };
@@ -42,40 +47,113 @@ const Conversations = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [viewing, setViewing] = useState<Conversation | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [playerTime, setPlayerTime] = useState(0);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const playerRef = useRef<CallAudioPlayerHandle | null>(null);
+  const openIdRef = useRef<string | null>(null);
+
+  const openDetail = async (c: Conversation) => {
+    setViewing(c);
+    setPlayerTime(0);
+    openIdRef.current = c.id;
+    // VAPI's stored recording URL is a private, expiring path — fetch a fresh
+    // playable (presigned) URL on open.
+    setRecordingUrl(null);
+    if (c.recording_url || c.stereo_recording_url) {
+      api.getConversationRecordingUrl(c.id).then(({ data }) => {
+        if (openIdRef.current === c.id) setRecordingUrl((data as any)?.url ?? null);
+      });
+    }
+    // Lazy-load the structured transcript + recording URLs (kept out of the list payload).
+    if (!c.transcript_messages || c.transcript_messages.length === 0) {
+      setDetailLoading(true);
+      const { data } = await api.getConversationTranscript(c.id);
+      if (openIdRef.current !== c.id) return; // a different row was opened meanwhile
+      if (data) {
+        setViewing((v) =>
+          v && v.id === c.id
+            ? {
+                ...v,
+                transcript: (data as any).transcript ?? v.transcript,
+                transcript_messages: (data as any).transcript_messages ?? v.transcript_messages,
+                recording_url: (data as any).recording_url ?? v.recording_url,
+                stereo_recording_url: (data as any).stereo_recording_url ?? v.stereo_recording_url,
+                ai_summary: (data as any).ai_summary ?? v.ai_summary,
+              }
+            : v
+        );
+      }
+      setDetailLoading(false);
+    }
+  };
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    const [convRes, statsRes] = await Promise.all([
+      api.getConversations(),
+      api.getConversationStats(),
+    ]);
+    if (convRes.data) {
+      setConversations(Array.isArray(convRes.data) ? convRes.data : []);
+    }
+    if (statsRes.data) {
+      const s = statsRes.data as any;
+      setStats([
+        { label: "Total", count: s.total ?? 0 },
+        { label: "Completed", count: s.completed ?? 0 },
+        { label: "Failed", count: s.failed ?? 0 },
+        { label: "In Progress", count: s.in_progress ?? 0 },
+        { label: "Qualified", count: s.qualified ?? 0 },
+        { label: "Inbound", count: s.inbound ?? 0 },
+        { label: "Outbound", count: s.outbound ?? 0 },
+      ]);
+    }
+    if (!silent) setLoading(false);
+  }, []);
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      const [convRes, statsRes] = await Promise.all([
-        api.getConversations(),
-        api.getConversationStats(),
-      ]);
-      if (convRes.data) {
-        setConversations(Array.isArray(convRes.data) ? convRes.data : []);
-      }
-      if (statsRes.data) {
-        const s = statsRes.data as any;
-        setStats([
-          { label: "Total", count: s.total ?? 0 },
-          { label: "Completed", count: s.completed ?? 0 },
-          { label: "Failed", count: s.failed ?? 0 },
-          { label: "In Progress", count: s.in_progress ?? 0 },
-          { label: "Qualified", count: s.qualified ?? 0 },
-          { label: "Inbound", count: s.inbound ?? 0 },
-          { label: "Outbound", count: s.outbound ?? 0 },
-        ]);
-      }
-      setLoading(false);
-    };
     load();
-  }, []);
+    // Silently refresh so calls synced in the background appear without a manual reload.
+    const t = setInterval(() => load(true), 30000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const { data, error } = await api.syncConversationsFromVapi();
+      if (error) {
+        toast.error("Sync failed", { description: String(error) });
+      } else {
+        const d = (data as any) || {};
+        if (d.note) {
+          toast("Nothing to sync", { description: d.note });
+        } else {
+          toast.success("Synced from VAPI", { description: `${d.imported ?? 0} new, ${d.updated ?? 0} updated (scanned ${d.scanned ?? 0} calls).` });
+        }
+        await load();
+      }
+    } catch (e: any) {
+      toast.error("Sync failed", { description: e?.message || "Could not reach the server." });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">All Conversations</h1>
-        <p className="text-sm text-muted-foreground">Every voice, SMS, WhatsApp and web chat in one place.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">All Conversations</h1>
+          <p className="text-sm text-muted-foreground">Every voice, SMS, WhatsApp and web chat in one place.</p>
+        </div>
+        <Button variant="outline" onClick={handleSync} disabled={syncing} className="shrink-0">
+          <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+          {syncing ? "Syncing…" : "Sync from VAPI"}
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -134,7 +212,7 @@ const Conversations = () => {
                   <td className="px-4 py-3 text-muted-foreground">{c.call_time}</td>
                   <td className="px-4 py-3">
                     <button
-                      onClick={() => setViewing(c)}
+                      onClick={() => openDetail(c)}
                       className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                       aria-label="View"
                       title="View"
@@ -150,46 +228,65 @@ const Conversations = () => {
       </div>
 
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Conversation · {viewing?.contact_name}</DialogTitle>
             <DialogDescription>{viewing?.channel} · {viewing?.call_time}</DialogDescription>
           </DialogHeader>
           {viewing && (
-            <dl className="grid grid-cols-3 gap-3 text-sm">
-              <dt className="text-muted-foreground">Phone</dt>
-              <dd className="col-span-2 font-mono">{viewing.phone}</dd>
-              <dt className="text-muted-foreground">Duration</dt>
-              <dd className="col-span-2 font-mono">{viewing.duration}</dd>
-              <dt className="text-muted-foreground">Status</dt>
-              <dd className="col-span-2">{viewing.status}</dd>
-              <dt className="text-muted-foreground">Conversion</dt>
-              <dd className="col-span-2">{viewing.conversion}</dd>
-              <dt className="text-muted-foreground">Qualified</dt>
-              <dd className="col-span-2">{viewing.qualified ? "Yes" : "No"}</dd>
-              {viewing.transferred_to && (
-                <>
-                  <dt className="text-muted-foreground">Transferred to</dt>
-                  <dd className="col-span-2 font-mono">{viewing.transferred_to}</dd>
-                </>
+            <div className="space-y-4">
+              {/* Recording */}
+              {(viewing.recording_url || viewing.stereo_recording_url) && recordingUrl === null ? (
+                <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading recording…
+                </div>
+              ) : (
+                <CallAudioPlayer
+                  ref={playerRef}
+                  src={recordingUrl}
+                  onTimeUpdate={setPlayerTime}
+                />
               )}
-              <dt className="text-muted-foreground">Direction</dt>
-              <dd className="col-span-2">{viewing.direction}</dd>
-              <dt className="text-muted-foreground">Recording</dt>
-              <dd className="col-span-2">{viewing.recording_url ? <a href={viewing.recording_url} target="_blank" rel="noreferrer" className="text-primary underline">Play Recording</a> : "---"}</dd>
+
+              {/* Metadata */}
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+                <div><div className="text-xs text-muted-foreground">Phone</div><div className="font-mono">{viewing.phone || "—"}</div></div>
+                <div><div className="text-xs text-muted-foreground">Duration</div><div className="font-mono">{viewing.duration || "—"}</div></div>
+                <div><div className="text-xs text-muted-foreground">Direction</div><div className="capitalize">{viewing.direction}</div></div>
+                <div><div className="text-xs text-muted-foreground">Status</div><div>{viewing.status}</div></div>
+                <div><div className="text-xs text-muted-foreground">Conversion</div><div>{viewing.conversion}</div></div>
+                <div><div className="text-xs text-muted-foreground">Qualified</div><div>{viewing.qualified ? "Yes" : "No"}</div></div>
+                {viewing.transferred_to && (
+                  <div className="col-span-2 sm:col-span-3"><div className="text-xs text-muted-foreground">Transferred to</div><div className="font-mono">{viewing.transferred_to}</div></div>
+                )}
+              </div>
+
               {viewing.ai_summary && (
-                <>
-                  <dt className="text-muted-foreground col-span-3 mt-2 font-semibold">AI Summary</dt>
-                  <dd className="col-span-3 rounded-md bg-muted/50 p-3 text-xs leading-relaxed">{viewing.ai_summary}</dd>
-                </>
+                <div>
+                  <div className="mb-1 text-sm font-semibold">AI Summary</div>
+                  <div className="rounded-md bg-muted/50 p-3 text-xs leading-relaxed">{viewing.ai_summary}</div>
+                </div>
               )}
-              {viewing.transcript && (
-                <>
-                  <dt className="text-muted-foreground col-span-3 mt-2 font-semibold">Transcript</dt>
-                  <dd className="col-span-3 max-h-48 overflow-y-auto rounded-md bg-muted/50 p-3 text-xs leading-relaxed whitespace-pre-wrap">{viewing.transcript}</dd>
-                </>
-              )}
-            </dl>
+
+              {/* Transcript */}
+              <div>
+                <div className="mb-2 text-sm font-semibold">Transcript</div>
+                {detailLoading ? (
+                  <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading transcript…
+                  </div>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
+                    <CallTranscript
+                      messages={viewing.transcript_messages}
+                      transcript={viewing.transcript}
+                      activeTime={playerTime}
+                      onSeek={(s) => playerRef.current?.seek(s)}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setViewing(null)}>Close</Button>

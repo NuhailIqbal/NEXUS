@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_webhook_secret: str = ""
     vapi_public_key: str = ""  # used by the @vapi-ai/web SDK on embedded voice widgets
+    # Background auto-sync: pull recent VAPI calls (recording + transcript) into
+    # conversations on a timer, so new calls appear without the manual button.
+    # Set interval to 0 to disable. Requires vapi_api_key.
+    vapi_sync_interval_seconds: int = 90
+    vapi_sync_limit: int = 50
 
     # Gemini
     gemini_api_key: str = ""

@@ -50,6 +50,23 @@ async def get_assistant(assistant_id: str) -> dict:
         return r.json()
 
 
+async def list_calls(limit: int = 100) -> list[dict]:
+    """List recent calls for the org (most recent first)."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(f"{BASE_URL}/call", headers=_headers(), params={"limit": limit})
+        _check(r)
+        data = r.json()
+        return data if isinstance(data, list) else data.get("results", [])
+
+
+async def get_call(call_id: str) -> dict:
+    """Fetch a single call with its full artifact (messages, recording, transcript)."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{BASE_URL}/call/{call_id}", headers=_headers())
+        _check(r)
+        return r.json()
+
+
 async def create_tool(payload: dict) -> dict:
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{BASE_URL}/tool", headers=_headers(), json=payload)
@@ -90,13 +107,6 @@ async def delete_file(file_id: str) -> None:
 async def create_call(payload: dict) -> dict:
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{BASE_URL}/call", headers=_headers(), json=payload)
-        _check(r)
-        return r.json()
-
-
-async def get_call(call_id: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{BASE_URL}/call/{call_id}", headers=_headers())
         _check(r)
         return r.json()
 
@@ -224,7 +234,24 @@ def build_assistant_payload(name: str, voice: str = None, language: str = "en",
         },
         "model": model,
         "voice": _resolve_voice(voice),
+        # Record every call and keep the structured transcript so the dashboard can
+        # play the recording and render a speaker-attributed transcript.
+        "artifactPlan": {
+            "recordingEnabled": True,
+            "transcriptPlan": {"enabled": True},
+        },
     }
     if first_message:
         payload["firstMessage"] = first_message
+
+    # Point VAPI at our webhook so end-of-call-report / status-update events are
+    # delivered here. Requires a publicly reachable backend URL (settings.public_api_url).
+    if settings.public_api_url:
+        base = settings.public_api_url.rstrip("/")
+        server: dict = {"url": f"{base}/webhooks/vapi"}
+        if settings.vapi_webhook_secret:
+            server["secret"] = settings.vapi_webhook_secret
+        payload["server"] = server
+        payload["serverMessages"] = ["end-of-call-report", "status-update"]
+
     return payload

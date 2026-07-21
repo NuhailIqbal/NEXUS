@@ -52,6 +52,7 @@ function numberExpiry(createdAt?: string) {
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
   const [numbers, setNumbers] = useState<Num[]>([]);
+  const [agentsById, setAgentsById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
 
   const [testTarget, setTestTarget] = useState<Num | null>(null);
@@ -60,8 +61,10 @@ const PhoneNumbers = () => {
   const [settingsForm, setSettingsForm] = useState<{ agent_id: string; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
 
   const fetchNumbers = async () => {
-    const { data } = await api.getPhoneNumbers();
-    if (data) setNumbers(Array.isArray(data) ? data : []);
+    const [numbersRes, agentsRes] = await Promise.all([api.getPhoneNumbers(), api.getAgents()]);
+    if (numbersRes.data) setNumbers(Array.isArray(numbersRes.data) ? numbersRes.data : []);
+    if (Array.isArray(agentsRes.data))
+      setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
     setLoading(false);
   };
 
@@ -189,7 +192,7 @@ const PhoneNumbers = () => {
                     </div>
                   </td>
                   <td className="px-4 py-3">{n.provider}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{n.agent_id}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{agentsById.get(n.agent_id) || (n.agent_id ? "Unknown agent" : "—")}</td>
                   <td className="px-4 py-3">
                     <NumberStatus num={n} />
                   </td>
@@ -268,7 +271,14 @@ const PhoneNumbers = () => {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>Assigned Agent</Label>
-              <Input value={settingsForm.agent_id} onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))} />
+              <Select value={settingsForm.agent_id} onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select an agent" /></SelectTrigger>
+                <SelectContent>
+                  {Array.from(agentsById.entries()).map(([id, name]) => (
+                    <SelectItem key={id} value={id}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">

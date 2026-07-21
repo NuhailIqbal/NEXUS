@@ -87,7 +87,12 @@ const Outbound = () => {
     setLoading(false);
   };
 
-  useEffect(() => { fetchCampaigns(); }, []);
+  useEffect(() => {
+    fetchCampaigns();
+    // Refresh so campaign "contacted" progress updates as calls sync in.
+    const t = setInterval(() => fetchCampaigns(), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   const totalContacts = campaigns.reduce((s, c) => s + (c.contacts_count || 0), 0);
   const totalDialed   = campaigns.reduce((s, c) => s + (c.completed_count || 0), 0);
