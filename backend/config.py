@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # Server
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     public_api_url: str = ""  # publicly reachable URL of this backend; used in VAPI tool callbacks
+    # Public URL of the FRONTEND app, used to build Stripe redirect (success/cancel) URLs
+    # so users return to the deployed site, not localhost. e.g. https://app.edmnexus.ai
+    public_app_url: str = ""
 
     @property
     def admin_email_list(self) -> list[str]:

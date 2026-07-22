@@ -1,3 +1,4 @@
+import logging
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
@@ -7,7 +8,14 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
+
+
+def _app_base() -> str:
+    """Frontend base URL for Stripe redirects — the deployed app URL, or localhost in dev.
+    The frontend also passes its own window.location.origin, so this is a fallback."""
+    return (settings.public_app_url or "http://localhost:8080").rstrip("/")
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -425,8 +433,8 @@ async def create_checkout(body: CheckoutRequest, user=Depends(get_current_user))
             {"stripe_customer_id": customer_id}
         ).eq("user_id", user["user_id"]).execute()
 
-    success_url = body.success_url or "http://localhost:8082/dashboard/billing?success=true"
-    cancel_url = body.cancel_url or "http://localhost:8082/dashboard/billing?canceled=true"
+    success_url = body.success_url or f"{_app_base()}/dashboard/billing?success=true"
+    cancel_url = body.cancel_url or f"{_app_base()}/dashboard/billing?canceled=true"
 
     try:
         session = stripe.checkout.Session.create(
@@ -485,7 +493,7 @@ class TopupRequest(BaseModel):
 
 TOPUP_MIN = 10.0
 TOPUP_MAX = 1000.0
-_BILLING_BASE_URL = "http://localhost:8080/dashboard/billing"
+_BILLING_BASE_URL = f"{_app_base()}/dashboard/billing"
 
 
 def _get_or_create_stripe_customer(user) -> str:
@@ -553,7 +561,24 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
 
     # Stripe SDK objects: attribute access + .to_dict() (dict() / .get() don't work).
     meta = session.metadata.to_dict() if session.metadata is not None else {}
-    if meta.get("user_id") != user["user_id"]:
+    # Ownership: the session belongs to this user if its metadata user_id matches,
+    # OR the session's Stripe customer is this user's own customer (the checkout was
+    # created with customer=<their customer>). The customer match is the robust proof;
+    # metadata is a fallback. Credit only ever goes to the authenticated user, and is
+    # idempotent per session_id, so this can't be abused to credit someone else.
+    billing = get_or_create_billing(user["user_id"])
+    session_customer = getattr(session, "customer", None)
+    owns = (
+        meta.get("user_id") == user["user_id"]
+        or (session_customer and session_customer == billing.get("stripe_customer_id"))
+    )
+    if not owns:
+        logger.warning(
+            "topup_confirm ownership mismatch: session=%s meta_user=%s current_user=%s "
+            "session_customer=%s billing_customer=%s",
+            body.session_id, meta.get("user_id"), user["user_id"],
+            session_customer, billing.get("stripe_customer_id"),
+        )
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
     if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed")

@@ -145,7 +145,10 @@ export const api = {
 
   // Telephony - Phone Numbers
   getPhoneNumbers: () => get("/telephony/phone-numbers"),
-  createPhoneNumber: (data: any) => post("/telephony/phone-numbers", data),
+  createPhoneNumber: (data: any) => post("/telephony/phone-numbers", {
+    ...data,
+    success_url: `${window.location.origin}/dashboard/telephony/phone-numbers`,
+  }),
   confirmPhonePurchase: (session_id: string) => post("/telephony/phone-numbers/confirm", { session_id }),
   updatePhoneNumber: (id: string, data: any) => patch(`/telephony/phone-numbers/${id}`, data),
   deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
@@ -218,10 +221,20 @@ export const api = {
   getBillingUsage: () => get("/billing/usage"),
   getBillingInvoices: () => get("/billing/invoices"),
   getBillingCallCosts: () => get("/billing/call-costs"),
-  createCheckout: (data: any) => post("/billing/checkout", data),
+  createCheckout: (data: any) => post("/billing/checkout", {
+    success_url: `${window.location.origin}/dashboard/billing`,
+    cancel_url: `${window.location.origin}/dashboard/billing`,
+    ...data,
+  }),
   createPortalSession: () => post("/billing/portal"),
   // Wallet / balance
-  topupCheckout: (amount: number) => post("/billing/topup/checkout", { amount }),
+  topupCheckout: (amount: number) => post("/billing/topup/checkout", {
+    amount,
+    // Return to wherever the app is actually running (localhost in dev, the deployed
+    // domain in prod) — the backend appends ?topup=success&session_id=…
+    success_url: `${window.location.origin}/dashboard/billing`,
+    cancel_url: `${window.location.origin}/dashboard/billing`,
+  }),
   topupConfirm: (session_id: string) => post("/billing/topup/confirm", { session_id }),
   subscribeWithBalance: (plan_id: string) => post("/billing/subscribe-with-balance", { plan_id }),
   getWalletTransactions: () => get("/billing/transactions"),

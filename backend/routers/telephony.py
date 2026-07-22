@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import stripe
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +24,7 @@ from routers.billing import (
 
 CAMPAIGN_BATCH_SIZE = 20
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telephony", tags=["Telephony"])
 
 
@@ -129,7 +131,8 @@ def _phone_checkout_session(user, body) -> dict:
         customer_id = customer.id
         supabase.table("billing").update({"stripe_customer_id": customer_id}).eq("user_id", user["user_id"]).execute()
 
-    base = "http://localhost:8080/dashboard/telephony/phone-numbers"
+    app_base = (settings.public_app_url or "http://localhost:8080").rstrip("/")
+    base = getattr(body, "success_url", None) or f"{app_base}/dashboard/telephony/phone-numbers"
     session = stripe.checkout.Session.create(
         customer=customer_id,
         payment_method_types=["card"],
@@ -227,7 +230,21 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
 
     # Stripe SDK objects: attribute access + .to_dict() (dict() / .get() don't work).
     meta = session.metadata.to_dict() if session.metadata is not None else {}
-    if meta.get("user_id") != user["user_id"]:
+    # Ownership: metadata user_id match OR the session's Stripe customer is this user's
+    # own customer (robust proof; metadata is the fallback).
+    billing = get_or_create_billing(user["user_id"])
+    session_customer = getattr(session, "customer", None)
+    owns = (
+        meta.get("user_id") == user["user_id"]
+        or (session_customer and session_customer == billing.get("stripe_customer_id"))
+    )
+    if not owns:
+        logger.warning(
+            "confirm_phone_checkout ownership mismatch: session=%s meta_user=%s current_user=%s "
+            "session_customer=%s billing_customer=%s",
+            body.session_id, meta.get("user_id"), user["user_id"],
+            session_customer, billing.get("stripe_customer_id"),
+        )
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
     if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed")

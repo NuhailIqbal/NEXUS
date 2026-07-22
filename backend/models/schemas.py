@@ -200,6 +200,7 @@ class PhoneNumberCreate(BaseModel):
     provider: str = "vapi"
     area_code: Optional[str] = None
     status: Optional[str] = "Active"
+    success_url: Optional[str] = None  # frontend app base for Stripe redirect (low-balance path)
 
 
 class PhoneNumberUpdate(BaseModel):
