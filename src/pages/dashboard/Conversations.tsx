@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, Loader2, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { Eye, Loader2 } from "lucide-react";
 import { api } from "@/services/api";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -47,7 +46,6 @@ const Conversations = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [viewing, setViewing] = useState<Conversation | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [playerTime, setPlayerTime] = useState(0);
@@ -121,39 +119,11 @@ const Conversations = () => {
     return () => clearInterval(t);
   }, [load]);
 
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const { data, error } = await api.syncConversationsFromVapi();
-      if (error) {
-        toast.error("Sync failed", { description: String(error) });
-      } else {
-        const d = (data as any) || {};
-        if (d.note) {
-          toast("Nothing to sync", { description: d.note });
-        } else {
-          toast.success("Synced from VAPI", { description: `${d.imported ?? 0} new, ${d.updated ?? 0} updated (scanned ${d.scanned ?? 0} calls).` });
-        }
-        await load();
-      }
-    } catch (e: any) {
-      toast.error("Sync failed", { description: e?.message || "Could not reach the server." });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">All Conversations</h1>
-          <p className="text-sm text-muted-foreground">Every voice, SMS, WhatsApp and web chat in one place.</p>
-        </div>
-        <Button variant="outline" onClick={handleSync} disabled={syncing} className="shrink-0">
-          <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-          {syncing ? "Syncing…" : "Sync from VAPI"}
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">All Conversations</h1>
+        <p className="text-sm text-muted-foreground">Every voice, SMS, WhatsApp and web chat in one place.</p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
