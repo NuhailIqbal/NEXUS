@@ -3,7 +3,7 @@ import {
   Users, Bot, PhoneOutgoing, PhoneIncoming, CreditCard,
   Loader2, Search, ChevronRight, ChevronDown, ToggleLeft, ToggleRight,
   Plus, Minus, RotateCcw, TrendingUp, LogOut, Lock,
-  LayoutDashboard, Package, UserCheck, DollarSign, BarChart3, FileText, Trash2, Eye, Phone,
+  LayoutDashboard, Package, UserCheck, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,7 +114,7 @@ type AdminPlan = {
 
 type SectionKey =
   | "overview" | "users" | "agents" | "numbers" | "plans" | "subscribers"
-  | "payments" | "revenue" | "agent-report" | "user-report";
+  | "payments" | "promotions" | "revenue" | "agent-report" | "user-report";
 
 type NavLeaf = { key: SectionKey; label: string; icon: typeof Users };
 type NavGroup = { group: string; icon: typeof Users; children: NavLeaf[] };
@@ -129,6 +129,7 @@ const NAV: NavEntry[] = [
   { key: "plans",        label: "Plans",          icon: Package },
   { key: "subscribers",  label: "Subscribers",    icon: UserCheck },
   { key: "payments",     label: "Payments",       icon: CreditCard },
+  { key: "promotions",   label: "Promotions",     icon: Gift },
   {
     group: "Reports", icon: BarChart3, children: [
       { key: "revenue",      label: "Revenue Report", icon: DollarSign },
@@ -194,6 +195,10 @@ const Admin = () => {
   const [revenueLoaded, setRevenueLoaded] = useState(false);
   const [agentReportLoaded, setAgentReportLoaded] = useState(false);
   const [userReportLoaded, setUserReportLoaded] = useState(false);
+  const [promoSettings, setPromoSettings] = useState<any>(null);
+  const [promoKpis, setPromoKpis] = useState<any>(null);
+  const [promoLoaded, setPromoLoaded] = useState(false);
+  const [promoSaving, setPromoSaving] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -266,6 +271,13 @@ const Admin = () => {
     if (section === "payments" && !paymentsLoaded) {
       api.getAdminPayments().then((res) => { if (res.data) setPayments(res.data); setPaymentsLoaded(true); });
     }
+    if (section === "promotions" && !promoLoaded) {
+      Promise.all([api.getAdminSettings(), api.getAdminPromoKpis()]).then(([s, k]) => {
+        if (s.data) setPromoSettings(s.data);
+        if (k.data) setPromoKpis(k.data);
+        setPromoLoaded(true);
+      });
+    }
     if (section === "revenue" && !revenueLoaded) {
       api.getAdminRevenue().then((res) => { if (res.data) setRevenue(res.data); setRevenueLoaded(true); });
     }
@@ -275,7 +287,7 @@ const Admin = () => {
     if (section === "user-report" && !userReportLoaded) {
       api.getAdminUsersReport().then((res) => { if (res.data) setUserReport(res.data); setUserReportLoaded(true); });
     }
-  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, plansLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded]);
+  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, plansLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -525,6 +537,7 @@ const Admin = () => {
               {section === "plans" && renderPlans()}
               {section === "subscribers" && renderSubscribers()}
               {section === "payments" && renderPayments()}
+              {section === "promotions" && renderPromotions()}
               {section === "revenue" && renderRevenue()}
               {section === "agent-report" && renderAgentReport()}
               {section === "user-report" && renderUserReport()}
@@ -619,6 +632,65 @@ const Admin = () => {
             </div>
           </>
         )}
+      </div>
+    );
+  }
+
+  function renderPromotions() {
+    const s = promoSettings || {};
+    const k = promoKpis || {};
+    const save = async () => {
+      setPromoSaving(true);
+      const { data, error } = await api.updateAdminSettings({
+        promo_enabled: !!s.promo_enabled,
+        promo_amount: Number(s.promo_amount) || 0,
+        promo_expiry_days: Number(s.promo_expiry_days) || 0,
+      });
+      setPromoSaving(false);
+      if (error) return toast.error(String(error));
+      setPromoSettings(data);
+      toast.success("Promotion settings saved");
+    };
+    return (
+      <div className="space-y-6">
+        <h2 className="text-lg font-semibold text-foreground">Promotions</h2>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <MiniStat label="Free credits issued" value={`$${Number(k.credits_issued ?? 0).toFixed(2)}`} />
+          <MiniStat label="Free credits consumed" value={`$${Number(k.credits_consumed ?? 0).toFixed(2)}`} />
+          <MiniStat label="Conversion (Free → Paid)" value={`${k.conversion_rate ?? 0}%`} />
+          <MiniStat label="Converted / total" value={`${k.converted_users ?? 0} / ${k.total_users ?? 0}`} />
+          <MiniStat label="Avg LTV (paid users)" value={`$${Number(k.ltv ?? 0).toFixed(2)}`} />
+          <MiniStat label="Avg time to 1st purchase" value={k.avg_time_to_first_purchase_days != null ? `${k.avg_time_to_first_purchase_days} days` : "—"} />
+          <MiniStat label="CAC" value="Manual" />
+        </div>
+
+        <div className="max-w-md space-y-4 rounded-xl border border-border bg-card p-5">
+          <div className="text-sm font-semibold text-foreground">Welcome promo</div>
+          <label className="flex items-center justify-between gap-3 text-sm text-foreground">
+            <span>Promotion enabled</span>
+            <input
+              type="checkbox"
+              checked={!!s.promo_enabled}
+              onChange={(e) => setPromoSettings({ ...s, promo_enabled: e.target.checked })}
+              className="h-4 w-4 accent-primary"
+            />
+          </label>
+          <div className="space-y-1">
+            <Label>Promo amount ($)</Label>
+            <Input type="number" min={0} value={s.promo_amount ?? 0}
+              onChange={(e) => setPromoSettings({ ...s, promo_amount: e.target.value })} />
+          </div>
+          <div className="space-y-1">
+            <Label>Expiry (days, 0 = never)</Label>
+            <Input type="number" min={0} value={s.promo_expiry_days ?? 0}
+              onChange={(e) => setPromoSettings({ ...s, promo_expiry_days: e.target.value })} />
+          </div>
+          <Button onClick={save} disabled={promoSaving}>{promoSaving ? "Saving…" : "Save settings"}</Button>
+          <p className="text-xs text-muted-foreground">
+            New signups receive this credit (one-time, expiring). Turn off to stop granting it.
+          </p>
+        </div>
       </div>
     );
   }

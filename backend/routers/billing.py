@@ -6,7 +6,7 @@ from database import supabase
 from config import settings
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -19,20 +19,27 @@ def _app_base() -> str:
 
 stripe.api_key = settings.stripe_secret_key
 
+# Cost-plus pricing: each call is charged at (VAPI cost + est. Twilio carrier leg)
+# × the plan's cost_multiplier. rate_per_minute is the ADVERTISED/estimated per-minute
+# rate (multiplier × ~$0.114/min avg true cost) and the fallback when a call is
+# missing provider-cost data. Higher plans buy cheaper calls. Paid plans also grant an
+# `included_credit` (= the monthly fee) as a subscription credit each cycle.
 PLANS = [
     {
         "id": "payg",
         "name": "Pay As You Go",
         "price": 0,
-        "price_display": "$0.10/min",
+        "price_display": "~$0.35/min",
         "description": "Only pay for what you use",
         "outbound_limit": 999999,
         "inbound_limit": 999999,
         "agents_limit": 10,
-        "rate_per_minute": 0.10,
+        "rate_per_minute": 0.35,
+        "cost_multiplier": 3.00,
+        "included_credit": 0,
         "features": [
             "Unlimited calls",
-            "$0.10 per minute",
+            "~$0.35 per minute (estimated)",
             "Up to 10 AI Agents",
             "Pay only for usage",
             "No monthly commitment",
@@ -41,36 +48,42 @@ PLANS = [
     {
         "id": "starter",
         "name": "Starter",
-        "price": 2500,
-        "price_display": "$25/mo",
+        "price": 2900,
+        "price_display": "$29/mo",
         "description": "For small teams getting started",
         "outbound_limit": 100,
         "inbound_limit": 200,
         "agents_limit": 25,
-        "rate_per_minute": 0.10,
+        "rate_per_minute": 0.31,
+        "cost_multiplier": 2.70,
+        "included_credit": 29,
         "features": [
+            "$29 credit included every month",
             "100 outbound calls/mo",
             "200 inbound calls/mo",
             "Up to 25 AI Agents",
-            "$0.10 per minute",
+            "~$0.31 per minute (estimated)",
             "Email support",
         ],
     },
     {
         "id": "growth",
         "name": "Growth",
-        "price": 5000,
-        "price_display": "$50/mo",
+        "price": 7900,
+        "price_display": "$79/mo",
         "description": "For growing businesses",
         "outbound_limit": 300,
         "inbound_limit": 500,
         "agents_limit": 50,
-        "rate_per_minute": 0.10,
+        "rate_per_minute": 0.27,
+        "cost_multiplier": 2.35,
+        "included_credit": 79,
         "features": [
+            "$79 credit included every month",
             "300 outbound calls/mo",
             "500 inbound calls/mo",
             "Up to 50 AI Agents",
-            "$0.10 per minute",
+            "~$0.27 per minute (estimated)",
             "Priority support",
         ],
         "popular": True,
@@ -78,24 +91,28 @@ PLANS = [
     {
         "id": "business",
         "name": "Business",
-        "price": 10000,
-        "price_display": "$100/mo",
+        "price": 19900,
+        "price_display": "$199/mo",
         "description": "For large-scale operations",
         "outbound_limit": 500,
         "inbound_limit": 700,
         "agents_limit": 100,
-        "rate_per_minute": 0.10,
+        "rate_per_minute": 0.23,
+        "cost_multiplier": 2.25,
+        "included_credit": 199,
         "features": [
+            "$199 credit included every month",
             "500 outbound calls/mo",
             "700 inbound calls/mo",
             "Up to 100 AI Agents",
-            "$0.10 per minute",
+            "~$0.23 per minute (estimated)",
             "Dedicated account manager",
         ],
     },
 ]
 
-DEFAULT_RATE_PER_MINUTE = 0.10
+DEFAULT_RATE_PER_MINUTE = 0.35
+DEFAULT_COST_MULTIPLIER = 3.00
 
 # Monthly cost charged to the client for each Twilio phone number they provision.
 PHONE_NUMBER_MONTHLY_COST = 3.00
@@ -116,17 +133,21 @@ def get_or_create_billing(user_id: str) -> dict:
     if result.data:
         return result.data[0]
 
+    # Everyone starts on Pay As You Go (wallet-prepaid, no monthly fee). Outbound
+    # calls are gated on a positive balance, so there's no free-usage loophole.
+    payg = get_plan_by_id("payg")
     row = {
         "user_id": user_id,
-        "plan": "free",
-        "status": "trial",
-        "agents_limit": FREE_TIER["agents_limit"],
-        "outbound_limit": FREE_TIER["outbound_limit"],
-        "inbound_limit": FREE_TIER["inbound_limit"],
+        "plan": "payg",
+        "status": "active",
+        "agents_limit": payg["agents_limit"],
+        "outbound_limit": payg["outbound_limit"],
+        "inbound_limit": payg["inbound_limit"],
         "outbound_used": 0,
         "inbound_used": 0,
         "credits": 0,
-        "rate_per_minute": DEFAULT_RATE_PER_MINUTE,
+        "rate_per_minute": payg["rate_per_minute"],
+        "cost_multiplier": payg["cost_multiplier"],
         "is_active": True,
     }
     insert = supabase.table("billing").insert(row).execute()
@@ -144,15 +165,112 @@ def add_charge(user_id: str, amount: float, note: str | None = None) -> float:
     return new_total
 
 
-# ── Wallet / prepaid balance ──
+# ── Wallet / prepaid balance (credit-grants ledger) ──
+# Money is held as typed "grants" (lots) in `credit_grants`. Spending consumes them
+# in priority + soonest-expiry order: promo -> purchased -> subscription, skipping
+# expired/exhausted lots. `billing.balance` is a cached live sum of active `remaining`.
+
+_GRANT_PRIORITY = {"promo": 0, "purchased": 1, "subscription": 2}
+# Ledger kind -> grant type when a grant type isn't given explicitly.
+_KIND_TO_GRANT = {"promo": "promo", "topup": "purchased", "admin": "purchased",
+                  "refund": "purchased", "subscription": "subscription"}
+
+
+def _parse_ts(s):
+    if isinstance(s, datetime):
+        return s if s.tzinfo else s.replace(tzinfo=timezone.utc)
+    try:
+        d = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _active_grants(user_id: str) -> list[dict]:
+    """Non-expired grants with remaining > 0, ordered for consumption:
+    priority (promo->purchased->subscription), then soonest expiry, then oldest."""
+    rows = (
+        supabase.table("credit_grants")
+        .select("id, type, amount, remaining, expires_at, created_at")
+        .eq("user_id", user_id)
+        .execute().data or []
+    )
+    now = datetime.now(timezone.utc)
+    active = []
+    for g in rows:
+        if float(g.get("remaining") or 0) <= 0:
+            continue
+        exp = g.get("expires_at")
+        if exp and _parse_ts(exp) <= now:
+            continue  # expired
+        active.append(g)
+    active.sort(key=lambda g: (
+        _GRANT_PRIORITY.get(g.get("type"), 9),
+        _parse_ts(g["expires_at"]).timestamp() if g.get("expires_at") else float("inf"),
+        str(g.get("created_at") or ""),
+    ))
+    return active
+
+
+def _sync_cached_balance(user_id: str) -> float:
+    """Recompute billing.balance from active grants (updates the cache if changed)."""
+    billing = get_or_create_billing(user_id)
+    total = round(sum(float(g["remaining"]) for g in _active_grants(user_id)), 2)
+    if round(float(billing.get("balance") or 0), 2) != total:
+        supabase.table("billing").update({"balance": total}).eq("user_id", user_id).execute()
+    return total
+
 
 def get_balance(user_id: str) -> float:
-    billing = get_or_create_billing(user_id)
-    return float(billing.get("balance") or 0)
+    return _sync_cached_balance(user_id)
 
 
 def has_balance(user_id: str, min_amount: float) -> bool:
     return get_balance(user_id) >= float(min_amount)
+
+
+def _insert_notification(user_id, kind, title, body):
+    try:
+        supabase.table("notifications").insert(
+            {"user_id": user_id, "kind": kind, "title": title, "body": body}
+        ).execute()
+    except Exception:
+        pass
+
+
+_LOW_BALANCE_MSGS = {
+    10: ("Low balance — $10 left",
+         "You have about $10 in credit remaining. Add funds or subscribe to avoid interruption."),
+    5:  ("Low balance — $5 left",
+         "You have about $5 in credit remaining. Add funds or subscribe to keep your calls running."),
+    1:  ("Low balance — $1 left",
+         "You have only $1 remaining. Add a payment method to continue using our services without interruption."),
+    0:  ("Balance empty",
+         "Your credit is used up. Subscribe to a plan or add funds to keep making calls."),
+}
+
+
+def _notify_low_balance(user_id, old_balance, new_balance):
+    """Fire a one-time alert for each $10/$5/$1/$0 threshold crossed downward, deduped
+    per funding cycle (no repeat until the balance is topped up again)."""
+    crossed = [t for t in (10, 5, 1, 0) if old_balance > t >= new_balance]
+    if not crossed:
+        return
+    last_credit = (
+        supabase.table("wallet_transactions").select("created_at")
+        .eq("user_id", user_id).gt("amount", 0)
+        .order("created_at", desc=True).limit(1).execute().data
+    )
+    since = last_credit[0]["created_at"] if last_credit else None
+    for t in crossed:
+        kind = f"low_balance_{t}"
+        q = supabase.table("notifications").select("id").eq("user_id", user_id).eq("kind", kind)
+        if since:
+            q = q.gt("created_at", since)
+        if q.limit(1).execute().data:
+            continue  # already alerted since the last top-up
+        title, body = _LOW_BALANCE_MSGS[t]
+        _insert_notification(user_id, kind, title, body)
 
 
 def _record_wallet_txn(user_id, kind, amount, balance_after, description,
@@ -171,10 +289,12 @@ def _record_wallet_txn(user_id, kind, amount, balance_after, description,
         pass
 
 
-def credit_balance(user_id, amount, kind, description,
-                   stripe_session_id=None, ref_id=None) -> float:
-    """Add funds to the wallet. Idempotent on stripe_session_id (no double-credit)."""
-    amount = float(amount or 0)
+def credit_balance(user_id, amount, kind, description, stripe_session_id=None,
+                   ref_id=None, grant_type=None, expires_at=None) -> float:
+    """Add a credit grant to the wallet. Idempotent on stripe_session_id.
+    grant_type defaults from `kind` (promo->promo, topup/admin/refund->purchased,
+    subscription->subscription). expires_at is an ISO string or None (never expires)."""
+    amount = round(float(amount or 0), 2)
     if amount <= 0:
         return get_balance(user_id)
     if stripe_session_id:
@@ -184,22 +304,39 @@ def credit_balance(user_id, amount, kind, description,
         )
         if existing.data:
             return get_balance(user_id)
-    billing = get_or_create_billing(user_id)
-    new_balance = round(float(billing.get("balance") or 0) + amount, 2)
-    supabase.table("billing").update({"balance": new_balance}).eq("user_id", user_id).execute()
+    get_or_create_billing(user_id)
+    gtype = grant_type or _KIND_TO_GRANT.get(kind, "purchased")
+    supabase.table("credit_grants").insert({
+        "user_id": user_id, "type": gtype, "amount": amount, "remaining": amount,
+        "expires_at": expires_at, "source_ref": ref_id or stripe_session_id,
+    }).execute()
+    new_balance = _sync_cached_balance(user_id)
     _record_wallet_txn(user_id, kind, amount, new_balance, description, stripe_session_id, ref_id)
     return new_balance
 
 
 def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
-    """Deduct from the wallet (records a negative-amount ledger entry)."""
-    amount = round(float(amount or 0), 2)  # charge whole cents so ledger == balance delta
+    """Consume `amount` across active grants (promo -> purchased -> subscription).
+    Records the ACTUAL amount debited (balance floors at 0 — never goes negative)."""
+    amount = round(float(amount or 0), 2)
     if amount <= 0:
         return get_balance(user_id)
-    billing = get_or_create_billing(user_id)
-    new_balance = round(float(billing.get("balance") or 0) - amount, 2)
-    supabase.table("billing").update({"balance": new_balance}).eq("user_id", user_id).execute()
-    _record_wallet_txn(user_id, kind, -amount, new_balance, description, None, ref_id)
+    old_balance = _sync_cached_balance(user_id)
+    left = amount
+    for g in _active_grants(user_id):
+        if left <= 0:
+            break
+        take = round(min(float(g["remaining"]), left), 2)
+        if take <= 0:
+            continue
+        supabase.table("credit_grants").update(
+            {"remaining": round(float(g["remaining"]) - take, 2)}
+        ).eq("id", g["id"]).execute()
+        left = round(left - take, 2)
+    actual = round(amount - left, 2)
+    new_balance = _sync_cached_balance(user_id)
+    _record_wallet_txn(user_id, kind, -actual, new_balance, description, None, ref_id)
+    _notify_low_balance(user_id, old_balance, new_balance)
     return new_balance
 
 
@@ -245,14 +382,76 @@ def increment_usage(user_id: str, direction: str):
     supabase.table("billing").update({field: current + 1}).eq("user_id", user_id).execute()
 
 
-def calculate_call_cost(user_id: str, duration_seconds: int) -> float:
+def _twilio_leg(duration_seconds: int, direction: str) -> float:
+    """Estimated Twilio carrier cost for the call. Numbers are Twilio-bought and
+    imported into VAPI, so the PSTN leg is billed by Twilio and is NOT part of
+    VAPI's reported per-call cost."""
+    rate = (
+        settings.twilio_cost_per_minute_inbound
+        if direction == "inbound"
+        else settings.twilio_cost_per_minute_outbound
+    )
+    return (duration_seconds / 60.0) * float(rate)
+
+
+def calculate_call_cost(
+    user_id: str,
+    duration_seconds: int,
+    vapi_cost: float | None = None,
+    direction: str = "outbound",
+) -> tuple[float, float]:
+    """Cost-plus pricing. Returns (charge, provider_cost).
+
+    charge = provider_cost × the user's plan cost_multiplier, where provider_cost is
+    VAPI's reported call cost plus the estimated Twilio carrier leg. When VAPI cost
+    data is missing, falls back to the plan's advertised per-minute rate.
+    Charges are rounded to whole cents so per-call cost, breakdown total, wallet
+    debit and balance all reconcile exactly."""
     billing = get_or_create_billing(user_id)
+    if vapi_cost is not None:
+        provider_cost = round(float(vapi_cost) + _twilio_leg(duration_seconds, direction), 4)
+        multiplier = float(billing.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER)
+        return round(provider_cost * multiplier, 2), provider_cost
     rate = billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE
-    duration_minutes = duration_seconds / 60.0
-    # Bill in whole cents so the per-call cost, the breakdown total, the wallet
-    # debit and the balance all reconcile exactly (no sub-cent drift).
-    cost = round(duration_minutes * float(rate), 2)
-    return cost
+    return round((duration_seconds / 60.0) * float(rate), 2), 0.0
+
+
+def get_promo_config() -> dict:
+    """Promo settings. An admin-editable `platform_settings` row (Phase 4) overrides the
+    env defaults; before that table exists this gracefully falls back to env."""
+    cfg = {
+        "enabled": True,
+        "amount": float(settings.signup_bonus_credits),
+        "expiry_days": int(settings.signup_bonus_expiry_days),
+    }
+    try:
+        rows = supabase.table("platform_settings").select("*").limit(1).execute().data
+        if rows:
+            s = rows[0]
+            if s.get("promo_enabled") is not None:
+                cfg["enabled"] = bool(s["promo_enabled"])
+            if s.get("promo_amount") is not None:
+                cfg["amount"] = float(s["promo_amount"])
+            if s.get("promo_expiry_days") is not None:
+                cfg["expiry_days"] = int(s["promo_expiry_days"])
+    except Exception:
+        pass  # platform_settings not present yet -> env defaults
+    return cfg
+
+
+def _has_promo_credit(user_id: str) -> bool:
+    """True if the user already received a signup/promo credit — guards the one-time
+    welcome bonus against being granted twice (e.g. a re-run of provisioning)."""
+    existing = (
+        supabase.table("wallet_transactions")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("kind", "promo")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(existing)
 
 
 def _call_already_charged(vapi_call_id: str) -> bool:
@@ -272,17 +471,27 @@ def _call_already_charged(vapi_call_id: str) -> bool:
     return bool(existing)
 
 
-def record_call_cost(user_id: str, vapi_call_id: str, duration_seconds: int) -> float:
+def record_call_cost(
+    user_id: str,
+    vapi_call_id: str,
+    duration_seconds: int,
+    vapi_cost: float | None = None,
+    direction: str = "outbound",
+) -> float:
     """Compute the call's cost, store it on the conversation (for the Cost Breakdown),
     and debit the wallet — the debit happens exactly once per call (idempotent by the
     ledger), so both the webhook and the background sync can call this freely."""
-    cost = calculate_call_cost(user_id, duration_seconds)
+    cost, provider_cost = calculate_call_cost(user_id, duration_seconds, vapi_cost, direction)
 
     # Always keep the row's displayed cost + duration in sync (even on re-import).
-    supabase.table("conversations").update({
+    updates: dict = {
         "duration_seconds": duration_seconds,
         "call_cost": cost,
-    }).eq("vapi_call_id", vapi_call_id).execute()
+    }
+    if vapi_cost is not None:
+        updates["vapi_cost"] = round(float(vapi_cost), 4)
+        updates["provider_cost"] = provider_cost
+    supabase.table("conversations").update(updates).eq("vapi_call_id", vapi_call_id).execute()
 
     # Charge the wallet once per call.
     if cost > 0 and not _call_already_charged(vapi_call_id):
@@ -411,6 +620,16 @@ async def create_checkout(body: CheckoutRequest, user=Depends(get_current_user))
         raise HTTPException(status_code=400, detail="Invalid plan")
 
     billing = get_or_create_billing(user["user_id"])
+
+    # One plan at a time: block Stripe plan checkout while another paid plan is active.
+    current = billing.get("plan")
+    if current in PAID_PLAN_IDS and plan["id"] != current:
+        current_name = (get_plan_by_id(current) or {}).get("name", current)
+        raise HTTPException(
+            status_code=400,
+            detail=f"You're already on the {current_name} plan — unsubscribe first to change plans.",
+        )
+
     customer_id = billing.get("stripe_customer_id")
 
     if not customer_id:
@@ -491,7 +710,7 @@ class TopupRequest(BaseModel):
     cancel_url: Optional[str] = None
 
 
-TOPUP_MIN = 10.0
+TOPUP_MIN = 20.0
 TOPUP_MAX = 1000.0
 _BILLING_BASE_URL = f"{_app_base()}/dashboard/billing"
 
@@ -610,12 +829,28 @@ class SubscribeBalance(BaseModel):
     plan_id: str
 
 
+PAID_PLAN_IDS = {"starter", "growth", "business"}
+
+
 @router.post("/subscribe-with-balance")
 async def subscribe_with_balance(body: SubscribeBalance, user=Depends(get_current_user)):
-    """Activate a plan by paying its monthly price from the wallet balance."""
+    """Activate a plan by paying its monthly price from the wallet balance.
+
+    One plan at a time: while a paid plan is active, switching to any other plan
+    requires unsubscribing first (POST /billing/unsubscribe)."""
     plan = get_plan_by_id(body.plan_id)
     if not plan:
         raise HTTPException(status_code=400, detail="Invalid plan")
+
+    billing = get_or_create_billing(user["user_id"])
+    current = billing.get("plan")
+    if current in PAID_PLAN_IDS and plan["id"] != current:
+        current_name = (get_plan_by_id(current) or {}).get("name", current)
+        raise HTTPException(
+            status_code=400,
+            detail=f"You're already on the {current_name} plan — unsubscribe first to change plans.",
+        )
+
     price = round(float(plan["price"]) / 100.0, 2)  # plan["price"] is in cents
 
     # Paid plans are charged to the wallet; $0 plans (e.g. Pay As You Go) activate free.
@@ -633,11 +868,43 @@ async def subscribe_with_balance(body: SubscribeBalance, user=Depends(get_curren
         "inbound_limit": plan["inbound_limit"],
         "agents_limit": plan["agents_limit"],
         "rate_per_minute": plan.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
+        "cost_multiplier": plan.get("cost_multiplier", DEFAULT_COST_MULTIPLIER),
         "outbound_used": 0,
         "inbound_used": 0,
     }).eq("user_id", user["user_id"]).execute()
 
+    # Grant the plan's included monthly credit (= the fee) as a subscription credit that
+    # expires at the end of this cycle (consumed after promo + purchased).
+    included = float(plan.get("included_credit") or 0)
+    if included > 0:
+        expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        credit_balance(user["user_id"], included, "subscription",
+                       f"{plan['name']} included credit",
+                       grant_type="subscription", expires_at=expires)
+
     return {"data": {"plan": plan["id"], "balance": get_balance(user["user_id"])}, "error": None}
+
+
+@router.post("/unsubscribe")
+async def unsubscribe_plan(user=Depends(get_current_user)):
+    """Cancel the active paid plan and return to Pay As You Go immediately.
+    The remaining days of the current month are not refunded; the wallet is untouched."""
+    billing = get_or_create_billing(user["user_id"])
+    if billing.get("plan") not in PAID_PLAN_IDS:
+        raise HTTPException(status_code=400, detail="No active paid plan to unsubscribe from")
+
+    payg = get_plan_by_id("payg")
+    supabase.table("billing").update({
+        "plan": "payg",
+        "status": "active",
+        "outbound_limit": payg["outbound_limit"],
+        "inbound_limit": payg["inbound_limit"],
+        "agents_limit": payg["agents_limit"],
+        "rate_per_minute": payg["rate_per_minute"],
+        "cost_multiplier": payg["cost_multiplier"],
+        "current_period_end": None,
+    }).eq("user_id", user["user_id"]).execute()
+    return {"data": {"plan": "payg"}, "error": None}
 
 
 @router.get("/call-costs")

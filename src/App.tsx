@@ -15,6 +15,7 @@ import Pricing from "./pages/Pricing.tsx";
 import About from "./pages/About.tsx";
 import Login from "./pages/Login.tsx";
 import Register from "./pages/Register.tsx";
+import VerifyEmail from "./pages/VerifyEmail.tsx";
 import ResetPassword from "./pages/ResetPassword.tsx";
 import RequestAccess from "./pages/RequestAccess.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -66,6 +67,7 @@ const App = () => (
             <Route path="/about" element={<About />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/verify-email" element={<VerifyEmail />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/request-access" element={<RequestAccess />} />
 

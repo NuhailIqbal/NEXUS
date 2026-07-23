@@ -15,7 +15,7 @@ from config import settings
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 # Monthly subscription price per plan (used for MRR / revenue).
-PLAN_MONTHLY_PRICE = {"free": 0, "payg": 0, "starter": 25, "growth": 50, "business": 100}
+PLAN_MONTHLY_PRICE = {"free": 0, "payg": 0, "starter": 29, "growth": 79, "business": 199}
 
 
 def _admin_email_map():
@@ -280,6 +280,14 @@ async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_us
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+
+    # Changing the plan also syncs that plan's cost multiplier (and rate, unless the
+    # admin explicitly sent one) so cost-plus billing always matches the active plan.
+    if "plan" in updates:
+        plan_def = next((p for p in BILLING_PLANS if p["id"] == updates["plan"]), None)
+        if plan_def:
+            updates.setdefault("cost_multiplier", plan_def.get("cost_multiplier", 3.0))
+            updates.setdefault("rate_per_minute", plan_def.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE))
 
     existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
     has_row = bool(existing.data)
@@ -733,6 +741,99 @@ async def admin_stats(admin=Depends(get_admin_user)):
             "total_conversations": conversations.count or 0,
             "total_agents": agents.count or 0,
             "active_subscriptions": active_billing.count or 0,
+        },
+        "error": None,
+    }
+
+
+# ── Platform settings (promo controls) ──
+
+class PromoSettingsUpdate(BaseModel):
+    promo_enabled: Optional[bool] = None
+    promo_amount: Optional[float] = None
+    promo_expiry_days: Optional[int] = None
+
+
+def _get_settings_row() -> dict:
+    rows = supabase.table("platform_settings").select("*").limit(1).execute().data or []
+    if rows:
+        return rows[0]
+    supabase.table("platform_settings").insert({"id": 1}).execute()
+    return (supabase.table("platform_settings").select("*").limit(1).execute().data or [{}])[0]
+
+
+@router.get("/settings")
+async def get_platform_settings(admin=Depends(get_admin_user)):
+    return {"data": _get_settings_row(), "error": None}
+
+
+@router.patch("/settings")
+async def update_platform_settings(body: PromoSettingsUpdate, admin=Depends(get_admin_user)):
+    _get_settings_row()  # ensure the singleton row exists
+    updates = body.model_dump(exclude_none=True)
+    if updates:
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        supabase.table("platform_settings").update(updates).eq("id", 1).execute()
+    return {"data": _get_settings_row(), "error": None}
+
+
+@router.get("/promo-kpis")
+async def promo_kpis(admin=Depends(get_admin_user)):
+    """Free-credit funnel: issued/consumed + Free->Paid conversion, LTV, time-to-first-purchase."""
+    profiles = supabase.table("profiles").select("id, created_at").execute().data or []
+    total_users = len(profiles)
+    created_by_user = {p["id"]: p.get("created_at") for p in profiles}
+
+    # Promo credits issued vs consumed (from the promo grants).
+    grants = (
+        supabase.table("credit_grants").select("amount, remaining")
+        .eq("type", "promo").execute().data or []
+    )
+    issued = round(sum(float(g["amount"]) for g in grants), 2)
+    consumed = round(sum(float(g["amount"]) - float(g["remaining"]) for g in grants), 2)
+
+    # Real money paid = wallet top-ups (Stripe). Drives conversion / LTV / time-to-first.
+    topups = (
+        supabase.table("wallet_transactions").select("user_id, amount, created_at")
+        .eq("kind", "topup").execute().data or []
+    )
+    paid = {}  # user_id -> {"total": $, "first": ts}
+    for t in topups:
+        amt = float(t.get("amount") or 0)
+        if amt <= 0:
+            continue
+        rec = paid.setdefault(t["user_id"], {"total": 0.0, "first": None})
+        rec["total"] += amt
+        ts = t.get("created_at")
+        if ts and (rec["first"] is None or str(ts) < str(rec["first"])):
+            rec["first"] = ts
+
+    converted = len(paid)
+    conversion_rate = round(100 * converted / total_users, 1) if total_users else 0.0
+    ltv = round(sum(r["total"] for r in paid.values()) / converted, 2) if converted else 0.0
+
+    diffs = []
+    for uid, rec in paid.items():
+        c, f = created_by_user.get(uid), rec["first"]
+        if c and f:
+            try:
+                cd = datetime.fromisoformat(str(c).replace("Z", "+00:00"))
+                fd = datetime.fromisoformat(str(f).replace("Z", "+00:00"))
+                diffs.append(max(0.0, (fd - cd).total_seconds() / 86400.0))
+            except Exception:
+                pass
+    avg_ttfp = round(sum(diffs) / len(diffs), 1) if diffs else None
+
+    return {
+        "data": {
+            "total_users": total_users,
+            "credits_issued": issued,
+            "credits_consumed": consumed,
+            "converted_users": converted,
+            "conversion_rate": conversion_rate,
+            "ltv": ltv,
+            "avg_time_to_first_purchase_days": avg_ttfp,
+            "cac": None,  # manual — no ad-spend data in-app
         },
         "error": None,
     }

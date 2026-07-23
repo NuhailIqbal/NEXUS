@@ -13,7 +13,8 @@ import {
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
-const TOPUP_PRESETS = [10, 25, 50, 100];
+const TOPUP_PRESETS = [20, 50, 100, 250];
+const TOPUP_MIN = 20;
 
 type Plan = {
   id: string;
@@ -201,7 +202,7 @@ const Billing = () => {
   }, [searchParams]);
 
   const handleAddFunds = async () => {
-    if (topupAmount < 10) return toast.error("Minimum top-up is $10");
+    if (topupAmount < TOPUP_MIN) return toast.error(`Minimum top-up is $${TOPUP_MIN}`);
     setToppingUp(true);
     const { data, error } = await api.topupCheckout(topupAmount);
     setToppingUp(false);
@@ -217,6 +218,16 @@ const Billing = () => {
     setSubscribing(null);
     if (error) return toast.error(error);
     toast.success(`${plan.name} activated.`);
+    fetchAll();
+  };
+
+  const handleUnsubscribe = async () => {
+    if (!confirm("Unsubscribe and return to Pay As You Go immediately? Remaining days of your current plan are not refunded.")) return;
+    setSubscribing("unsubscribe");
+    const { error } = await api.unsubscribePlan();
+    setSubscribing(null);
+    if (error) return toast.error(error);
+    toast.success("Unsubscribed — you're back on Pay As You Go.");
     fetchAll();
   };
 
@@ -237,8 +248,12 @@ const Billing = () => {
   }
 
   const isActive = billing?.status === "active";
-  const currentPlan = billing?.plan || "free";
+  const currentPlan = billing?.plan || "payg";
   const isPayg = currentPlan === "payg";
+  // One plan at a time: while a paid plan is active, other plans can't be bought
+  // until the user unsubscribes (mirrors the backend rule).
+  const onPaidPlan = ["starter", "growth", "business"].includes(currentPlan) && isActive;
+  const currentPlanName = plans.find((p) => p.id === currentPlan)?.name || currentPlan;
 
   return (
     <div className="space-y-8">
@@ -304,9 +319,12 @@ const Billing = () => {
               <div className="mt-0.5 text-xs text-muted-foreground">
                 Used for calls, phone numbers and plans
               </div>
+              {transactions.some((t) => t.kind === "promo") && (
+                <div className="mt-1 text-xs font-medium text-primary">🎁 Welcome credit included</div>
+              )}
             </div>
           </div>
-          <Button onClick={() => { setTopupAmount(25); setShowTopup(true); }}>
+          <Button onClick={() => { setTopupAmount(50); setShowTopup(true); }}>
             <Plus className="mr-2 h-4 w-4" /> Add Funds
           </Button>
         </div>
@@ -333,10 +351,10 @@ const Billing = () => {
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="flex items-center gap-2 mb-2">
             <Clock className="h-4 w-4 text-purple-500" />
-            <span className="text-sm font-medium text-foreground">Rate Per Minute</span>
+            <span className="text-sm font-medium text-foreground">Est. Rate Per Minute</span>
           </div>
-          <div className="text-2xl font-bold text-foreground">${billing?.rate_per_minute?.toFixed(2) || "0.10"}</div>
-          <div className="text-xs text-muted-foreground mt-1">Per minute of call time</div>
+          <div className="text-2xl font-bold text-foreground">~${billing?.rate_per_minute?.toFixed(2) || "0.35"}</div>
+          <div className="text-xs text-muted-foreground mt-1">Estimated — each call is billed by its actual cost</div>
         </div>
       </div>
 
@@ -411,7 +429,7 @@ const Billing = () => {
                   ) : (
                     <>
                       <span className="text-3xl font-bold text-foreground">
-                        ${plan.rate_per_minute?.toFixed(2)}
+                        ~${plan.rate_per_minute?.toFixed(2)}
                       </span>
                       <span className="text-sm text-muted-foreground">/min</span>
                     </>
@@ -419,7 +437,7 @@ const Billing = () => {
                 </div>
                 {plan.rate_per_minute && plan.price > 0 && (
                   <div className="mt-1 text-xs text-primary font-medium">
-                    + ${plan.rate_per_minute.toFixed(2)}/min for calls
+                    + ~${plan.rate_per_minute.toFixed(2)}/min for calls
                   </div>
                 )}
                 <ul className="mt-5 space-y-2.5">
@@ -431,10 +449,39 @@ const Billing = () => {
                   ))}
                 </ul>
                 <div className="mt-6">
-                  {isCurrent ? (
+                  {isCurrent && plan.price > 0 ? (
+                    <div className="space-y-2">
+                      <Button variant="outline" className="w-full" disabled>
+                        Current Plan
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={handleUnsubscribe}
+                        disabled={subscribing === "unsubscribe"}
+                      >
+                        {subscribing === "unsubscribe" ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Unsubscribing...
+                          </>
+                        ) : (
+                          "Unsubscribe"
+                        )}
+                      </Button>
+                    </div>
+                  ) : isCurrent ? (
                     <Button variant="outline" className="w-full" disabled>
                       Current Plan
                     </Button>
+                  ) : onPaidPlan ? (
+                    <div className="text-center">
+                      <Button variant="outline" className="w-full" disabled>
+                        {plan.id === "payg" ? "Default plan" : "Unavailable"}
+                      </Button>
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Unsubscribe from {currentPlanName} first
+                      </p>
+                    </div>
                   ) : (() => {
                     const priceUsd = plan.price / 100;
                     const canAfford = (billing?.balance ?? 0) >= priceUsd;
@@ -443,7 +490,7 @@ const Billing = () => {
                         <Button
                           className="w-full"
                           variant="outline"
-                          onClick={() => { setTopupAmount(Math.max(25, Math.ceil(priceUsd))); setShowTopup(true); }}
+                          onClick={() => { setTopupAmount(Math.max(TOPUP_MIN, Math.ceil(priceUsd))); setShowTopup(true); }}
                         >
                           <Wallet className="mr-2 h-4 w-4" /> Add funds to subscribe
                         </Button>
@@ -684,17 +731,17 @@ const Billing = () => {
               <label className="mb-1.5 block text-sm font-medium text-foreground">Custom amount (USD)</label>
               <Input
                 type="number"
-                min={10}
+                min={TOPUP_MIN}
                 max={1000}
                 value={topupAmount}
                 onChange={(e) => setTopupAmount(parseFloat(e.target.value) || 0)}
               />
-              <p className="mt-1 text-xs text-muted-foreground">Minimum $10. You'll pay securely via Stripe.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Minimum ${TOPUP_MIN}. You'll pay securely via Stripe.</p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowTopup(false)}>Cancel</Button>
-            <Button onClick={handleAddFunds} disabled={toppingUp || topupAmount < 10}>
+            <Button onClick={handleAddFunds} disabled={toppingUp || topupAmount < TOPUP_MIN}>
               {toppingUp ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Redirecting…</>
               ) : (

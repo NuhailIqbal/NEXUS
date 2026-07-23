@@ -268,9 +268,71 @@ def _ensure_columns(conn) -> None:
             ON public.wallet_transactions (stripe_session_id) WHERE stripe_session_id IS NOT NULL''',
         '''CREATE INDEX IF NOT EXISTS wallet_transactions_user_id_idx
             ON public.wallet_transactions (user_id, created_at DESC)''',
-        'ALTER TABLE public.billing ALTER COLUMN rate_per_minute SET DEFAULT 0.10',
-        # Flat pricing: bump any legacy sub-$0.10 client to the current $0.10/min rate.
-        'UPDATE public.billing SET rate_per_minute = 0.10 WHERE rate_per_minute IS NULL OR rate_per_minute < 0.10',
+        # Credit grants (typed lots): promo -> purchased -> subscription, priority + expiry.
+        '''CREATE TABLE IF NOT EXISTS public.credit_grants (
+            id uuid DEFAULT gen_random_uuid() NOT NULL,
+            user_id uuid NOT NULL,
+            type text NOT NULL,
+            amount numeric(10,2) NOT NULL,
+            remaining numeric(10,2) NOT NULL,
+            expires_at timestamp with time zone,
+            source_ref text,
+            created_at timestamp with time zone DEFAULT now() NOT NULL
+        )''',
+        '''CREATE INDEX IF NOT EXISTS credit_grants_user_idx
+            ON public.credit_grants (user_id, created_at)''',
+        # In-app notifications (low-balance alerts, etc.)
+        '''CREATE TABLE IF NOT EXISTS public.notifications (
+            id uuid DEFAULT gen_random_uuid() NOT NULL,
+            user_id uuid NOT NULL,
+            kind text NOT NULL,
+            title text NOT NULL,
+            body text,
+            read boolean DEFAULT false,
+            created_at timestamp with time zone DEFAULT now() NOT NULL
+        )''',
+        '''CREATE INDEX IF NOT EXISTS notifications_user_idx
+            ON public.notifications (user_id, created_at DESC)''',
+        # Single-row admin platform settings (promo controls).
+        '''CREATE TABLE IF NOT EXISTS public.platform_settings (
+            id integer PRIMARY KEY DEFAULT 1,
+            promo_enabled boolean DEFAULT true,
+            promo_amount numeric(10,2) DEFAULT 20.00,
+            promo_expiry_days integer DEFAULT 60,
+            updated_at timestamp with time zone DEFAULT now()
+        )''',
+        "INSERT INTO public.platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        # Email verification tokens (block login until the email is confirmed).
+        '''CREATE TABLE IF NOT EXISTS public.email_verification_tokens (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id uuid NOT NULL,
+            token text UNIQUE NOT NULL,
+            used boolean NOT NULL DEFAULT false,
+            expires_at timestamptz NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )''',
+        # One-time backfill: move each user's existing wallet balance into a 'purchased'
+        # grant. Idempotent — skips any user who already has grants.
+        '''INSERT INTO public.credit_grants (user_id, type, amount, remaining, source_ref)
+           SELECT user_id, 'purchased', balance, balance, 'migration'
+           FROM public.billing
+           WHERE COALESCE(balance,0) > 0
+             AND user_id NOT IN (SELECT user_id FROM public.credit_grants)''',
+        'ALTER TABLE public.billing ALTER COLUMN rate_per_minute SET DEFAULT 0.35',
+        # Cost-plus pricing: everyone defaults to Pay As You Go; legacy 'free' trial rows move to payg.
+        "UPDATE public.billing SET plan = 'payg', status = 'active', outbound_limit = 999999, inbound_limit = 999999 WHERE plan = 'free'",
+        # Sync each plan's cost multiplier to the current pricing. Transitions the fresh
+        # default (3.00) AND the prior generation (2.75/2.50) once; leaves any other
+        # (admin-customized) value alone.
+        "UPDATE public.billing SET cost_multiplier = 2.70 WHERE plan = 'starter' AND cost_multiplier IN (3.00, 2.75)",
+        "UPDATE public.billing SET cost_multiplier = 2.35 WHERE plan = 'growth' AND cost_multiplier IN (3.00, 2.50)",
+        "UPDATE public.billing SET cost_multiplier = 2.25 WHERE plan = 'business' AND cost_multiplier = 3.00",
+        # Sync advertised/fallback rates to current pricing: transitions legacy <=0.10 and
+        # the prior generation (0.32/0.29/0.26). Custom rates untouched.
+        "UPDATE public.billing SET rate_per_minute = 0.35 WHERE plan = 'payg' AND rate_per_minute <= 0.10",
+        "UPDATE public.billing SET rate_per_minute = 0.31 WHERE plan = 'starter' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.32)",
+        "UPDATE public.billing SET rate_per_minute = 0.27 WHERE plan = 'growth' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.29)",
+        "UPDATE public.billing SET rate_per_minute = 0.23 WHERE plan = 'business' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.26)",
     ]
     for stmt in statements:
         try:

@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS public.password_reset_tokens (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.email_verification_tokens (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    token       text UNIQUE NOT NULL,
+    used        boolean NOT NULL DEFAULT false,
+    expires_at  timestamptz NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
 
 
 --
@@ -276,9 +285,10 @@ CREATE TABLE IF NOT EXISTS public.billing (
     agents_limit integer DEFAULT 10,
     credits integer DEFAULT 0,
     is_active boolean DEFAULT true,
-    rate_per_minute numeric(6,4) DEFAULT 0.10,
+    rate_per_minute numeric(6,4) DEFAULT 0.35,
     total_charges numeric(10,2) DEFAULT 0.00,
-    balance numeric(10,2) DEFAULT 0.00
+    balance numeric(10,2) DEFAULT 0.00,
+    cost_multiplier numeric(4,2) DEFAULT 3.00
 );
 
 
@@ -306,6 +316,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS wallet_transactions_stripe_session_id_key
 
 CREATE INDEX IF NOT EXISTS wallet_transactions_user_id_idx
     ON public.wallet_transactions (user_id, created_at DESC);
+
+--
+-- Name: credit_grants; Type: TABLE
+-- Wallet money split into typed "grants" (lots). Spending consumes grants in
+-- priority + soonest-expiry order: promo -> purchased -> subscription. billing.balance
+-- is kept as a cached live sum of non-expired `remaining`. type: promo|purchased|subscription.
+--
+CREATE TABLE IF NOT EXISTS public.credit_grants (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    type text NOT NULL,
+    amount numeric(10,2) NOT NULL,
+    remaining numeric(10,2) NOT NULL,
+    expires_at timestamp with time zone,
+    source_ref text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS credit_grants_user_idx
+    ON public.credit_grants (user_id, created_at);
+
+--
+-- Name: notifications; Type: TABLE
+-- In-app notifications (e.g. low-balance alerts). kind examples: low_balance_10/5/1/0.
+--
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    kind text NOT NULL,
+    title text NOT NULL,
+    body text,
+    read boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS notifications_user_idx
+    ON public.notifications (user_id, created_at DESC);
+
+--
+-- Name: platform_settings; Type: TABLE
+-- Single-row (id=1) admin-editable platform config (promo controls).
+--
+CREATE TABLE IF NOT EXISTS public.platform_settings (
+    id integer PRIMARY KEY DEFAULT 1,
+    promo_enabled boolean DEFAULT true,
+    promo_amount numeric(10,2) DEFAULT 20.00,
+    promo_expiry_days integer DEFAULT 60,
+    updated_at timestamp with time zone DEFAULT now()
+);
 
 
 --
@@ -354,6 +413,8 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     transferred_to text,
     stereo_recording_url text,
     transcript_messages jsonb DEFAULT '[]'::jsonb,
+    vapi_cost numeric(8,4) DEFAULT 0,
+    provider_cost numeric(8,4) DEFAULT 0,
     CONSTRAINT conversations_direction_check CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))
 );
 

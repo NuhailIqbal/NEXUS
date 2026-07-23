@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # Twilio (platform account) — one-time server config; used to auto-purchase numbers
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
+    # Estimated Twilio carrier cost per minute (numbers are Twilio-bought / VAPI-imported,
+    # so the PSTN leg is billed by Twilio and NOT included in VAPI's per-call cost).
+    twilio_cost_per_minute_outbound: float = 0.014
+    twilio_cost_per_minute_inbound: float = 0.0085
 
     # Admin
     admin_emails: str = ""  # comma-separated admin emails
@@ -79,6 +83,18 @@ class Settings(BaseSettings):
     # Public URL of the FRONTEND app, used to build Stripe redirect (success/cancel) URLs
     # so users return to the deployed site, not localhost. e.g. https://app.edmnexus.ai
     public_app_url: str = ""
+    # One-time welcome bonus (wallet dollars) granted to every NEW user on signup, so they
+    # can set up + test an agent before reloading. Set to 0 to disable the promo.
+    # (Admin platform_settings, when present, overrides these at runtime.)
+    signup_bonus_credits: float = 20.0
+    signup_bonus_expiry_days: int = 60  # promo credit expires this many days after signup
+
+    # System (transactional) email — platform-level Brevo key used for signup/verification
+    # emails (NOT a per-user integration). If empty, verification links are logged/returned
+    # for dev instead of emailed.
+    system_email_api_key: str = ""
+    system_email_from: str = "noreply@edmnexus.ai"
+    system_email_from_name: str = "EDM Nexus"
 
     @property
     def admin_email_list(self) -> list[str]:

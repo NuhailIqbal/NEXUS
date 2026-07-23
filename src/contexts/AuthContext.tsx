@@ -13,7 +13,7 @@ interface AuthContextType {
   session: { access_token: string } | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, fullName?: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, fullName?: string) => Promise<{ error: string | null; pending?: boolean; devVerifyUrl?: string }>;
   signOut: () => Promise<void>;
 }
 
@@ -93,11 +93,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const { data, error } = await api.register({ email, password, full_name: fullName });
-    if (error || !data?.access_token) return { error: error || "Registration failed" };
-    // Account created but intentionally NOT signed in — the user must log in
-    // explicitly on the login page.
-    return { error: null };
+    const { data, error } = await api.register({
+      email,
+      password,
+      full_name: fullName,
+      app_url: window.location.origin,
+    });
+    if (error) return { error };
+    // Account created UNVERIFIED — the user must click the emailed link before they
+    // can log in. Surface the pending state (+ a dev link when no email was sent).
+    return { error: null, pending: true, devVerifyUrl: data?.dev_verify_url };
   };
 
   const signOut = async () => {

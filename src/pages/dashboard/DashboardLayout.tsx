@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
+import LowBalanceBanner from "@/components/LowBalanceBanner";
 import Logo from "@/components/Logo";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
 import {
@@ -186,6 +187,7 @@ const DashboardLayout = () => {
         </header>
 
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <LowBalanceBanner />
           <Outlet />
         </main>
       </div>

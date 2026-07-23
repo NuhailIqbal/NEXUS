@@ -337,7 +337,9 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
     if not check_call_quota(user["user_id"], "outbound"):
-        raise HTTPException(status_code=403, detail="Outbound call limit reached. Upgrade your plan for more calls.")
+        if get_balance(user["user_id"]) <= 0:
+            raise HTTPException(status_code=402, detail="Your balance is empty. Add funds or subscribe to keep making calls.")
+        raise HTTPException(status_code=403, detail="Monthly outbound call limit reached for your plan.")
 
     agent = (
         supabase.table("ai_agents")
@@ -524,7 +526,9 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
     if not check_call_quota(user["user_id"], "outbound"):
-        raise HTTPException(status_code=403, detail="Outbound call limit reached. Upgrade your plan for more calls.")
+        if get_balance(user["user_id"]) <= 0:
+            raise HTTPException(status_code=402, detail="Your balance is empty. Add funds or subscribe to keep making calls.")
+        raise HTTPException(status_code=403, detail="Monthly outbound call limit reached for your plan.")
 
     if not camp.get("list_id"):
         raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")

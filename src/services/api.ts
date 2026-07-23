@@ -77,8 +77,10 @@ function adminPatch<T = any>(path: string, body: any) {
 
 export const api = {
   // Auth — each takes a single object payload (AuthContext calls api.login({ email, password }))
-  register: (data: { email: string; password: string; full_name?: string }) => post("/auth/register", data),
+  register: (data: { email: string; password: string; full_name?: string; app_url?: string }) => post("/auth/register", data),
   login: (data: { email: string; password: string }) => post("/auth/login", data),
+  verifyEmail: (token: string) => post("/auth/verify-email", { token }),
+  resendVerification: (email: string, app_url?: string) => post("/auth/resend-verification", { email, app_url }),
   getMe: () => get("/auth/me"),
 
   // Agents
@@ -237,7 +239,12 @@ export const api = {
   }),
   topupConfirm: (session_id: string) => post("/billing/topup/confirm", { session_id }),
   subscribeWithBalance: (plan_id: string) => post("/billing/subscribe-with-balance", { plan_id }),
+  unsubscribePlan: () => post("/billing/unsubscribe"),
   getWalletTransactions: () => get("/billing/transactions"),
+
+  // Notifications
+  getNotifications: () => get("/notifications"),
+  markNotificationsRead: (id?: string) => post("/notifications/read", id ? { id } : {}),
 
   // Admin
   adminLogin: (username: string, password: string) => post("/admin/login", { username, password }),
@@ -250,6 +257,9 @@ export const api = {
   getAdminRevenue: () => adminGet("/admin/revenue"),
   getAdminAgentsReport: () => adminGet("/admin/agents-report"),
   getAdminUsersReport: () => adminGet("/admin/users-report"),
+  getAdminSettings: () => adminGet("/admin/settings"),
+  updateAdminSettings: (data: any) => adminPatch("/admin/settings", data),
+  getAdminPromoKpis: () => adminGet("/admin/promo-kpis"),
   getAdminUser: (id: string) => adminGet(`/admin/users/${id}`),
   updateAdminUser: (id: string, data: any) => adminPatch(`/admin/users/${id}`, data),
   deleteAdminUser: (id: string) => request(`/admin/users/${id}`, { method: "DELETE", headers: getAdminAuthHeader() }),

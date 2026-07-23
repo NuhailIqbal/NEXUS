@@ -14,6 +14,8 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [needsVerify, setNeedsVerify] = useState(false);
+  const [resending, setResending] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
   const { user, signIn } = useAuth();
@@ -25,13 +27,28 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setNeedsVerify(false);
     const { error } = await signIn(email, password);
     setLoading(false);
     if (error) {
+      // Backend returns a "verify your email" 403 for unverified accounts.
+      if (/verify your email/i.test(error)) setNeedsVerify(true);
       toast({ title: "Sign in failed", description: error, variant: "destructive" });
     } else {
       navigate("/dashboard");
     }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    const { data } = await api.resendVerification(email, window.location.origin);
+    setResending(false);
+    toast({
+      title: "Verification email sent",
+      description: data?.dev_verify_url
+        ? `Dev link: ${data.dev_verify_url}`
+        : `We sent a fresh link to ${email}.`,
+    });
   };
 
   const handleForgotPassword = async () => {
@@ -109,6 +126,25 @@ const Login = () => {
                 Sign In <ArrowRight size={16} />
               </Button>
             </form>
+
+            {needsVerify && (
+              <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-center">
+                <p className="text-xs text-muted-foreground mb-2">
+                  Your email isn't verified yet. Check your inbox, or resend the link.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleResend}
+                  disabled={resending}
+                  className="gap-2"
+                >
+                  {resending ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Resend verification email
+                </Button>
+              </div>
+            )}
 
             <div className="mt-6 pt-6 border-t border-border text-center space-y-3">
               <p className="text-sm text-muted-foreground">

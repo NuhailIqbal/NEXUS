@@ -171,6 +171,27 @@ def _extract_transcript_messages(payload: dict) -> list[dict]:
     return out
 
 
+def _extract_vapi_cost(payload: dict) -> float | None:
+    """VAPI's reported cost for the call (its own stack only — the Twilio carrier
+    leg is billed separately and estimated at charge time)."""
+    msg = payload.get("message", {})
+    call_obj = msg.get("call", {})
+    for src in (msg, call_obj):
+        val = src.get("cost")
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+        breakdown = src.get("costBreakdown")
+        if isinstance(breakdown, dict) and breakdown.get("total") is not None:
+            try:
+                return float(breakdown["total"])
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 def _extract_duration_seconds(payload: dict) -> int | None:
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
@@ -266,7 +287,9 @@ def import_vapi_call(call: dict, user_id: str) -> str:
 
     # Set the displayed call_cost and charge the wallet once (idempotent).
     if dur:
-        record_call_cost(user_id, vapi_call_id, dur)
+        direction = "inbound" if "inbound" in (call.get("type") or "").lower() else "outbound"
+        record_call_cost(user_id, vapi_call_id, dur,
+                         vapi_cost=_extract_vapi_cost(payload), direction=direction)
     return result
 
 
@@ -421,7 +444,9 @@ async def _handle_call_ended(payload: dict):
     if user_id and duration_seconds:
         dur_int = int(float(duration_seconds))
         if dur_int > 0:
-            cost = record_call_cost(user_id, vapi_call_id, dur_int)
+            direction = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
+            cost = record_call_cost(user_id, vapi_call_id, dur_int,
+                                    vapi_cost=_extract_vapi_cost(payload), direction=direction)
             logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
 
     asyncio.create_task(_post_call_ai(vapi_call_id, transcript, conv_id))

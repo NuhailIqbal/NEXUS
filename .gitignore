@@ -46,3 +46,6 @@ venv/
 # Tooling / local
 .claude/
 test-results/
+
+# Playwright test screenshots (regenerable output)
+tests/screenshots/
