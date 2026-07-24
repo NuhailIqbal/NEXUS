@@ -1,5 +1,9 @@
+import asyncio
+import smtplib
 import httpx
 import logging
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from database import supabase
 from services.encryption import decrypt_config
 from config import settings
@@ -7,30 +11,35 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+def _send_sync(msg: MIMEMultipart, to: str) -> None:
+    with smtplib.SMTP(settings.system_smtp_host, settings.system_smtp_port, timeout=15) as server:
+        server.starttls()
+        server.login(settings.system_smtp_username, settings.system_smtp_password)
+        server.send_message(msg)
+
+
 async def send_system_email(to: str, subject: str, html: str, text: str = "") -> bool:
-    """Send a transactional email from the PLATFORM (e.g. email verification), using the
-    system Brevo key — not a per-user integration. Returns True if actually sent; False
-    (dev fallback) if no system key is configured (caller should surface the link)."""
+    """Send a transactional email from the PLATFORM (e.g. email verification) directly via
+    smtplib (Gmail SMTP) — not a per-user integration. Returns True if actually sent; False
+    (dev fallback) if no SMTP credentials are configured (caller should surface the link)."""
     if not to or "@" not in to:
         raise ValueError(f"Invalid email address: '{to}'")
-    api_key = settings.system_email_api_key
-    if not api_key:
-        logger.warning("system_email_api_key not set — email to %s NOT sent (dev fallback).", to)
+    if not settings.system_smtp_configured:
+        logger.warning("system SMTP credentials not set — email to %s NOT sent (dev fallback).", to)
         return False
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            "https://api.brevo.com/v3/smtp/email",
-            headers={"api-key": api_key, "Content-Type": "application/json"},
-            json={
-                "sender": {"name": settings.system_email_from_name, "email": settings.system_email_from},
-                "to": [{"email": to}],
-                "subject": subject,
-                "htmlContent": html,
-                "textContent": text or " ",
-            },
-        )
-        if resp.status_code not in (200, 201, 202):
-            raise ValueError(f"Brevo API error {resp.status_code}: {resp.text[:200]}")
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{settings.system_email_from_name} <{settings.system_email_from}>"
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.attach(MIMEText(text or " ", "plain"))
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        await asyncio.to_thread(_send_sync, msg, to)
+    except (smtplib.SMTPException, OSError) as e:
+        raise ValueError(f"SMTP send to {to} failed: {e}") from e
+
     logger.info("System email sent to %s (subject: %s)", to, subject)
     return True
 

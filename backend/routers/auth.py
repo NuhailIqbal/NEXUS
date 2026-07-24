@@ -144,7 +144,7 @@ async def register(body: RegisterBody):
     _provision_user_rows(user["id"], body.full_name)  # profile + billing (no promo yet)
 
     url, sent = await _issue_verification(user["id"], email, body.app_url)
-    data = {"pending_verification": True, "email": email}
+    data = {"pending_verification": True, "email": email, "email_sent": sent}
     if not sent:
         data["dev_verify_url"] = url  # dev fallback when no system email key is configured
     return {"data": data, "error": None}
@@ -208,6 +208,7 @@ async def resend_verification(body: ResendBody):
     data = {"ok": True}
     if u and not u.get("email_confirmed_at"):
         url, sent = await _issue_verification(u["id"], email, body.app_url)
+        data["email_sent"] = sent
         if not sent:
             data["dev_verify_url"] = url
     return {"data": data, "error": None}

@@ -43,11 +43,17 @@ const Login = () => {
     setResending(true);
     const { data } = await api.resendVerification(email, window.location.origin);
     setResending(false);
+    if (data?.email_sent === false && data?.dev_verify_url) {
+      toast({
+        title: "Email could not be sent",
+        description: `Dev link: ${data.dev_verify_url}`,
+        variant: "destructive",
+      });
+      return;
+    }
     toast({
       title: "Verification email sent",
-      description: data?.dev_verify_url
-        ? `Dev link: ${data.dev_verify_url}`
-        : `We sent a fresh link to ${email}.`,
+      description: `We sent a fresh link to ${email}.`,
     });
   };
 

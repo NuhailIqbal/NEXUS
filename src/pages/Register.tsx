@@ -43,6 +43,14 @@ const Register = () => {
     const { data } = await api.resendVerification(email, window.location.origin);
     setResending(false);
     if (data?.dev_verify_url) setDevVerifyUrl(data.dev_verify_url);
+    if (data?.email_sent === false) {
+      toast({
+        title: "Email could not be sent",
+        description: "SMTP is not configured — use the dev verification link below.",
+        variant: "destructive",
+      });
+      return;
+    }
     toast({ title: "Verification email sent", description: `We re-sent the link to ${email}.` });
   };
 
@@ -69,7 +77,7 @@ const Register = () => {
 
               {devVerifyUrl && (
                 <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-left">
-                  <p className="text-xs text-amber-500 font-medium mb-1">Dev mode — no email configured</p>
+                  <p className="text-xs text-amber-500 font-medium mb-1">Email could not be sent — use this link instead</p>
                   <a href={devVerifyUrl} className="text-xs text-primary break-all hover:underline">
                     {devVerifyUrl}
                   </a>

@@ -1,5 +1,6 @@
-import os
+import logging
 from pathlib import Path
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -89,12 +90,30 @@ class Settings(BaseSettings):
     signup_bonus_credits: float = 20.0
     signup_bonus_expiry_days: int = 60  # promo credit expires this many days after signup
 
-    # System (transactional) email — platform-level Brevo key used for signup/verification
-    # emails (NOT a per-user integration). If empty, verification links are logged/returned
-    # for dev instead of emailed.
-    system_email_api_key: str = ""
+    # System (transactional) email — sent directly via Python's smtplib (NOT a per-user
+    # integration), used for signup/verification emails. If no username/password is set,
+    # verification links are logged/returned for dev instead of emailed.
+    system_smtp_host: str = "smtp.gmail.com"
+    system_smtp_port: int = 587
+    system_smtp_username: str = ""
+    system_smtp_password: str = ""  # must be a Gmail App Password, not the account password
+    # Gmail rejects a From header that isn't the authenticated account (or a configured
+    # "Send As" alias) — keep this equal to system_smtp_username unless you've set one up.
     system_email_from: str = "noreply@edmnexus.ai"
     system_email_from_name: str = "EDM Nexus"
+
+    @model_validator(mode="after")
+    def _normalize_smtp_from(self) -> "Settings":
+        # Gmail rejects a From address that doesn't match the authenticated account.
+        if self.system_smtp_username and (
+            not self.system_email_from or self.system_email_from == "noreply@edmnexus.ai"
+        ):
+            self.system_email_from = self.system_smtp_username
+        return self
+
+    @property
+    def system_smtp_configured(self) -> bool:
+        return bool(self.system_smtp_username and self.system_smtp_password)
 
     @property
     def admin_email_list(self) -> list[str]:
@@ -111,11 +130,21 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+_log = logging.getLogger(__name__)
+if settings.system_smtp_configured:
+    _log.info(
+        "System SMTP ready (%s via %s:%s)",
+        settings.system_email_from,
+        settings.system_smtp_host,
+        settings.system_smtp_port,
+    )
+else:
+    _log.warning(
+        "System SMTP not configured — verification emails will return dev links instead of sending"
+    )
 
 # Startup checks — warn but don't block if optional services aren't configured yet.
 if settings.is_production:
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
     if not settings.vapi_webhook_secret:
         _log.warning("VAPI_WEBHOOK_SECRET not set — VAPI webhook signature verification is disabled")
     if not settings.cors_origins or "localhost" in settings.cors_origins:
