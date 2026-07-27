@@ -1,37 +1,40 @@
 // Admin "view as user" (impersonation) helpers.
 //
-// When an admin impersonates a user we swap the stored auth token for the
-// user's freshly-minted token, backing up the admin's own token so it can be
-// restored on exit. A full page reload is used so every query refetches as the
-// impersonated user with no stale state.
+// The admin portal (admin.edmnexus.ai) and the main app (edmnexus.ai) are different origins in
+// production, so localStorage is NOT shared between them. Starting an impersonated session hands
+// the token to the main app via a URL (read once on load by AuthContext, then stripped from the
+// address bar) instead of writing directly into localStorage from the admin origin. Exiting just
+// clears the dashboard's own impersonation state and sends the browser back to the admin origin —
+// the admin's own session was never touched, so there's nothing to restore.
+
+import { mainAppOrigin, adminOrigin } from "@/lib/adminHost";
 
 const TOKEN_KEY = "nexus_token";            // must match api.ts
-const RETURN_KEY = "nexus_impersonator_token";
 const FLAG_KEY = "nexus_impersonating";      // holds the impersonated user's email
 
-/** Install the impersonation token into shared storage WITHOUT navigating.
- *  Used when opening the impersonated dashboard in a new tab. */
-export function prepImpersonation(token: string, email: string) {
-  // Only back up the caller's token the FIRST time — if we're already
-  // impersonating (e.g. admin re-entered the portal and picked another user),
-  // keep the original backup so Exit still restores the real admin session.
-  if (!localStorage.getItem(FLAG_KEY)) {
-    localStorage.setItem(RETURN_KEY, localStorage.getItem(TOKEN_KEY) || "");
-  }
-  localStorage.setItem(FLAG_KEY, email);
-  localStorage.setItem(TOKEN_KEY, token);
+function impersonationUrl(token: string, email: string): string {
+  const params = new URLSearchParams({ impersonate_token: token, impersonate_email: email });
+  return `${mainAppOrigin()}/dashboard/quick-setup?${params.toString()}`;
+}
+
+/** Begin impersonating in a given window/tab (used for the "open in new tab" flow). */
+export function openImpersonation(w: Window, token: string, email: string) {
+  w.location.href = impersonationUrl(token, email);
 }
 
 /** Begin impersonating in the CURRENT tab (fallback when a new tab is blocked). */
 export function startImpersonation(token: string, email: string) {
-  prepImpersonation(token, email);
-  window.location.href = "/dashboard/quick-setup";
+  window.location.href = impersonationUrl(token, email);
+}
+
+/** Called by AuthContext on mount when it finds `impersonate_token` in the URL. */
+export function markImpersonating(email: string) {
+  localStorage.setItem(FLAG_KEY, email);
 }
 
 /** Clear impersonation bookkeeping WITHOUT touching the auth token or redirecting.
  *  Used by sign-out / login / expiry so a stale flag never bleeds into another session. */
 export function clearImpersonation() {
-  localStorage.removeItem(RETURN_KEY);
   localStorage.removeItem(FLAG_KEY);
 }
 
@@ -44,12 +47,10 @@ export function isImpersonating(): boolean {
   return !!localStorage.getItem(FLAG_KEY);
 }
 
-/** End impersonation: restore the admin's token (if any) and return to the admin portal. */
+/** End impersonation: log out of the impersonated dashboard session and return to the admin
+ *  portal. The admin's own session lives entirely on the admin origin and was never disturbed. */
 export function stopImpersonation() {
-  const prev = localStorage.getItem(RETURN_KEY);
-  if (prev) localStorage.setItem(TOKEN_KEY, prev);
-  else localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(RETURN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(FLAG_KEY);
-  window.location.href = "/nexus-admin";
+  window.location.href = adminOrigin();
 }

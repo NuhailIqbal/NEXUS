@@ -5,6 +5,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { isAdminHost } from "@/lib/adminHost";
 import Index from "./pages/Index.tsx";
 import Features from "./pages/Features.tsx";
 import Technology from "./pages/Technology.tsx";
@@ -48,62 +49,73 @@ import {
 
 const queryClient = new QueryClient();
 
-const App = () => (
-  <ThemeProvider attribute="class" defaultTheme="dark" enableSystem storageKey="nexus-theme">
-    <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <AuthProvider>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/features" element={<Features />} />
-            <Route path="/technology" element={<Technology />} />
-            <Route path="/advertisers" element={<Advertisers />} />
-            <Route path="/publishers" element={<Publishers />} />
-            <Route path="/use-cases" element={<UseCases />} />
-            <Route path="/pricing" element={<Pricing />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            <Route path="/verify-email" element={<VerifyEmail />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
-            <Route path="/request-access" element={<RequestAccess />} />
+const App = () => {
+  const adminHost = isAdminHost();
 
-            <Route path="/dashboard" element={<DashboardLayout />}>
-              <Route index element={<DashboardIndex />} />
-              <Route path="quick-setup" element={<QuickSetup />} />
-              <Route path="ai-agents" element={<AIAgents />} />
-              <Route path="ai-agents/create" element={<CreateAIAgent />} />
-              <Route path="ai-voices" element={<AIVoices />} />
-              <Route path="conversations" element={<Conversations />} />
-              <Route path="profile" element={<Profile />} />
-              <Route path="support" element={<Support />} />
-              <Route path="database/contacts" element={<Contacts />} />
-              <Route path="database/lists" element={<Lists />} />
-              <Route path="database/custom-fields" element={<CustomFields />} />
-              <Route path="telephony/outbound" element={<Outbound />} />
-              <Route path="telephony/campaigns" element={<Outbound />} />
-              <Route path="telephony/inbound" element={<Inbound />} />
-              <Route path="telephony/inbound-logs" element={<InboundLogs />} />
-              <Route path="telephony/phone-numbers" element={<PhoneNumbers />} />
-              <Route path="analytics/channel" element={<AnalyticsChannel />} />
-              <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
-              <Route path="analytics/scenario" element={<AnalyticsScenario />} />
-              <Route path="analytics/flow" element={<AnalyticsFlow />} />
-              <Route path="billing" element={<Billing />} />
+  return (
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem storageKey="nexus-theme">
+      <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <AuthProvider>
+            {adminHost ? (
+              // admin.edmnexus.ai serves only the admin portal — it manages its own
+              // internal sections via state, not sub-routes, so a single catch-all works.
+              <Routes>
+                <Route path="*" element={<Admin />} />
+              </Routes>
+            ) : (
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/features" element={<Features />} />
+                <Route path="/technology" element={<Technology />} />
+                <Route path="/advertisers" element={<Advertisers />} />
+                <Route path="/publishers" element={<Publishers />} />
+                <Route path="/use-cases" element={<UseCases />} />
+                <Route path="/pricing" element={<Pricing />} />
+                <Route path="/about" element={<About />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
+                <Route path="/verify-email" element={<VerifyEmail />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/request-access" element={<RequestAccess />} />
 
-            </Route>
+                <Route path="/dashboard" element={<DashboardLayout />}>
+                  <Route index element={<DashboardIndex />} />
+                  <Route path="quick-setup" element={<QuickSetup />} />
+                  <Route path="ai-agents" element={<AIAgents />} />
+                  <Route path="ai-agents/create" element={<CreateAIAgent />} />
+                  <Route path="ai-voices" element={<AIVoices />} />
+                  <Route path="conversations" element={<Conversations />} />
+                  <Route path="profile" element={<Profile />} />
+                  <Route path="support" element={<Support />} />
+                  <Route path="database/contacts" element={<Contacts />} />
+                  <Route path="database/lists" element={<Lists />} />
+                  <Route path="database/custom-fields" element={<CustomFields />} />
+                  <Route path="telephony/outbound" element={<Outbound />} />
+                  <Route path="telephony/campaigns" element={<Outbound />} />
+                  <Route path="telephony/inbound" element={<Inbound />} />
+                  <Route path="telephony/inbound-logs" element={<InboundLogs />} />
+                  <Route path="telephony/phone-numbers" element={<PhoneNumbers />} />
+                  <Route path="analytics/channel" element={<AnalyticsChannel />} />
+                  <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
+                  <Route path="analytics/scenario" element={<AnalyticsScenario />} />
+                  <Route path="analytics/flow" element={<AnalyticsFlow />} />
+                  <Route path="billing" element={<Billing />} />
 
-            <Route path="/nexus-admin" element={<Admin />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </AuthProvider>
-      </BrowserRouter>
-    </TooltipProvider>
-    </QueryClientProvider>
-  </ThemeProvider>
-);
+                </Route>
+
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            )}
+          </AuthProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
+  );
+};
 
 export default App;

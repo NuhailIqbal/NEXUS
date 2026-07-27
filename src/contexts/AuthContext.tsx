@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { api, getStoredToken, setStoredToken } from "@/services/api";
-import { clearImpersonation } from "@/lib/impersonation";
+import { clearImpersonation, markImpersonating } from "@/lib/impersonation";
 
 interface AuthUser {
   id: string;
@@ -46,6 +46,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // On load, if we have a stored token, resolve the current user.
   useEffect(() => {
+    // Admin "view as user" handoff: admin.edmnexus.ai is a different origin than the
+    // dashboard in production, so the impersonation token arrives via URL instead of
+    // shared localStorage. Install it, then strip it from the address bar immediately.
+    const params = new URLSearchParams(window.location.search);
+    const impersonateToken = params.get("impersonate_token");
+    const impersonateEmail = params.get("impersonate_email");
+    if (impersonateToken && impersonateEmail) {
+      setStoredToken(impersonateToken);
+      markImpersonating(impersonateEmail);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
     const token = getStoredToken();
     if (!token) {
       setLoading(false);

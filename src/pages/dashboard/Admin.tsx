@@ -17,7 +17,7 @@ import { api, ADMIN_TOKEN_KEY } from "@/services/api";
 import { toast } from "sonner";
 import Logo from "@/components/Logo";
 import { cn } from "@/lib/utils";
-import { startImpersonation, prepImpersonation } from "@/lib/impersonation";
+import { startImpersonation, openImpersonation } from "@/lib/impersonation";
 import ThemeToggle from "@/components/ThemeToggle";
 
 type AdminUser = {
@@ -367,17 +367,17 @@ const Admin = () => {
 
   const handleImpersonate = async (userId: string, email: string) => {
     // Open the blank tab synchronously (inside the click) so the popup blocker
-    // doesn't kill it after the await. We point it to the dashboard once the
-    // impersonation token is installed in shared localStorage.
+    // doesn't kill it after the await. The admin portal and the dashboard are
+    // different origins in production, so the token is handed off via URL
+    // (openImpersonation), not shared localStorage.
     const w = window.open("about:blank", "_blank");
     const { data, error } = await api.impersonateUser(userId);
     if (error || !data?.access_token) {
       if (w) w.close();
       return toast.error(error || "Could not start impersonation");
     }
-    prepImpersonation(data.access_token, email);
     if (w) {
-      w.location.href = "/dashboard/quick-setup";
+      openImpersonation(w, data.access_token, email);
       toast.success(`Opened ${email}'s dashboard in a new tab`);
     } else {
       // Popup blocked → fall back to same-tab impersonation.
