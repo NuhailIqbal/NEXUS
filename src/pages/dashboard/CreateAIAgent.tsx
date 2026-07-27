@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
-  X, Check, Bot, Wrench, BookOpen, FileText, PlayCircle, Sparkles,
+  X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Building2,
   ArrowLeft, ArrowRight, Upload, Trash2, Info,
 } from "lucide-react";
@@ -12,11 +12,10 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 
-type StepKey = "setup" | "tools" | "knowledge" | "prompt" | "testing";
+type StepKey = "setup" | "knowledge" | "prompt" | "testing";
 
 const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "setup", title: "Complete Setup", description: "Basic agent configuration and tools", icon: Bot },
-  { key: "tools", title: "AI Tools", description: "Connect tools your agent can use", icon: Wrench },
   { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
   { key: "prompt", title: "Prompt Studio", description: "Craft the agent's instructions", icon: FileText },
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
@@ -42,7 +41,6 @@ type FormState = {
   voice: string;
   transferEnabled: boolean;
   transferNumber: string;
-  selectedTools: string[];
   knowledgeText: string;
   knowledgeFiles: File[];
   systemPrompt: string;
@@ -54,24 +52,15 @@ const KNOWLEDGE_TEXT_LIMIT = 8000;
 const KNOWLEDGE_FILE_MAX_MB = 10;
 const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
 
-const TOOLS_OPTIONS = [
-  { id: "send_email", label: "Send Email", desc: "Send transactional emails" },
-  { id: "book_slot", label: "Book Calendar Slot", desc: "Schedule meetings" },
-  { id: "update_crm", label: "Update CRM", desc: "Sync contact updates" },
-  { id: "send_sms", label: "Send SMS", desc: "Send SMS via Twilio" },
-  { id: "webhook", label: "Webhook Trigger", desc: "POST payload to URL" },
-];
-
 const CreateAIAgent = () => {
   const navigate = useNavigate();
   const [stepIndex, setStepIndex] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
   const [completed, setCompleted] = useState<Record<StepKey, boolean>>({
-    setup: false, tools: false, knowledge: false, prompt: false, testing: false,
+    setup: false, knowledge: false, prompt: false, testing: false,
   });
   const [form, setForm] = useState<FormState>({
-    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English (US)", voice: "Aria",
-    selectedTools: [],
+    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English (US)", voice: "Elliot",
     knowledgeText: "",
     knowledgeFiles: [],
     systemPrompt: "", greeting: "",
@@ -93,10 +82,6 @@ const CreateAIAgent = () => {
       if (!form.mainGoal.trim()) { toast.error("Main goal is required"); return false; }
       if (form.transferEnabled && !form.transferNumber.trim()) { toast.error("Enter a transfer number or turn off call transfer"); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
-    }
-    if (currentStep.key === "tools" && form.selectedTools.length === 0) {
-      toast.error("Select at least one tool");
-      return false;
     }
     if (currentStep.key === "knowledge") {
       const hasText = form.knowledgeText.trim().length > 0;
@@ -131,7 +116,6 @@ const CreateAIAgent = () => {
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
       knowledge_text: form.knowledgeText || null,
-      selected_tool_keys: form.selectedTools,
     });
     if (error || !data?.id) {
       toast.error(error || "Failed to create agent");
@@ -267,7 +251,6 @@ const CreateAIAgent = () => {
 
           <div className="rounded-xl border border-border bg-background p-6">
             {currentStep.key === "setup" && <StepSetup form={form} update={update} />}
-            {currentStep.key === "tools" && <StepTools form={form} update={update} />}
             {currentStep.key === "knowledge" && <StepKnowledge form={form} update={update} />}
             {currentStep.key === "prompt" && <StepPrompt form={form} update={update} />}
             {currentStep.key === "testing" && <StepTesting form={form} update={update} />}
@@ -429,63 +412,14 @@ function StepSetup({
               onChange={(e) => update("voice", e.target.value)}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
-              <option>Aria</option><option>Marco</option><option>Nora</option>
-              <option>Kai</option><option>Eva</option><option>Tom</option>
+              <option>Elliot</option><option>Savannah</option><option>Rohan</option>
+              <option>Emma</option><option>Clara</option><option>Nico</option>
+              <option>Kai</option><option>Sagar</option><option>Godfrey</option>
+              <option>Neil</option><option>Layla</option><option>Sid</option>
+              <option>Naina</option>
             </select>
           </Field>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function StepTools({
-  form, update,
-}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
-  const toggle = (id: string) => {
-    const next = form.selectedTools.includes(id)
-      ? form.selectedTools.filter((t) => t !== id)
-      : [...form.selectedTools, id];
-    update("selectedTools", next);
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Wrench className="h-7 w-7" />
-        </div>
-        <h3 className="mt-3 text-lg font-bold">Connect AI Tools</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Select tools your agent can use during conversations
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {TOOLS_OPTIONS.map((t) => {
-          const active = form.selectedTools.includes(t.id);
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => toggle(t.id)}
-              className={cn(
-                "flex items-start gap-3 rounded-xl border p-4 text-left transition",
-                active ? "border-primary bg-primary/5" : "border-input hover:bg-muted/40",
-              )}
-            >
-              <span className={cn(
-                "mt-0.5 flex h-5 w-5 items-center justify-center rounded border",
-                active ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30",
-              )}>
-                {active && <Check className="h-3 w-3" />}
-              </span>
-              <div>
-                <div className="font-medium">{t.label}</div>
-                <div className="text-xs text-muted-foreground">{t.desc}</div>
-              </div>
-            </button>
-          );
-        })}
       </div>
     </div>
   );

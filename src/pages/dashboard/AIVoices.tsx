@@ -1,17 +1,24 @@
 import { useState } from "react";
-import { Mic, Star, Play, Pause, Plus, Trash2 } from "lucide-react";
+import { Mic, Star, Play, Pause, Trash2 } from "lucide-react";
+// Vapi's own built-in voice provider (provider="vapi") — the exact voices available
+// on the Vapi platform, verified live against Vapi's API. No third-party voice
+// provider key required. Source: https://docs.vapi.ai/providers/voice/vapi-voices
 const VOICES_CATALOG = [
-  { id: 1, name: "Aria", language: "English (US)", accent: "American", gender: "Female", favorite: true },
-  { id: 2, name: "Marco", language: "Spanish (ES)", accent: "Castilian", gender: "Male", favorite: false },
-  { id: 3, name: "Nora", language: "English (UK)", accent: "British", gender: "Female", favorite: true },
-  { id: 4, name: "Kai", language: "English (US)", accent: "American", gender: "Male", favorite: false },
-  { id: 5, name: "Eva", language: "French (FR)", accent: "Parisian", gender: "Female", favorite: true },
-  { id: 6, name: "Tom", language: "English (AU)", accent: "Australian", gender: "Male", favorite: false },
-  { id: 7, name: "Lia", language: "Italian (IT)", accent: "Roman", gender: "Female", favorite: false },
-  { id: 8, name: "Diego", language: "Spanish (MX)", accent: "Latin", gender: "Male", favorite: true },
+  { id: 1, name: "Elliot", language: "English", accent: "Canadian", gender: "Male", description: "Realistic, friendly, professional, soothing", favorite: false },
+  { id: 2, name: "Savannah", language: "English", accent: "American (Southern)", gender: "Female", description: "Realistic, straightforward", favorite: false },
+  { id: 3, name: "Rohan", language: "English", accent: "Indian American", gender: "Male", description: "Realistic, bright, energetic", favorite: false },
+  { id: 4, name: "Emma", language: "English", accent: "Asian American", gender: "Female", description: "Realistic, warm, conversational", favorite: false },
+  { id: 5, name: "Clara", language: "English", accent: "American", gender: "Female", description: "Realistic, warm, professional", favorite: false },
+  { id: 6, name: "Nico", language: "English", accent: "American", gender: "Male", description: "Realistic, young, casual, natural", favorite: false },
+  { id: 7, name: "Kai", language: "English", accent: "American", gender: "Male", description: "Realistic, friendly, relaxed, approachable", favorite: false },
+  { id: 8, name: "Sagar", language: "English", accent: "Indian American", gender: "Male", description: "Realistic, steady, professional", favorite: false },
+  { id: 9, name: "Godfrey", language: "English", accent: "American", gender: "Male", description: "Realistic, young, energetic", favorite: false },
+  { id: 10, name: "Neil", language: "English", accent: "Indian American", gender: "Male", description: "Realistic, clear, professional", favorite: false },
+  { id: 11, name: "Layla", language: "English", accent: "American", gender: "Female", description: "Realistic, warm, bright, cheerful", favorite: false },
+  { id: 12, name: "Sid", language: "English", accent: "American", gender: "Male", description: "Realistic, laid-back, smooth, deep-toned", favorite: false },
+  { id: 13, name: "Naina", language: "English", accent: "Indian American", gender: "Female", description: "Realistic, calm, collected, professional", favorite: false },
 ];
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -22,8 +29,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CreateVoiceDialog } from "@/components/voices/CreateVoiceDialog";
-import { useLocalCollection, newId } from "@/hooks/use-local-collection";
 import { toast } from "sonner";
 
 type Voice = {
@@ -33,8 +38,8 @@ type Voice = {
   accent: string;
   gender: string;
   category?: string;
+  description?: string;
   favorite?: boolean;
-  source?: "mock" | "local";
 };
 
 const LANG_MAP: Record<string, string> = {
@@ -49,9 +54,6 @@ const LANG_MAP: Record<string, string> = {
 };
 
 const AIVoices = () => {
-  const [open, setOpen] = useState(false);
-  const { items: localVoices, add, remove, update } = useLocalCollection<Voice>("edm:voices");
-
   const [favoriteMockIds, setFavoriteMockIds] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -93,45 +95,36 @@ const AIVoices = () => {
     language: v.language,
     accent: v.accent,
     gender: v.gender,
+    description: v.description,
     favorite: v.favorite,
-    source: "mock",
   }));
 
-  const all: Voice[] = [
-    ...localVoices.map((v) => ({ ...v, source: "local" as const })),
-    ...seeds
-      .filter((s) => !hiddenMockIds.includes(s.id))
-      .map((s) => ({
-        ...s,
-        favorite: favoriteMockIds.includes(s.id) ? true : s.favorite,
-      })),
-  ];
+  const all: Voice[] = seeds
+    .filter((s) => !hiddenMockIds.includes(s.id))
+    .map((s) => ({
+      ...s,
+      favorite: favoriteMockIds.includes(s.id) ? true : s.favorite,
+    }));
 
   const toggleFavorite = (v: Voice) => {
-    if (v.source === "local") {
-      update(v.id, { favorite: !v.favorite });
-    } else {
-      const isFav = favoriteMockIds.includes(v.id);
-      const next = isFav
-        ? favoriteMockIds.filter((x) => x !== v.id)
-        : [...favoriteMockIds, v.id];
-      persistFavorites(next);
-    }
+    const isFav = favoriteMockIds.includes(v.id);
+    const next = isFav
+      ? favoriteMockIds.filter((x) => x !== v.id)
+      : [...favoriteMockIds, v.id];
+    persistFavorites(next);
   };
 
   const handleDelete = (v: Voice) => {
-    if (v.source === "local") {
-      remove(v.id);
-    } else {
-      persistHidden([...hiddenMockIds, v.id]);
-    }
+    persistHidden([...hiddenMockIds, v.id]);
     toast.success("Voice removed");
   };
+
+  const article = (word: string) => (/^[aeiou]/i.test(word) ? "an" : "a");
 
   const openPreview = (v: Voice) => {
     setPreviewVoice(v);
     setPreviewText(
-      `Hi, I'm ${v.name}. I speak ${v.language}${v.accent ? ` with a ${v.accent} accent` : ""}. I'd love to be the voice of your next AI agent.`,
+      `Hi, I'm ${v.name}. I speak ${v.language}${v.accent ? ` with ${article(v.accent)} ${v.accent} accent` : ""}. I'd love to be the voice of your next AI agent.`,
     );
     setSpeaking(false);
   };
@@ -228,14 +221,9 @@ const AIVoices = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Voices</h1>
-          <p className="text-sm text-muted-foreground">Browse and preview voices for your agents.</p>
-        </div>
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" /> Clone Voice
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Voices</h1>
+        <p className="text-sm text-muted-foreground">Browse and preview voices for your agents.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {all.map((v) => (
@@ -245,7 +233,6 @@ const AIVoices = () => {
                 <Mic className="h-5 w-5" />
               </div>
               <div className="flex items-center gap-1">
-                {v.source === "local" && <Badge variant="outline" className="text-[10px]">Custom</Badge>}
                 <button
                   onClick={() => toggleFavorite(v)}
                   className="rounded-md p-1 hover:bg-muted"
@@ -262,6 +249,9 @@ const AIVoices = () => {
             <p className="text-xs text-muted-foreground">
               {v.language} · {v.accent || " "} · {v.gender || v.category || " "}
             </p>
+            {v.description && (
+              <p className="mt-1 text-xs italic text-muted-foreground/80">{v.description}</p>
+            )}
             <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={() => openPreview(v)}
@@ -281,22 +271,6 @@ const AIVoices = () => {
           </div>
         ))}
       </div>
-
-      <CreateVoiceDialog
-        open={open}
-        onOpenChange={setOpen}
-        onCreate={(d) => {
-          add({
-            id: newId(),
-            name: d.name,
-            language: d.language,
-            accent: d.accent,
-            gender: " ",
-            category: d.category,
-            source: "local",
-          });
-        }}
-      />
 
       {/* Preview Modal */}
       <Dialog

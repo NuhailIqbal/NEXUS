@@ -145,27 +145,25 @@ async def delete_phone_number(phone_id: str) -> None:
         _check(r)
 
 
-# Map our wizard display names to OpenAI TTS voices (always available, no
-# voice-ID provisioning required). Keys are lowercased; unknown names fall back
-# to "alloy" so VAPI never rejects an unknown voice.
-_VOICE_MAP = {
-    "aria":  "nova",
-    "eva":   "shimmer",
-    "nora":  "alloy",
-    "lia":   "fable",
-    "marco": "onyx",
-    "tom":   "echo",
-    "kai":   "onyx",
-    "diego": "onyx",
-}
-_OPENAI_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+# Vapi's own built-in voice provider (provider="vapi") — real voices available on
+# every Vapi account with no third-party provider key required. voiceIds are exact
+# (case-sensitive on Vapi's side); we accept any casing from the wizard and map to
+# the canonical form. Verified live against the Vapi API (each accepted on assistant
+# creation). Source: https://docs.vapi.ai/providers/voice/vapi-voices
+_VAPI_VOICE_IDS = [
+    "Elliot", "Savannah", "Rohan", "Emma", "Clara", "Nico", "Kai",
+    "Sagar", "Godfrey", "Neil", "Layla", "Sid", "Naina",
+]
+_VAPI_VOICE_CANONICAL = {v.lower(): v for v in _VAPI_VOICE_IDS}
+_DEFAULT_VAPI_VOICE = "Elliot"
 
 
 def _resolve_voice(voice: str | None) -> dict:
-    """Return a VAPI-compatible voice block. Defaults to OpenAI 'alloy' if input is unknown."""
+    """Return a VAPI-compatible voice block using Vapi's own built-in voices.
+    Defaults to 'Elliot' if input is unknown (e.g. a legacy/retired name)."""
     raw = (voice or "").strip().lower()
-    voice_id = _VOICE_MAP.get(raw, raw if raw in _OPENAI_VOICES else "alloy")
-    return {"provider": "openai", "voiceId": voice_id}
+    voice_id = _VAPI_VOICE_CANONICAL.get(raw, _DEFAULT_VAPI_VOICE)
+    return {"provider": "vapi", "voiceId": voice_id}
 
 
 def _resolve_language(language: str | None) -> str:
