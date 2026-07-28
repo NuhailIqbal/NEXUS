@@ -6,16 +6,13 @@ from database import supabase
 from pydantic import BaseModel
 from typing import Optional
 from routers.billing import (
-    PLANS as BILLING_PLANS, FREE_TIER, DEFAULT_RATE_PER_MINUTE, PHONE_NUMBER_MONTHLY_COST,
+    DEFAULT_RATE_PER_MINUTE, DEFAULT_COST_MULTIPLIER, PHONE_NUMBER_MONTHLY_COST,
     credit_balance, debit_balance, get_balance,
 )
 from services import vapi_client
 from config import settings
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-
-# Monthly subscription price per plan (used for MRR / revenue).
-PLAN_MONTHLY_PRICE = {"free": 0, "payg": 0, "starter": 29, "growth": 79, "business": 199}
 
 
 def _admin_email_map():
@@ -56,7 +53,7 @@ async def admin_login(body: AdminLogin):
     """
     import time
     from jose import jwt
-    if body.username != settings.admin_username or body.password != settings.admin_password:
+    if not settings.verify_admin_login(body.username, body.password):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
     now = int(time.time())
     token = jwt.encode(
@@ -68,23 +65,12 @@ async def admin_login(body: AdminLogin):
 
 
 class UserUpdate(BaseModel):
-    plan: Optional[str] = None
     status: Optional[str] = None
     is_active: Optional[bool] = None
-    outbound_limit: Optional[int] = None
-    inbound_limit: Optional[int] = None
-    agents_limit: Optional[int] = None
-    outbound_used: Optional[int] = None
-    inbound_used: Optional[int] = None
-    credits: Optional[int] = None
     rate_per_minute: Optional[float] = None
+    cost_multiplier: Optional[float] = None
     total_charges: Optional[float] = None
     balance: Optional[float] = None
-
-
-class CreditAdjust(BaseModel):
-    amount: int
-    reason: Optional[str] = None
 
 
 @router.get("/users")
@@ -106,16 +92,6 @@ async def list_users(admin=Depends(get_admin_user)):
 
     billing_rows = supabase.table("billing").select("*").in_("user_id", user_ids).execute()
     billing_map = {b["user_id"]: b for b in (billing_rows.data or [])}
-
-    agent_counts = {}
-    for uid in user_ids:
-        result = (
-            supabase.table("ai_agents")
-            .select("id", count="exact")
-            .eq("user_id", uid)
-            .execute()
-        )
-        agent_counts[uid] = result.count or 0
 
     conversation_counts = {}
     for uid in user_ids:
@@ -143,73 +119,19 @@ async def list_users(admin=Depends(get_admin_user)):
             "full_name": p.get("full_name", ""),
             "company_name": p.get("company_name", ""),
             "created_at": p.get("created_at", ""),
-            "plan": b.get("plan", "free"),
             "status": b.get("status", "trial"),
             "is_active": b.get("is_active", True),
-            "outbound_limit": b.get("outbound_limit", 0),
-            "outbound_used": b.get("outbound_used", 0),
-            "inbound_limit": b.get("inbound_limit", 0),
-            "inbound_used": b.get("inbound_used", 0),
-            "agents_limit": b.get("agents_limit", 10),
-            "agents_used": agent_counts.get(uid, 0),
-            "credits": b.get("credits", 0),
             "rate_per_minute": float(b.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE),
+            "cost_multiplier": float(b.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER),
             "total_charges": float(b.get("total_charges") or 0),
             "balance": float(b.get("balance") or 0),
             "total_conversations": conversation_counts.get(uid, 0),
             "phone_numbers": phone_counts.get(uid, 0),
             "stripe_customer_id": b.get("stripe_customer_id"),
-            "stripe_subscription_id": b.get("stripe_subscription_id"),
-            "current_period_end": b.get("current_period_end"),
         })
 
     users.sort(key=lambda u: u.get("created_at", ""), reverse=True)
     return {"data": users, "error": None}
-
-
-@router.get("/plans")
-async def admin_plans(admin=Depends(get_admin_user)):
-    """Real plan catalog (Free tier + configured paid plans) with live per-plan user counts."""
-    free_plan = {
-        "id": "free",
-        "name": "Free",
-        "price_display": "$0",
-        "description": "Trial",
-        "outbound_limit": FREE_TIER["outbound_limit"],
-        "inbound_limit": FREE_TIER["inbound_limit"],
-        "agents_limit": FREE_TIER["agents_limit"],
-        "rate_per_minute": DEFAULT_RATE_PER_MINUTE,
-    }
-    catalog = [free_plan] + [
-        {
-            "id": p["id"],
-            "name": p["name"],
-            "price_display": p["price_display"],
-            "description": p["description"],
-            "outbound_limit": p["outbound_limit"],
-            "inbound_limit": p["inbound_limit"],
-            "agents_limit": p["agents_limit"],
-            "rate_per_minute": p.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
-        }
-        for p in BILLING_PLANS
-    ]
-
-    # Live user counts per plan across every account (no billing row → free).
-    auth_users = supabase.auth.admin.list_users()
-    user_ids = [str(u.id) for u in auth_users]
-    plan_by_user = {uid: "free" for uid in user_ids}
-    if user_ids:
-        billing_rows = supabase.table("billing").select("user_id, plan").in_("user_id", user_ids).execute()
-        for b in (billing_rows.data or []):
-            plan_by_user[b["user_id"]] = b.get("plan") or "free"
-
-    counts: dict[str, int] = {}
-    for pid in plan_by_user.values():
-        counts[pid] = counts.get(pid, 0) + 1
-    for c in catalog:
-        c["user_count"] = counts.get(c["id"], 0)
-
-    return {"data": catalog, "error": None}
 
 
 @router.get("/users/{user_id}")
@@ -280,14 +202,6 @@ async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_us
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
-
-    # Changing the plan also syncs that plan's cost multiplier (and rate, unless the
-    # admin explicitly sent one) so cost-plus billing always matches the active plan.
-    if "plan" in updates:
-        plan_def = next((p for p in BILLING_PLANS if p["id"] == updates["plan"]), None)
-        if plan_def:
-            updates.setdefault("cost_multiplier", plan_def.get("cost_multiplier", 3.0))
-            updates.setdefault("rate_per_minute", plan_def.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE))
 
     existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
     has_row = bool(existing.data)
@@ -390,30 +304,6 @@ async def impersonate_user(user_id: str, admin=Depends(get_admin_user)):
     }
 
 
-@router.post("/users/{user_id}/credits")
-async def adjust_credits(user_id: str, body: CreditAdjust, admin=Depends(get_admin_user)):
-    existing = supabase.table("billing").select("credits").eq("user_id", user_id).execute()
-    has_row = bool(existing.data)
-
-    current = existing.data[0].get("credits", 0) if has_row else 0
-    new_credits = max(0, current + body.amount)
-
-    if has_row:
-        supabase.table("billing").update({"credits": new_credits}).eq("user_id", user_id).execute()
-    else:
-        supabase.table("billing").insert({
-            "user_id": user_id,
-            "credits": new_credits,
-            "plan": "free",
-            "status": "trial",
-        }).execute()
-
-    return {
-        "data": {"credits": new_credits, "adjustment": body.amount, "reason": body.reason},
-        "error": None,
-    }
-
-
 class BalanceAdjust(BaseModel):
     amount: float
     reason: Optional[str] = None
@@ -451,27 +341,12 @@ async def toggle_access(user_id: str, admin=Depends(get_admin_user)):
         supabase.table("billing").insert({
             "user_id": user_id,
             "is_active": new_val,
-            "plan": "free",
-            "status": "trial",
         }).execute()
 
     return {
         "data": {"is_active": new_val},
         "error": None,
     }
-
-
-@router.post("/users/{user_id}/reset-usage")
-async def reset_usage(user_id: str, admin=Depends(get_admin_user)):
-    existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
-
-    if existing.data:
-        supabase.table("billing").update({
-            "outbound_used": 0,
-            "inbound_used": 0,
-        }).eq("user_id", user_id).execute()
-
-    return {"data": {"outbound_used": 0, "inbound_used": 0}, "error": None}
 
 
 @router.get("/agents")
@@ -554,28 +429,23 @@ async def list_all_phone_numbers(admin=Depends(get_admin_user)):
 
 @router.get("/payments")
 async def admin_payments(admin=Depends(get_admin_user)):
-    """Per-user charges + credits, and recent billed calls."""
+    """Per-user charges, and recent billed calls."""
     billing_rows = supabase.table("billing").select("*").execute().data or []
     email_map = _admin_email_map()
     profiles = supabase.table("profiles").select("id, full_name").execute().data or []
     name_map = {p["id"]: p.get("full_name", "") for p in profiles}
 
-    per_user, total_charges, total_credits, mrr = [], 0.0, 0, 0.0
+    per_user, total_charges = [], 0.0
     for b in billing_rows:
         uid = b.get("user_id")
         charges = float(b.get("total_charges") or 0)
         total_charges += charges
-        total_credits += int(b.get("credits") or 0)
-        if b.get("status") == "active":
-            mrr += PLAN_MONTHLY_PRICE.get(b.get("plan", "free"), 0)
         per_user.append({
             "email": email_map.get(uid, ""),
             "name": name_map.get(uid, ""),
-            "plan": b.get("plan", "free"),
             "status": b.get("status", "trial"),
             "total_charges": round(charges, 2),
             "balance": float(b.get("balance") or 0),
-            "credits": int(b.get("credits") or 0),
             "stripe_customer_id": b.get("stripe_customer_id"),
         })
     per_user.sort(key=lambda x: x["total_charges"], reverse=True)
@@ -593,7 +463,7 @@ async def admin_payments(admin=Depends(get_admin_user)):
         c["email"] = email_map.get(c.get("user_id"), "")
 
     return {"data": {
-        "summary": {"total_charges": round(total_charges, 2), "total_credits": total_credits, "mrr": round(mrr, 2)},
+        "summary": {"total_charges": round(total_charges, 2)},
         "per_user": per_user,
         "recent_calls": recent,
     }, "error": None}
@@ -601,22 +471,12 @@ async def admin_payments(admin=Depends(get_admin_user)):
 
 @router.get("/revenue")
 async def admin_revenue(admin=Depends(get_admin_user)):
-    """Usage revenue + MRR, revenue-by-plan, and a 30-day usage-revenue trend."""
+    """Usage revenue + a 30-day usage-revenue trend."""
     convos = supabase.table("conversations").select("call_cost, call_time").execute().data or []
-    billing_rows = supabase.table("billing").select("plan, status, total_charges").execute().data or []
+    billing_rows = supabase.table("billing").select("total_charges").execute().data or []
 
     usage_revenue = sum(float(c.get("call_cost") or 0) for c in convos)
     total_charges = sum(float(b.get("total_charges") or 0) for b in billing_rows)
-
-    by_plan, mrr = {}, 0.0
-    for b in billing_rows:
-        plan = b.get("plan", "free")
-        d = by_plan.setdefault(plan, {"plan": plan, "subscribers": 0, "mrr": 0.0})
-        if b.get("status") == "active":
-            price = PLAN_MONTHLY_PRICE.get(plan, 0)
-            d["subscribers"] += 1
-            d["mrr"] += price
-            mrr += price
 
     keys, buckets = _day_buckets(30)
     daily = {k: 0.0 for k in keys}
@@ -631,11 +491,8 @@ async def admin_revenue(admin=Depends(get_admin_user)):
     return {"data": {
         "totals": {
             "usage_revenue": round(usage_revenue, 2),
-            "mrr": round(mrr, 2),
             "total_charges": round(total_charges, 2),
-            "estimated_total": round(usage_revenue + mrr, 2),
         },
-        "by_plan": list(by_plan.values()),
         "timeseries": series,
     }, "error": None}
 
@@ -678,7 +535,7 @@ async def admin_agents_report(admin=Depends(get_admin_user)):
 async def admin_users_report(admin=Depends(get_admin_user)):
     """Signups trend, active/disabled counts, and top users by activity."""
     profiles = supabase.table("profiles").select("id, full_name, created_at").execute().data or []
-    billing_rows = supabase.table("billing").select("user_id, plan, is_active").execute().data or []
+    billing_rows = supabase.table("billing").select("user_id, is_active").execute().data or []
     convos = supabase.table("conversations").select("user_id").execute().data or []
     agents = supabase.table("ai_agents").select("user_id").execute().data or []
     email_map = _admin_email_map()
@@ -706,11 +563,9 @@ async def admin_users_report(admin=Depends(get_admin_user)):
     top = []
     for p in profiles:
         uid = p["id"]
-        b = billing_map.get(uid, {})
         top.append({
             "email": email_map.get(uid, ""),
             "name": p.get("full_name", ""),
-            "plan": b.get("plan", "free"),
             "conversations": convo_count.get(uid, 0),
             "agents": agent_count.get(uid, 0),
         })
@@ -728,19 +583,12 @@ async def admin_stats(admin=Depends(get_admin_user)):
     users = supabase.table("profiles").select("id", count="exact").execute()
     conversations = supabase.table("conversations").select("id", count="exact").execute()
     agents = supabase.table("ai_agents").select("id", count="exact").execute()
-    active_billing = (
-        supabase.table("billing")
-        .select("id", count="exact")
-        .eq("status", "active")
-        .execute()
-    )
 
     return {
         "data": {
             "total_users": users.count or 0,
             "total_conversations": conversations.count or 0,
             "total_agents": agents.count or 0,
-            "active_subscriptions": active_billing.count or 0,
         },
         "error": None,
     }
@@ -775,6 +623,81 @@ async def update_platform_settings(body: PromoSettingsUpdate, admin=Depends(get_
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         supabase.table("platform_settings").update(updates).eq("id", 1).execute()
     return {"data": _get_settings_row(), "error": None}
+
+
+# ── Promo codes (redeemable by users) ──
+
+class PromoCodeCreate(BaseModel):
+    code: str
+    amount: float
+    expiry_days: Optional[int] = None      # credit lifetime after redemption
+    max_redemptions: Optional[int] = None  # None = unlimited
+    valid_until: Optional[str] = None      # ISO date; None = code never expires
+
+
+class PromoCodeUpdate(BaseModel):
+    active: Optional[bool] = None
+    amount: Optional[float] = None
+    expiry_days: Optional[int] = None
+    max_redemptions: Optional[int] = None
+    valid_until: Optional[str] = None
+
+
+@router.get("/promo-codes")
+async def list_promo_codes(admin=Depends(get_admin_user)):
+    rows = (
+        supabase.table("promo_codes").select("*")
+        .order("created_at", desc=True).execute().data or []
+    )
+    return {"data": rows, "error": None}
+
+
+@router.post("/promo-codes")
+async def create_promo_code(body: PromoCodeCreate, admin=Depends(get_admin_user)):
+    code = (body.code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Code is required")
+    if len(code) < 3:
+        raise HTTPException(status_code=400, detail="Code must be at least 3 characters")
+    amount = round(float(body.amount or 0), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+    existing = supabase.table("promo_codes").select("id").eq("code", code).limit(1).execute().data
+    if existing:
+        raise HTTPException(status_code=409, detail="That code already exists")
+
+    row = {
+        "code": code,
+        "amount": amount,
+        "expiry_days": body.expiry_days,
+        "max_redemptions": body.max_redemptions,
+        "valid_until": body.valid_until,
+        "active": True,
+    }
+    result = supabase.table("promo_codes").insert(row).execute()
+    return {"data": result.data[0] if result.data else row, "error": None}
+
+
+@router.patch("/promo-codes/{code_id}")
+async def update_promo_code(code_id: str, body: PromoCodeUpdate, admin=Depends(get_admin_user)):
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return {"data": None, "error": "No fields to update"}
+    if "amount" in updates:
+        updates["amount"] = round(float(updates["amount"]), 2)
+        if updates["amount"] <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+    supabase.table("promo_codes").update(updates).eq("id", code_id).execute()
+    fresh = supabase.table("promo_codes").select("*").eq("id", code_id).maybe_single().execute().data
+    return {"data": fresh, "error": None}
+
+
+@router.delete("/promo-codes/{code_id}")
+async def delete_promo_code(code_id: str, admin=Depends(get_admin_user)):
+    """Deletes the code. Redemption rows cascade, but credit already granted is untouched."""
+    supabase.table("promo_codes").delete().eq("id", code_id).execute()
+    return {"data": {"deleted": code_id}, "error": None}
 
 
 @router.get("/promo-kpis")

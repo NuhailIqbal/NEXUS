@@ -5,7 +5,7 @@ import { api } from "@/services/api";
 
 /**
  * Persistent low-balance / paywall banner. Shows when the wallet balance is at or below
- * $10, with a stronger "credit used up" state at $0 and CTAs to Subscribe / Add Funds.
+ * $10, with a stronger "credit used up" state at $0 and a CTA to Add Funds.
  */
 const LowBalanceBanner = () => {
   const [balance, setBalance] = useState<number | null>(null);
@@ -36,14 +36,14 @@ const LowBalanceBanner = () => {
         <AlertTriangle className="h-4 w-4 shrink-0" />
         <span>
           {empty ? "Your credit is used up." : `Low balance — $${balance.toFixed(2)} left.`}{" "}
-          Add funds or subscribe to keep making calls without interruption.
+          Add funds to keep making calls without interruption.
         </span>
       </div>
       <Link
         to="/dashboard/billing"
         className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
       >
-        {empty ? "Subscribe or Add Funds" : "Add Funds"}
+        Add Funds
       </Link>
     </div>
   );

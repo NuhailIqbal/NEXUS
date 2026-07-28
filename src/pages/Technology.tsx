@@ -7,7 +7,7 @@ const techStack = [
   { icon: Cpu, label: "Edge Computing", desc: "Sub-200ms latency through globally distributed edge inference nodes" },
   { icon: Database, label: "Real-Time Data Pipeline", desc: "Stream processing engine handling 10M+ events per second" },
   { icon: Cloud, label: "Cloud-Native Infrastructure", desc: "Auto-scaling Kubernetes clusters across 12 global regions" },
-  { icon: Lock, label: "Zero-Trust Security", desc: "End-to-end encryption, SOC 2 Type II certified, HIPAA compliant" },
+  { icon: Lock, label: "Security", desc: "Encrypted in transit, per-account access control, and card details handled entirely by Stripe" },
   { icon: Zap, label: "AutoML Pipeline", desc: "Self-improving models that retrain on live performance data every 6 hours" },
 ];
 

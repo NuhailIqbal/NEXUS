@@ -218,17 +218,9 @@ export const api = {
   updateProfile: (data: any) => patch("/profile", data),
 
   // Billing
-  getBillingPlans: () => get("/billing/plans"),
   getBillingStatus: () => get("/billing/status"),
-  getBillingUsage: () => get("/billing/usage"),
   getBillingInvoices: () => get("/billing/invoices"),
   getBillingCallCosts: () => get("/billing/call-costs"),
-  createCheckout: (data: any) => post("/billing/checkout", {
-    success_url: `${window.location.origin}/dashboard/billing`,
-    cancel_url: `${window.location.origin}/dashboard/billing`,
-    ...data,
-  }),
-  createPortalSession: () => post("/billing/portal"),
   // Wallet / balance
   topupCheckout: (amount: number) => post("/billing/topup/checkout", {
     amount,
@@ -238,9 +230,20 @@ export const api = {
     cancel_url: `${window.location.origin}/dashboard/billing`,
   }),
   topupConfirm: (session_id: string) => post("/billing/topup/confirm", { session_id }),
-  subscribeWithBalance: (plan_id: string) => post("/billing/subscribe-with-balance", { plan_id }),
-  unsubscribePlan: () => post("/billing/unsubscribe"),
   getWalletTransactions: () => get("/billing/transactions"),
+  // Stripe publishable key (served by the backend so it always matches its key mode)
+  getStripeConfig: () => get("/billing/config"),
+  // Payment methods (saved cards)
+  getPaymentMethods: () => get("/billing/payment-methods"),
+  createSetupIntent: () => post("/billing/payment-methods/setup-intent"),
+  setDefaultPaymentMethod: (id: string) => post(`/billing/payment-methods/${id}/default`),
+  deletePaymentMethod: (id: string) => del(`/billing/payment-methods/${id}`),
+  // Auto-recharge
+  updateAutoRecharge: (data: { enabled: boolean; threshold?: number; amount?: number }) =>
+    request("/billing/auto-recharge", { method: "PUT", body: JSON.stringify(data) }),
+  // Promotions
+  getPromotions: () => get("/billing/promotions"),
+  redeemPromoCode: (code: string) => post("/billing/promotions/redeem", { code }),
 
   // Notifications
   getNotifications: () => get("/notifications"),
@@ -250,7 +253,6 @@ export const api = {
   adminLogin: (username: string, password: string) => post("/admin/login", { username, password }),
   getAdminStats: () => adminGet("/admin/stats"),
   getAdminUsers: () => adminGet("/admin/users"),
-  getAdminPlans: () => adminGet("/admin/plans"),
   getAdminAgents: () => adminGet("/admin/agents"),
   getAdminPhoneNumbers: () => adminGet("/admin/phone-numbers"),
   getAdminPayments: () => adminGet("/admin/payments"),
@@ -260,14 +262,17 @@ export const api = {
   getAdminSettings: () => adminGet("/admin/settings"),
   updateAdminSettings: (data: any) => adminPatch("/admin/settings", data),
   getAdminPromoKpis: () => adminGet("/admin/promo-kpis"),
+  getAdminPromoCodes: () => adminGet("/admin/promo-codes"),
+  createAdminPromoCode: (data: any) => adminPost("/admin/promo-codes", data),
+  updateAdminPromoCode: (id: string, data: any) => adminPatch(`/admin/promo-codes/${id}`, data),
+  deleteAdminPromoCode: (id: string) =>
+    request(`/admin/promo-codes/${id}`, { method: "DELETE", headers: getAdminAuthHeader() }),
   getAdminUser: (id: string) => adminGet(`/admin/users/${id}`),
   updateAdminUser: (id: string, data: any) => adminPatch(`/admin/users/${id}`, data),
   deleteAdminUser: (id: string) => request(`/admin/users/${id}`, { method: "DELETE", headers: getAdminAuthHeader() }),
   impersonateUser: (id: string) => adminPost(`/admin/users/${id}/impersonate`),
-  adjustCredits: (id: string, data: any) => adminPost(`/admin/users/${id}/credits`, data),
   adjustUserBalance: (id: string, amount: number, reason?: string) => adminPost(`/admin/users/${id}/balance`, { amount, reason }),
   toggleAccess: (id: string) => adminPost(`/admin/users/${id}/toggle-access`),
-  resetUsage: (id: string) => adminPost(`/admin/users/${id}/reset-usage`),
 
   // Health
   getHealth: () => get("/health"),

@@ -128,7 +128,7 @@ const Pricing = () => (
 
         <div className="text-center mt-12 animate-slide-up" style={{ animationDelay: "0.4s" }}>
           <p className="text-sm text-muted-foreground">
-            All plans include SOC 2 compliance, 99.99% uptime SLA, and dedicated onboarding. 
+            Calls are billed per connected minute with no monthly platform fee.
             <Link to="/request-access" className="text-primary hover:underline ml-1">Contact us</Link> for volume pricing.
           </p>
         </div>

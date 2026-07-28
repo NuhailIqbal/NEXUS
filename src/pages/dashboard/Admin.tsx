@@ -1,9 +1,9 @@
 import { useEffect, useState, Fragment } from "react";
 import {
-  Users, Bot, PhoneOutgoing, PhoneIncoming, CreditCard,
+  Users, Bot, PhoneOutgoing, CreditCard,
   Loader2, Search, ChevronRight, ChevronDown, ToggleLeft, ToggleRight,
-  Plus, Minus, RotateCcw, TrendingUp, LogOut, Lock,
-  LayoutDashboard, Package, UserCheck, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift,
+  Plus, LogOut, Lock,
+  LayoutDashboard, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,23 +26,15 @@ type AdminUser = {
   full_name: string;
   company_name: string;
   created_at: string;
-  plan: string;
   status: string;
   is_active: boolean;
-  outbound_limit: number;
-  outbound_used: number;
-  inbound_limit: number;
-  inbound_used: number;
-  agents_limit: number;
-  agents_used: number;
-  credits: number;
   rate_per_minute?: number;
+  cost_multiplier?: number;
   total_charges?: number;
   balance?: number;
   total_conversations: number;
   phone_numbers?: number;
   stripe_customer_id: string | null;
-  current_period_end?: string | null;
 };
 
 type AdminAgent = {
@@ -77,18 +69,16 @@ type AdminStats = {
   total_users: number;
   total_conversations: number;
   total_agents: number;
-  active_subscriptions: number;
 };
 
 type PaymentsData = {
-  summary: { total_charges: number; total_credits: number; mrr: number };
-  per_user: { email: string; name: string; plan: string; status: string; total_charges: number; credits: number; stripe_customer_id: string | null }[];
+  summary: { total_charges: number };
+  per_user: { email: string; name: string; status: string; total_charges: number; balance: number; stripe_customer_id: string | null }[];
   recent_calls: { email: string; phone: string; contact_name: string; direction: string; duration: string; call_cost: number; call_time: string }[];
 };
 
 type RevenueData = {
-  totals: { usage_revenue: number; mrr: number; total_charges: number; estimated_total: number };
-  by_plan: { plan: string; subscribers: number; mrr: number }[];
+  totals: { usage_revenue: number; total_charges: number };
   timeseries: { day: string; label: string; revenue: number }[];
 };
 
@@ -97,23 +87,23 @@ type AgentReportRow = { id: string; name: string; owner_email: string; total_cal
 type UsersReportData = {
   totals: { total_users: number; active_users: number; disabled_users: number };
   signups: { day: string; label: string; signups: number }[];
-  top_users: { email: string; name: string; plan: string; conversations: number; agents: number }[];
+  top_users: { email: string; name: string; conversations: number; agents: number }[];
 };
 
-type AdminPlan = {
+type PromoCode = {
   id: string;
-  name: string;
-  price_display: string;
-  description: string;
-  outbound_limit: number;
-  inbound_limit: number;
-  agents_limit: number;
-  rate_per_minute: number;
-  user_count: number;
+  code: string;
+  amount: number;
+  expiry_days: number | null;
+  max_redemptions: number | null;
+  redemption_count: number;
+  valid_until: string | null;
+  active: boolean;
+  created_at: string;
 };
 
 type SectionKey =
-  | "overview" | "users" | "agents" | "numbers" | "plans" | "subscribers"
+  | "overview" | "users" | "agents" | "numbers"
   | "payments" | "promotions" | "revenue" | "agent-report" | "user-report";
 
 type NavLeaf = { key: SectionKey; label: string; icon: typeof Users };
@@ -126,8 +116,6 @@ const NAV: NavEntry[] = [
   { key: "users",        label: "Users",          icon: Users },
   { key: "agents",       label: "Agents",         icon: Bot },
   { key: "numbers",      label: "Numbers",        icon: Phone },
-  { key: "plans",        label: "Plans",          icon: Package },
-  { key: "subscribers",  label: "Subscribers",    icon: UserCheck },
   { key: "payments",     label: "Payments",       icon: CreditCard },
   { key: "promotions",   label: "Promotions",     icon: Gift },
   {
@@ -155,7 +143,7 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: number; 
   );
 }
 
-// Admin dashboard — sidebar sections (users/agents/plans/subscribers + reports).
+// Admin dashboard — sidebar sections (users/agents/numbers/payments + reports).
 
 const Admin = () => {
   const [authenticated, setAuthenticated] = useState(() => !!sessionStorage.getItem(ADMIN_TOKEN_KEY));
@@ -171,10 +159,9 @@ const Admin = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
-  const [creditAmount, setCreditAmount] = useState(10);
   const [balanceAmount, setBalanceAmount] = useState(10);
-  const [editingLimits, setEditingLimits] = useState<string | null>(null);
-  const [limitForm, setLimitForm] = useState({ outbound_limit: 0, inbound_limit: 0, agents_limit: 0, rate_per_minute: 0.1, total_charges: 0 });
+  const [editingRate, setEditingRate] = useState<string | null>(null);
+  const [rateForm, setRateForm] = useState({ rate_per_minute: 0.35, cost_multiplier: 3.0, total_charges: 0 });
 
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
@@ -185,8 +172,6 @@ const Admin = () => {
   const [phoneSearch, setPhoneSearch] = useState("");
   const [numbersModalOwner, setNumbersModalOwner] = useState<string | null>(null);
 
-  const [plans, setPlans] = useState<AdminPlan[]>([]);
-  const [plansLoaded, setPlansLoaded] = useState(false);
   const [payments, setPayments] = useState<PaymentsData | null>(null);
   const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [agentReport, setAgentReport] = useState<AgentReportRow[]>([]);
@@ -199,6 +184,9 @@ const Admin = () => {
   const [promoKpis, setPromoKpis] = useState<any>(null);
   const [promoLoaded, setPromoLoaded] = useState(false);
   const [promoSaving, setPromoSaving] = useState(false);
+  const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
+  const [newCode, setNewCode] = useState({ code: "", amount: 20, expiry_days: "", max_redemptions: "" });
+  const [creatingCode, setCreatingCode] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -230,15 +218,13 @@ const Admin = () => {
   };
 
   const fetchData = async () => {
-    const [statsRes, usersRes, plansRes] = await Promise.all([
+    const [statsRes, usersRes] = await Promise.all([
       api.getAdminStats(),
       api.getAdminUsers(),
-      api.getAdminPlans(),
     ]);
     if (isAuthError(statsRes.error)) return forceReLogin();
     if (statsRes.data) setStats(statsRes.data);
     if (Array.isArray(usersRes.data)) setUsers(usersRes.data);
-    if (Array.isArray(plansRes.data)) { setPlans(plansRes.data); setPlansLoaded(true); }
     setLoading(false);
   };
 
@@ -265,16 +251,16 @@ const Admin = () => {
         setPhoneNumbersLoaded(true);
       });
     }
-    if (section === "plans" && !plansLoaded) {
-      api.getAdminPlans().then((res) => { if (Array.isArray(res.data)) setPlans(res.data); setPlansLoaded(true); });
-    }
     if (section === "payments" && !paymentsLoaded) {
       api.getAdminPayments().then((res) => { if (res.data) setPayments(res.data); setPaymentsLoaded(true); });
     }
     if (section === "promotions" && !promoLoaded) {
-      Promise.all([api.getAdminSettings(), api.getAdminPromoKpis()]).then(([s, k]) => {
+      Promise.all([
+        api.getAdminSettings(), api.getAdminPromoKpis(), api.getAdminPromoCodes(),
+      ]).then(([s, k, c]) => {
         if (s.data) setPromoSettings(s.data);
         if (k.data) setPromoKpis(k.data);
+        if (Array.isArray(c.data)) setPromoCodes(c.data);
         setPromoLoaded(true);
       });
     }
@@ -287,7 +273,7 @@ const Admin = () => {
     if (section === "user-report" && !userReportLoaded) {
       api.getAdminUsersReport().then((res) => { if (res.data) setUserReport(res.data); setUserReportLoaded(true); });
     }
-  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, plansLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded]);
+  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -302,20 +288,6 @@ const Admin = () => {
     fetchData();
   };
 
-  const handleAddCredits = async (userId: string) => {
-    const { error } = await api.adjustCredits(userId, { amount: creditAmount, reason: "Admin adjustment" });
-    if (error) return toast.error(error);
-    toast.success(`Added ${creditAmount} credits`);
-    fetchData();
-  };
-
-  const handleRemoveCredits = async (userId: string) => {
-    const { error } = await api.adjustCredits(userId, { amount: -creditAmount, reason: "Admin adjustment" });
-    if (error) return toast.error(error);
-    toast.success(`Removed ${creditAmount} credits`);
-    fetchData();
-  };
-
   const handleAddBalance = async (userId: string) => {
     if (!balanceAmount) return toast.error("Enter an amount");
     const { data, error } = await api.adjustUserBalance(userId, balanceAmount, "Admin credit");
@@ -324,37 +296,11 @@ const Admin = () => {
     fetchData();
   };
 
-  const handleResetUsage = async (userId: string) => {
-    const { error } = await api.resetUsage(userId);
+  const handleSaveRate = async (userId: string) => {
+    const { error } = await api.updateAdminUser(userId, rateForm);
     if (error) return toast.error(error);
-    toast.success("Usage counters reset");
-    fetchData();
-  };
-
-  const handleSaveLimits = async (userId: string) => {
-    const { error } = await api.updateAdminUser(userId, limitForm);
-    if (error) return toast.error(error);
-    toast.success("Limits updated");
-    setEditingLimits(null);
-    fetchData();
-  };
-
-  const handleChangePlan = async (userId: string, plan: string) => {
-    // Use the real plan catalog (from /admin/plans) — no hardcoded limits/rates.
-    const def = plans.find((p) => p.id === plan);
-    if (!def) return toast.error("Unknown plan");
-    const { error } = await api.updateAdminUser(userId, {
-      plan,
-      status: plan === "free" ? "trial" : "active",
-      outbound_limit: def.outbound_limit,
-      inbound_limit: def.inbound_limit,
-      agents_limit: def.agents_limit,
-      rate_per_minute: def.rate_per_minute,
-      outbound_used: 0,
-      inbound_used: 0,
-    });
-    if (error) return toast.error(error);
-    toast.success(`Plan changed to ${plan}`);
+    toast.success("Rate updated");
+    setEditingRate(null);
     fetchData();
   };
 
@@ -534,8 +480,6 @@ const Admin = () => {
               {section === "users" && renderUsers()}
               {section === "agents" && renderAgents()}
               {section === "numbers" && renderNumbers()}
-              {section === "plans" && renderPlans()}
-              {section === "subscribers" && renderSubscribers()}
               {section === "payments" && renderPayments()}
               {section === "promotions" && renderPromotions()}
               {section === "revenue" && renderRevenue()}
@@ -581,28 +525,25 @@ const Admin = () => {
   function renderPayments() {
     return (
       <div>
-        <SectionHeader title="Payments" subtitle="Charges, credits and recent billed calls across all users." />
+        <SectionHeader title="Payments" subtitle="Charges and recent billed calls across all users." />
         {!paymentsLoaded || !payments ? <ReportLoading /> : (
           <>
             <div className="grid gap-4 sm:grid-cols-3">
               <MiniStat label="Total Charges" value={money(payments.summary.total_charges)} />
-              <MiniStat label="MRR (active subs)" value={money(payments.summary.mrr)} />
-              <MiniStat label="Total Credits" value={payments.summary.total_credits} />
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By user</h3>
             <div className="overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Plan</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Charges</th><th className="px-4 py-3">Credits</th><th className="px-4 py-3">Stripe</th></tr>
+                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Charges</th><th className="px-4 py-3">Balance</th><th className="px-4 py-3">Stripe</th></tr>
                 </thead>
                 <tbody>
                   {payments.per_user.map((u, i) => (
                     <tr key={i} className="border-t border-border bg-card/30">
                       <td className="px-4 py-3"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
-                      <td className="px-4 py-3 capitalize">{u.plan}</td>
                       <td className="px-4 py-3">{u.status}</td>
                       <td className="px-4 py-3 text-foreground">{money(u.total_charges)}</td>
-                      <td className="px-4 py-3">{u.credits}</td>
+                      <td className="px-4 py-3 text-foreground">{money(u.balance)}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{u.stripe_customer_id || "—"}</td>
                     </tr>
                   ))}
@@ -691,20 +632,155 @@ const Admin = () => {
             New signups receive this credit (one-time, expiring). Turn off to stop granting it.
           </p>
         </div>
+
+        {/* Redeemable promo codes */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Promo codes</h3>
+            <p className="text-xs text-muted-foreground">
+              Codes users can redeem under Billing → Promotions for wallet credit.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
+            <div className="space-y-1">
+              <Label className="text-xs">Code</Label>
+              <Input
+                className="w-40 font-mono uppercase"
+                placeholder="LAUNCH20"
+                value={newCode.code}
+                onChange={(e) => setNewCode({ ...newCode, code: e.target.value.toUpperCase() })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Credit ($)</Label>
+              <Input
+                type="number" min={1} className="w-28"
+                value={newCode.amount}
+                onChange={(e) => setNewCode({ ...newCode, amount: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Credit expires (days)</Label>
+              <Input
+                type="number" min={0} className="w-36" placeholder="never"
+                value={newCode.expiry_days}
+                onChange={(e) => setNewCode({ ...newCode, expiry_days: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Max redemptions</Label>
+              <Input
+                type="number" min={1} className="w-36" placeholder="unlimited"
+                value={newCode.max_redemptions}
+                onChange={(e) => setNewCode({ ...newCode, max_redemptions: e.target.value })}
+              />
+            </div>
+            <Button onClick={createCode} disabled={creatingCode || !newCode.code.trim()}>
+              <Plus className="mr-1 h-4 w-4" /> {creatingCode ? "Creating…" : "Create code"}
+            </Button>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3">Code</th>
+                  <th className="px-4 py-3">Credit</th>
+                  <th className="px-4 py-3">Redeemed</th>
+                  <th className="px-4 py-3">Credit expiry</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {promoCodes.map((c) => (
+                  <tr key={c.id} className="border-t border-border bg-card/30">
+                    <td className="px-4 py-3 font-mono font-medium text-foreground">{c.code}</td>
+                    <td className="px-4 py-3 text-foreground">${Number(c.amount).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-foreground">
+                      {c.redemption_count}{c.max_redemptions ? ` / ${c.max_redemptions}` : ""}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {c.expiry_days ? `${c.expiry_days} days` : "never"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={c.active ? "default" : "secondary"}>
+                        {c.active ? "Active" : "Disabled"}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={() => toggleCode(c)}>
+                          {c.active ? "Disable" : "Enable"}
+                        </Button>
+                        <Button
+                          size="sm" variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => deleteCode(c)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {promoCodes.length === 0 && (
+              <div className="py-8 text-center text-sm text-muted-foreground">No promo codes yet.</div>
+            )}
+          </div>
+        </div>
       </div>
     );
+  }
+
+  async function refreshPromoCodes() {
+    const { data } = await api.getAdminPromoCodes();
+    if (Array.isArray(data)) setPromoCodes(data);
+  }
+
+  async function createCode() {
+    const code = newCode.code.trim().toUpperCase();
+    if (!code) return toast.error("Enter a code");
+    if (!newCode.amount || newCode.amount <= 0) return toast.error("Credit must be greater than 0");
+    setCreatingCode(true);
+    const { error } = await api.createAdminPromoCode({
+      code,
+      amount: newCode.amount,
+      expiry_days: newCode.expiry_days ? Number(newCode.expiry_days) : null,
+      max_redemptions: newCode.max_redemptions ? Number(newCode.max_redemptions) : null,
+    });
+    setCreatingCode(false);
+    if (error) return toast.error(String(error));
+    toast.success(`Code ${code} created`);
+    setNewCode({ code: "", amount: 20, expiry_days: "", max_redemptions: "" });
+    refreshPromoCodes();
+  }
+
+  async function toggleCode(c: PromoCode) {
+    const { error } = await api.updateAdminPromoCode(c.id, { active: !c.active });
+    if (error) return toast.error(String(error));
+    refreshPromoCodes();
+  }
+
+  async function deleteCode(c: PromoCode) {
+    if (!confirm(`Delete code ${c.code}? Credit already granted to users is not affected.`)) return;
+    const { error } = await api.deleteAdminPromoCode(c.id);
+    if (error) return toast.error(String(error));
+    toast.success("Code deleted");
+    refreshPromoCodes();
   }
 
   function renderRevenue() {
     return (
       <div>
-        <SectionHeader title="Revenue Report" subtitle="Usage revenue, subscriptions, and a 30-day trend." />
+        <SectionHeader title="Revenue Report" subtitle="Usage revenue and a 30-day trend." />
         {!revenueLoaded || !revenue ? <ReportLoading /> : (
           <>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2">
               <MiniStat label="Usage Revenue" value={money(revenue.totals.usage_revenue)} />
-              <MiniStat label="MRR" value={money(revenue.totals.mrr)} />
-              <MiniStat label="Est. Total" value={money(revenue.totals.estimated_total)} />
               <MiniStat label="Lifetime Charges" value={money(revenue.totals.total_charges)} />
             </div>
             <div className="mt-6 rounded-xl border border-border bg-card p-5">
@@ -720,23 +796,6 @@ const Admin = () => {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            </div>
-            <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Revenue by plan</h3>
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">Plan</th><th className="px-4 py-3">Active Subscribers</th><th className="px-4 py-3">MRR</th></tr>
-                </thead>
-                <tbody>
-                  {revenue.by_plan.map((p, i) => (
-                    <tr key={i} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3 capitalize">{p.plan}</td>
-                      <td className="px-4 py-3">{p.subscribers}</td>
-                      <td className="px-4 py-3 text-foreground">{money(p.mrr)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </>
         )}
@@ -802,13 +861,12 @@ const Admin = () => {
             <div className="overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Plan</th><th className="px-4 py-3">Conversations</th><th className="px-4 py-3">Agents</th></tr>
+                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Conversations</th><th className="px-4 py-3">Agents</th></tr>
                 </thead>
                 <tbody>
                   {userReport.top_users.map((u, i) => (
                     <tr key={i} className="border-t border-border bg-card/30">
                       <td className="px-4 py-3"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
-                      <td className="px-4 py-3 capitalize">{u.plan}</td>
                       <td className="px-4 py-3 text-foreground">{u.conversations}</td>
                       <td className="px-4 py-3">{u.agents}</td>
                     </tr>
@@ -823,10 +881,8 @@ const Admin = () => {
   }
 
   function renderOverview() {
-    const paidSubs = users.filter((u) => (u.plan || "free") !== "free").length;
     const totalNumbers = users.reduce((s, u) => s + (u.phone_numbers || 0), 0);
     const totalCharges = users.reduce((s, u) => s + (u.total_charges || 0), 0);
-    const maxPlan = Math.max(1, ...plans.map((p) => p.user_count || 0));
     return (
       <div>
         <SectionHeader title="Overview" subtitle="Platform snapshot across all users." />
@@ -835,14 +891,12 @@ const Admin = () => {
             <StatCard label="Total Users" value={stats.total_users} icon={Users} />
             <StatCard label="Total Conversations" value={stats.total_conversations} icon={PhoneOutgoing} />
             <StatCard label="Total Agents" value={stats.total_agents} icon={Bot} />
-            <StatCard label="Active Subscriptions" value={stats.active_subscriptions} icon={TrendingUp} />
+            <StatCard label="Phone Numbers" value={totalNumbers} icon={Phone} />
           </div>
         )}
 
-        {/* Second row — derived from live user/plan/revenue data */}
+        {/* Second row — derived from live user/revenue data */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Paid Subscribers" value={paidSubs} icon={UserCheck} />
-          <StatCard label="Phone Numbers" value={totalNumbers} icon={Phone} />
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><DollarSign className="h-5 w-5" /></div>
@@ -852,125 +906,25 @@ const Admin = () => {
               </div>
             </div>
           </div>
-          <div className="rounded-xl border border-border bg-card p-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><CreditCard className="h-5 w-5" /></div>
-              <div>
-                <div className="text-2xl font-bold text-foreground">{revenue ? money(revenue.totals.mrr) : "—"}</div>
-                <div className="text-xs text-muted-foreground">MRR</div>
-              </div>
-            </div>
-          </div>
         </div>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          {/* Users by plan */}
-          <div className="rounded-xl border border-border bg-card p-5">
-            <h3 className="mb-4 font-semibold text-foreground">Users by plan</h3>
-            <div className="space-y-3">
-              {plans.map((p) => (
-                <div key={p.id}>
-                  <div className="mb-1 flex items-center justify-between text-sm">
-                    <span className="text-foreground">{p.name}</span>
-                    <span className="text-muted-foreground">{p.user_count}</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-primary" style={{ width: `${((p.user_count || 0) / maxPlan) * 100}%` }} />
-                  </div>
-                </div>
-              ))}
-              {plans.length === 0 && <div className="text-sm text-muted-foreground">No plan data.</div>}
+        <div className="mt-6 rounded-xl border border-border bg-card p-5">
+          <h3 className="mb-4 font-semibold text-foreground">Sign-ups (last 30 days)</h3>
+          {userReport ? (
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={userReport.signups}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
+                  <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
+                  <Line type="monotone" dataKey="signups" name="Sign-ups" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-          </div>
-
-          {/* Sign-ups chart */}
-          <div className="rounded-xl border border-border bg-card p-5">
-            <h3 className="mb-4 font-semibold text-foreground">Sign-ups (last 30 days)</h3>
-            {userReport ? (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={userReport.signups}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
-                    <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-                    <Line type="monotone" dataKey="signups" name="Sign-ups" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <ReportLoading />
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderPlans() {
-    return (
-      <div>
-        <SectionHeader title="Plans" subtitle="Available plans and how many users are on each." />
-        {!plansLoaded ? (
-          <ReportLoading />
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {plans.map((p) => (
-              <div key={p.id} className="rounded-xl border border-border bg-card p-5">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-foreground">{p.name}</h3>
-                  <span className="text-sm font-medium text-primary">{p.price_display}</span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">{p.description}</p>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  {p.outbound_limit >= 999999 ? "Unlimited" : p.outbound_limit} out / {p.inbound_limit >= 999999 ? "Unlimited" : p.inbound_limit} in · {p.agents_limit} agents · ${p.rate_per_minute.toFixed(2)}/min
-                </p>
-                <div className="mt-4 flex items-center gap-2 border-t border-border pt-3">
-                  <span className="text-2xl font-bold text-foreground">{p.user_count}</span>
-                  <span className="text-xs text-muted-foreground">user(s) on this plan</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderSubscribers() {
-    const subs = users.filter((u) => (u.plan || "free") !== "free");
-    return (
-      <div>
-        <SectionHeader title="Subscribers" subtitle="Users on a paid plan and their subscription details." />
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3">User</th>
-                <th className="px-4 py-3">Plan</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Renews</th>
-                <th className="px-4 py-3">Credits</th>
-                <th className="px-4 py-3">Stripe</th>
-              </tr>
-            </thead>
-            <tbody>
-              {subs.map((u) => (
-                <tr key={u.id} className="border-t border-border bg-card/30">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-foreground">{u.full_name || " "}</div>
-                    <div className="text-xs text-muted-foreground">{u.email}</div>
-                  </td>
-                  <td className="px-4 py-3"><Badge variant="outline" className="capitalize">{u.plan}</Badge></td>
-                  <td className="px-4 py-3"><Badge variant={u.status === "active" ? "default" : "secondary"}>{u.status}</Badge></td>
-                  <td className="px-4 py-3 text-muted-foreground">{u.current_period_end ? new Date(u.current_period_end).toLocaleDateString() : "—"}</td>
-                  <td className="px-4 py-3 text-foreground">{u.credits}</td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">{u.stripe_customer_id || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {subs.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No paid subscribers yet.</div>}
+          ) : (
+            <ReportLoading />
+          )}
         </div>
       </div>
     );
@@ -1183,7 +1137,7 @@ const Admin = () => {
   function renderUsers() {
     return (
       <div>
-        <SectionHeader title="Users" subtitle="Manage users, billing, limits and credits." />
+        <SectionHeader title="Users" subtitle="Manage users, balances and rates." />
         <div className="relative mb-4 max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -1199,13 +1153,10 @@ const Admin = () => {
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">User</th>
-                <th className="px-4 py-3">Plan</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Outbound</th>
-                <th className="px-4 py-3">Inbound</th>
-                <th className="px-4 py-3">Agents</th>
+                <th className="px-4 py-3">Balance</th>
+                <th className="px-4 py-3">Rate</th>
                 <th className="px-4 py-3">Numbers</th>
-                <th className="px-4 py-3">Credits</th>
                 <th className="px-4 py-3">Calls</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -1221,18 +1172,13 @@ const Admin = () => {
                       {u.company_name && <div className="text-xs text-muted-foreground">{u.company_name}</div>}
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant="outline" className="capitalize">{u.plan}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
                       <Badge variant={u.is_active ? (u.status === "active" ? "default" : "secondary") : "destructive"}>
                         {u.is_active ? u.status : "Disabled"}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-foreground">{u.outbound_used}/{u.outbound_limit}</td>
-                    <td className="px-4 py-3 text-foreground">{u.inbound_used}/{u.inbound_limit}</td>
-                    <td className="px-4 py-3 text-foreground">{u.agents_used}/{u.agents_limit}</td>
+                    <td className="px-4 py-3 text-foreground">${(u.balance ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-foreground">${(u.rate_per_minute ?? 0.35).toFixed(2)}/min</td>
                     <td className="px-4 py-3 text-foreground">{u.phone_numbers ?? 0}</td>
-                    <td className="px-4 py-3 text-foreground">{u.credits}</td>
                     <td className="px-4 py-3 text-foreground">{u.total_conversations}</td>
                     <td className="px-4 py-3">
                       <ChevronRight className={`h-4 w-4 text-muted-foreground transition ${selectedUser === u.id ? "rotate-90" : ""}`} />
@@ -1241,8 +1187,8 @@ const Admin = () => {
 
                   {selectedUser === u.id && (
                     <tr className="border-t border-border bg-muted/20">
-                      <td colSpan={10} className="px-6 py-4">
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <td colSpan={7} className="px-6 py-4">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                           {/* Toggle Access */}
                           <div className="space-y-2">
                             <div className="text-xs font-semibold text-muted-foreground uppercase">Access</div>
@@ -1255,28 +1201,7 @@ const Admin = () => {
                             </Button>
                           </div>
 
-                          {/* Credits */}
-                          <div className="space-y-2">
-                            <div className="text-xs font-semibold text-muted-foreground uppercase">Credits ({u.credits})</div>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={1}
-                                value={creditAmount}
-                                onChange={e => setCreditAmount(parseInt(e.target.value) || 0)}
-                                onClick={e => e.stopPropagation()}
-                                className="h-8 w-16 rounded border border-input bg-background px-2 text-sm"
-                              />
-                              <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleAddCredits(u.id); }}>
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleRemoveCredits(u.id); }}>
-                                <Minus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-
-                          {/* Wallet Balance (real, spendable — numbers/calls/plans) */}
+                          {/* Wallet Balance (real, spendable — numbers/calls) */}
                           <div className="space-y-2">
                             <div className="text-xs font-semibold text-muted-foreground uppercase">
                               Balance (${(u.balance ?? 0).toFixed(2)})
@@ -1298,29 +1223,6 @@ const Admin = () => {
                             </div>
                           </div>
 
-                          {/* Assign Plan (Admin Override) — options from the real plan catalog */}
-                          <div className="space-y-2">
-                            <div className="text-xs font-semibold text-muted-foreground uppercase">Assign Plan</div>
-                            <select
-                              value={u.plan}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => {
-                                const newPlan = e.target.value;
-                                if (confirm(`Assign "${newPlan}" plan to ${u.full_name || u.email}? This bypasses payment.`)) {
-                                  handleChangePlan(u.id, newPlan);
-                                } else {
-                                  e.target.value = u.plan;
-                                }
-                              }}
-                              className="h-8 rounded border border-input bg-background px-2 text-sm"
-                            >
-                              {plans.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name} · {p.price_display}</option>
-                              ))}
-                            </select>
-                            <div className="text-[10px] text-muted-foreground">Admin override no payment required</div>
-                          </div>
-
                           {/* Status */}
                           <div className="space-y-2">
                             <div className="text-xs font-semibold text-muted-foreground uppercase">Status</div>
@@ -1336,76 +1238,52 @@ const Admin = () => {
                               <option value="canceled">Canceled</option>
                             </select>
                           </div>
-
-                          {/* Reset Usage */}
-                          <div className="space-y-2">
-                            <div className="text-xs font-semibold text-muted-foreground uppercase">Usage</div>
-                            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleResetUsage(u.id); }}>
-                              <RotateCcw className="mr-1 h-3 w-3" /> Reset Counters
-                            </Button>
-                          </div>
                         </div>
 
-                        {/* Custom Limits */}
+                        {/* Custom Rate — negotiated per-account pricing override */}
                         <div className="mt-4 border-t border-border pt-4">
-                          {editingLimits === u.id ? (
+                          {editingRate === u.id ? (
                             <div className="space-y-3">
-                              <div className="text-xs font-semibold text-muted-foreground uppercase">Custom Limits</div>
+                              <div className="text-xs font-semibold text-muted-foreground uppercase">Custom Rate</div>
                               <div className="flex flex-wrap gap-3">
                                 <label className="space-y-1">
-                                  <span className="text-xs text-muted-foreground">Outbound</span>
-                                  <input type="number" value={limitForm.outbound_limit}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => setLimitForm(f => ({ ...f, outbound_limit: parseInt(e.target.value) || 0 }))}
-                                    className="block h-8 w-24 rounded border border-input bg-background px-2 text-sm" />
-                                </label>
-                                <label className="space-y-1">
-                                  <span className="text-xs text-muted-foreground">Inbound</span>
-                                  <input type="number" value={limitForm.inbound_limit}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => setLimitForm(f => ({ ...f, inbound_limit: parseInt(e.target.value) || 0 }))}
-                                    className="block h-8 w-24 rounded border border-input bg-background px-2 text-sm" />
-                                </label>
-                                <label className="space-y-1">
-                                  <span className="text-xs text-muted-foreground">Agents</span>
-                                  <input type="number" value={limitForm.agents_limit}
-                                    onClick={e => e.stopPropagation()}
-                                    onChange={e => setLimitForm(f => ({ ...f, agents_limit: parseInt(e.target.value) || 0 }))}
-                                    className="block h-8 w-24 rounded border border-input bg-background px-2 text-sm" />
-                                </label>
-                                <label className="space-y-1">
                                   <span className="text-xs text-muted-foreground">Rate $/min</span>
-                                  <input type="number" step="0.01" value={limitForm.rate_per_minute}
+                                  <input type="number" step="0.01" value={rateForm.rate_per_minute}
                                     onClick={e => e.stopPropagation()}
-                                    onChange={e => setLimitForm(f => ({ ...f, rate_per_minute: parseFloat(e.target.value) || 0 }))}
+                                    onChange={e => setRateForm(f => ({ ...f, rate_per_minute: parseFloat(e.target.value) || 0 }))}
+                                    className="block h-8 w-24 rounded border border-input bg-background px-2 text-sm" />
+                                </label>
+                                <label className="space-y-1">
+                                  <span className="text-xs text-muted-foreground">Cost multiplier</span>
+                                  <input type="number" step="0.01" value={rateForm.cost_multiplier}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={e => setRateForm(f => ({ ...f, cost_multiplier: parseFloat(e.target.value) || 0 }))}
                                     className="block h-8 w-24 rounded border border-input bg-background px-2 text-sm" />
                                 </label>
                                 <label className="space-y-1">
                                   <span className="text-xs text-muted-foreground">Total charges $</span>
-                                  <input type="number" step="0.01" value={limitForm.total_charges}
+                                  <input type="number" step="0.01" value={rateForm.total_charges}
                                     onClick={e => e.stopPropagation()}
-                                    onChange={e => setLimitForm(f => ({ ...f, total_charges: parseFloat(e.target.value) || 0 }))}
+                                    onChange={e => setRateForm(f => ({ ...f, total_charges: parseFloat(e.target.value) || 0 }))}
                                     className="block h-8 w-28 rounded border border-input bg-background px-2 text-sm" />
                                 </label>
                               </div>
                               <div className="flex gap-2">
-                                <Button size="sm" onClick={(e) => { e.stopPropagation(); handleSaveLimits(u.id); }}>Save</Button>
-                                <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setEditingLimits(null); }}>Cancel</Button>
+                                <Button size="sm" onClick={(e) => { e.stopPropagation(); handleSaveRate(u.id); }}>Save</Button>
+                                <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setEditingRate(null); }}>Cancel</Button>
                               </div>
                             </div>
                           ) : (
                             <Button size="sm" variant="ghost" onClick={(e) => {
                               e.stopPropagation();
-                              setLimitForm({
-                                outbound_limit: u.outbound_limit,
-                                inbound_limit: u.inbound_limit,
-                                agents_limit: u.agents_limit,
-                                rate_per_minute: u.rate_per_minute ?? 0.1,
+                              setRateForm({
+                                rate_per_minute: u.rate_per_minute ?? 0.35,
+                                cost_multiplier: u.cost_multiplier ?? 3.0,
                                 total_charges: u.total_charges ?? 0,
                               });
-                              setEditingLimits(u.id);
+                              setEditingRate(u.id);
                             }}>
-                              Set Custom Limits / Billing
+                              Set Custom Rate / Billing
                             </Button>
                           )}
                         </div>

@@ -18,7 +18,6 @@ from routers.billing import (
     get_or_create_billing,
     has_balance,
     debit_balance,
-    get_balance,
     PHONE_NUMBER_MONTHLY_COST,
 )
 
@@ -26,6 +25,87 @@ CAMPAIGN_BATCH_SIZE = 20
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telephony", tags=["Telephony"])
+
+
+# ── Inbound-call suspension on empty balance ──
+# When a user's wallet balance crosses to $0, their phone numbers get temporarily
+# repointed at a shared "insufficient balance" assistant, so inbound callers hear a
+# short message instead of reaching the real agent. Restored automatically once the
+# balance recovers. Triggered from routers/billing.py's debit_balance/credit_balance.
+
+async def _get_or_create_fallback_assistant_id() -> str | None:
+    """Lazily create (once) the shared VAPI assistant used for balance suspension,
+    cached in platform_settings so every account reuses the same one."""
+    if not settings.vapi_api_key:
+        return None
+    rows = supabase.table("platform_settings").select("fallback_assistant_id").limit(1).execute().data
+    existing = rows[0].get("fallback_assistant_id") if rows else None
+    if existing:
+        return existing
+    try:
+        assistant = await vapi_client.create_assistant(vapi_client.build_fallback_assistant_payload())
+    except Exception:
+        logger.exception("Failed to create the shared fallback assistant")
+        return None
+    assistant_id = assistant.get("id")
+    if not assistant_id:
+        return None
+    if rows:
+        supabase.table("platform_settings").update({"fallback_assistant_id": assistant_id}).eq("id", 1).execute()
+    else:
+        supabase.table("platform_settings").insert({"id": 1, "fallback_assistant_id": assistant_id}).execute()
+    return assistant_id
+
+
+async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
+    """Repoint (block=True) or restore (block=False) every one of this user's
+    VAPI-synced phone numbers between the real agent's assistant and the shared
+    fallback assistant. Best-effort — a VAPI failure here must never break the
+    balance update that triggered it (callers run this fire-and-forget)."""
+    if not settings.vapi_api_key:
+        return
+    numbers = (
+        supabase.table("phone_numbers")
+        .select("id, vapi_phone_id, agent_id, suspended_for_balance")
+        .eq("user_id", user_id)
+        .execute().data or []
+    )
+    if not numbers:
+        return
+
+    fallback_id = await _get_or_create_fallback_assistant_id() if block else None
+
+    for n in numbers:
+        vapi_phone_id = n.get("vapi_phone_id")
+        if not vapi_phone_id:
+            continue  # not yet synced to VAPI — nothing to repoint
+
+        if block:
+            if n.get("suspended_for_balance") or not fallback_id:
+                continue
+            try:
+                await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": fallback_id})
+                supabase.table("phone_numbers").update({"suspended_for_balance": True}).eq("id", n["id"]).execute()
+            except Exception:
+                logger.exception("Failed to suspend inbound routing for phone number %s", n["id"])
+        else:
+            if not n.get("suspended_for_balance"):
+                continue
+            agent_id = n.get("agent_id")
+            real_assistant_id = None
+            if agent_id:
+                agent = (
+                    supabase.table("ai_agents").select("vapi_assistant_id")
+                    .eq("id", agent_id).maybe_single().execute().data
+                )
+                real_assistant_id = agent.get("vapi_assistant_id") if agent else None
+            if not real_assistant_id:
+                continue  # no (synced) agent to restore to — leave suspended for now
+            try:
+                await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": real_assistant_id})
+                supabase.table("phone_numbers").update({"suspended_for_balance": False}).eq("id", n["id"]).execute()
+            except Exception:
+                logger.exception("Failed to restore inbound routing for phone number %s", n["id"])
 
 
 # ── Phone Numbers ──
@@ -337,9 +417,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
     if not check_call_quota(user["user_id"], "outbound"):
-        if get_balance(user["user_id"]) <= 0:
-            raise HTTPException(status_code=402, detail="Your balance is empty. Add funds or subscribe to keep making calls.")
-        raise HTTPException(status_code=403, detail="Monthly outbound call limit reached for your plan.")
+        raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
     agent = (
         supabase.table("ai_agents")
@@ -526,9 +604,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
     if not check_call_quota(user["user_id"], "outbound"):
-        if get_balance(user["user_id"]) <= 0:
-            raise HTTPException(status_code=402, detail="Your balance is empty. Add funds or subscribe to keep making calls.")
-        raise HTTPException(status_code=403, detail="Monthly outbound call limit reached for your plan.")
+        raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
     if not camp.get("list_id"):
         raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")

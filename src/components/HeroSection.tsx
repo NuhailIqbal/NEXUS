@@ -1,23 +1,25 @@
-import { ArrowRight, Phone, Brain, Cpu, Network, Zap, Radio, Layers } from "lucide-react";
+import { ArrowRight, PhoneIncoming, PhoneOutgoing, FileAudio, Users, Gauge, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+// Real jobs an agent on this platform is configured to do (see the agent wizard).
 const rotatingWords = [
-  "Revenue Optimization",
-  "Neural Call Routing",
-  "Predictive Matching",
-  "Real-Time Intelligence",
-  "Autonomous Scale",
+  "Outbound Campaigns",
+  "Inbound Reception",
+  "Lead Qualification",
+  "Appointment Booking",
+  "Follow-Up Calls",
 ];
 
+// Every badge below maps to a shipped feature in the dashboard.
 const badges = [
-  { icon: Brain, label: "Neural Engine" },
-  { icon: Network, label: "Smart Routing" },
-  { icon: Cpu, label: "ML Pipeline" },
-  { icon: Radio, label: "Live Signal" },
-  { icon: Zap, label: "Auto Optimization" },
-  { icon: Layers, label: "Multi-Channel" },
+  { icon: PhoneOutgoing, label: "Outbound Campaigns" },
+  { icon: PhoneIncoming, label: "AI Receptionist" },
+  { icon: FileAudio, label: "Recordings & Transcripts" },
+  { icon: Repeat, label: "Live Call Transfer" },
+  { icon: Users, label: "Contacts & Lists" },
+  { icon: Gauge, label: "Per-Minute Billing" },
 ];
 
 const HeroSection = () => {
@@ -45,27 +47,27 @@ const HeroSection = () => {
       <div className="container mx-auto px-4 text-center relative z-10">
         <div className="badge-pill mx-auto mb-8 animate-slide-up">
           <span className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-          AI POWERED REVENUE INFRASTRUCTURE
+          AI VOICE AGENTS FOR SALES &amp; SUPPORT
         </div>
 
         <h1 className="text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-tight mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-          THE NEURAL
+          AI AGENTS THAT
           <br />
-          <span className="text-gradient">REVENUE ENGINE</span>
+          <span className="text-gradient">WORK THE PHONES</span>
         </h1>
 
         <div className="text-xl md:text-2xl font-medium mb-6 animate-slide-up" style={{ animationDelay: "0.2s" }}>
-          Powering{" "}
+          Built for{" "}
           <span className="text-gradient font-bold" key={wordIndex}>
             {rotatingWords[wordIndex]}
-          </span>{" "}
-          at Scale
+          </span>
         </div>
 
         <p className="max-w-2xl mx-auto text-muted-foreground text-base md:text-lg mb-10 animate-slide-up" style={{ animationDelay: "0.3s" }}>
-          EDM Nexus deploys <strong className="text-foreground">autonomous AI agents</strong> for real-time call routing, 
-          predictive buyer matching, and revenue optimization across millions of inbound interactions 
-          <strong className="text-foreground"> 24/7 in 29+ languages</strong>.
+          Build a voice agent, give it a phone number, and it starts{" "}
+          <strong className="text-foreground">making and answering real calls</strong>. Every call is
+          recorded and transcribed, and qualified callers can be transferred straight to your team.{" "}
+          <strong className="text-foreground">Around $0.35 a minute, with no subscription.</strong>
         </p>
 
         <div className="flex flex-wrap justify-center gap-3 mb-10 animate-slide-up" style={{ animationDelay: "0.4s" }}>
@@ -78,17 +80,16 @@ const HeroSection = () => {
         </div>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-slide-up" style={{ animationDelay: "0.5s" }}>
-          <Link to="/request-access">
+          <Link to="/register">
             <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 px-8 gap-2 text-base">
-              Request Platform Access <ArrowRight size={18} />
+              Start with $20 free credit <ArrowRight size={18} />
             </Button>
           </Link>
-          <a href="tel:+18337118975">
-            <Button size="lg" variant="outline" className="gap-2 border-border text-foreground hover:bg-secondary px-8 text-base">
-              <Phone size={18} /> (833) 711-8975
-            </Button>
-          </a>
         </div>
+
+        <p className="mt-5 text-xs text-muted-foreground animate-slide-up" style={{ animationDelay: "0.6s" }}>
+          No card required to sign up · Pay only for the minutes you use
+        </p>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent pointer-events-none" />

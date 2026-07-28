@@ -9,7 +9,7 @@ from config import settings
 from database import supabase
 from services.gemini import summarize_transcript, analyze_sentiment
 from services.automation_engine import run_post_call_automations
-from routers.billing import increment_usage, check_call_quota, record_call_cost
+from routers.billing import record_call_cost
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -340,12 +340,11 @@ def _new_conversation_base(payload: dict, user_id: str) -> dict:
 
 
 def _create_conversation(payload: dict, user_id: str, vapi_call_id: str, status: str) -> str | None:
-    """Insert a new conversation row (linked to agent/contact) and meter usage
-    exactly once. Returns the new row id, or None if insert failed."""
+    """Insert a new conversation row (linked to agent/contact). Returns the new row id,
+    or None if insert failed."""
     row = _new_conversation_base(payload, user_id)
     row.update({"user_id": user_id, "vapi_call_id": vapi_call_id, "status": status})
     result = supabase.table("conversations").insert(row).execute()
-    increment_usage(user_id, row["direction"])
     return result.data[0]["id"] if result.data else None
 
 
@@ -430,13 +429,12 @@ async def _handle_call_ended(payload: dict):
         conv_id = existing.data[0]["id"]
     elif user_id:
         # No row yet (call-started/status-update never arrived) — create a fully
-        # linked row here and meter usage exactly once.
+        # linked row here.
         base = _new_conversation_base(payload, user_id)
         base.update(updates)
         base.update({"user_id": user_id, "vapi_call_id": vapi_call_id})
         insert_result = supabase.table("conversations").insert(base).execute()
         conv_id = insert_result.data[0]["id"] if insert_result.data else None
-        increment_usage(user_id, base["direction"])
         logger.info(f"call-ended inserted: {vapi_call_id}")
     else:
         return

@@ -19,113 +19,16 @@ def _app_base() -> str:
 
 stripe.api_key = settings.stripe_secret_key
 
-# Cost-plus pricing: each call is charged at (VAPI cost + est. Twilio carrier leg)
-# × the plan's cost_multiplier. rate_per_minute is the ADVERTISED/estimated per-minute
-# rate (multiplier × ~$0.114/min avg true cost) and the fallback when a call is
-# missing provider-cost data. Higher plans buy cheaper calls. Paid plans also grant an
-# `included_credit` (= the monthly fee) as a subscription credit each cycle.
-PLANS = [
-    {
-        "id": "payg",
-        "name": "Pay As You Go",
-        "price": 0,
-        "price_display": "~$0.35/min",
-        "description": "Only pay for what you use",
-        "outbound_limit": 999999,
-        "inbound_limit": 999999,
-        "agents_limit": 10,
-        "rate_per_minute": 0.35,
-        "cost_multiplier": 3.00,
-        "included_credit": 0,
-        "features": [
-            "Unlimited calls",
-            "~$0.35 per minute (estimated)",
-            "Up to 10 AI Agents",
-            "Pay only for usage",
-            "No monthly commitment",
-        ],
-    },
-    {
-        "id": "starter",
-        "name": "Starter",
-        "price": 2900,
-        "price_display": "$29/mo",
-        "description": "For small teams getting started",
-        "outbound_limit": 100,
-        "inbound_limit": 200,
-        "agents_limit": 25,
-        "rate_per_minute": 0.31,
-        "cost_multiplier": 2.70,
-        "included_credit": 29,
-        "features": [
-            "$29 credit included every month",
-            "100 outbound calls/mo",
-            "200 inbound calls/mo",
-            "Up to 25 AI Agents",
-            "~$0.31 per minute (estimated)",
-            "Email support",
-        ],
-    },
-    {
-        "id": "growth",
-        "name": "Growth",
-        "price": 7900,
-        "price_display": "$79/mo",
-        "description": "For growing businesses",
-        "outbound_limit": 300,
-        "inbound_limit": 500,
-        "agents_limit": 50,
-        "rate_per_minute": 0.27,
-        "cost_multiplier": 2.35,
-        "included_credit": 79,
-        "features": [
-            "$79 credit included every month",
-            "300 outbound calls/mo",
-            "500 inbound calls/mo",
-            "Up to 50 AI Agents",
-            "~$0.27 per minute (estimated)",
-            "Priority support",
-        ],
-        "popular": True,
-    },
-    {
-        "id": "business",
-        "name": "Business",
-        "price": 19900,
-        "price_display": "$199/mo",
-        "description": "For large-scale operations",
-        "outbound_limit": 500,
-        "inbound_limit": 700,
-        "agents_limit": 100,
-        "rate_per_minute": 0.23,
-        "cost_multiplier": 2.25,
-        "included_credit": 199,
-        "features": [
-            "$199 credit included every month",
-            "500 outbound calls/mo",
-            "700 inbound calls/mo",
-            "Up to 100 AI Agents",
-            "~$0.23 per minute (estimated)",
-            "Dedicated account manager",
-        ],
-    },
-]
-
+# Cost-plus pricing, flat for every account: each call is charged at (VAPI cost + est.
+# Twilio carrier leg) × DEFAULT_COST_MULTIPLIER. DEFAULT_RATE_PER_MINUTE is the
+# advertised/estimated per-minute rate and the fallback when a call is missing
+# provider-cost data. An admin can still override an individual account's rate/
+# multiplier directly on its billing row for negotiated custom pricing.
 DEFAULT_RATE_PER_MINUTE = 0.35
 DEFAULT_COST_MULTIPLIER = 3.00
 
 # Monthly cost charged to the client for each Twilio phone number they provision.
 PHONE_NUMBER_MONTHLY_COST = 3.00
-
-FREE_TIER = {
-    "agents_limit": 10,
-    "outbound_limit": 5,
-    "inbound_limit": 5,
-}
-
-
-def get_plan_by_id(plan_id: str) -> dict | None:
-    return next((p for p in PLANS if p["id"] == plan_id), None)
 
 
 def get_or_create_billing(user_id: str) -> dict:
@@ -133,21 +36,13 @@ def get_or_create_billing(user_id: str) -> dict:
     if result.data:
         return result.data[0]
 
-    # Everyone starts on Pay As You Go (wallet-prepaid, no monthly fee). Outbound
-    # calls are gated on a positive balance, so there's no free-usage loophole.
-    payg = get_plan_by_id("payg")
+    # Prepaid wallet, no plans/tiers: outbound calls are gated on a positive balance,
+    # so there's no free-usage loophole.
     row = {
         "user_id": user_id,
-        "plan": "payg",
         "status": "active",
-        "agents_limit": payg["agents_limit"],
-        "outbound_limit": payg["outbound_limit"],
-        "inbound_limit": payg["inbound_limit"],
-        "outbound_used": 0,
-        "inbound_used": 0,
-        "credits": 0,
-        "rate_per_minute": payg["rate_per_minute"],
-        "cost_multiplier": payg["cost_multiplier"],
+        "rate_per_minute": DEFAULT_RATE_PER_MINUTE,
+        "cost_multiplier": DEFAULT_COST_MULTIPLIER,
         "is_active": True,
     }
     insert = supabase.table("billing").insert(row).execute()
@@ -172,8 +67,12 @@ def add_charge(user_id: str, amount: float, note: str | None = None) -> float:
 
 _GRANT_PRIORITY = {"promo": 0, "purchased": 1, "subscription": 2}
 # Ledger kind -> grant type when a grant type isn't given explicitly.
-_KIND_TO_GRANT = {"promo": "promo", "topup": "purchased", "admin": "purchased",
-                  "refund": "purchased", "subscription": "subscription"}
+# NB: `promo_code` (a redeemed code) is deliberately a SEPARATE ledger kind from `promo`
+# (the automatic signup welcome bonus) — _has_promo_credit() gates the welcome bonus on
+# kind == "promo", so reusing that kind here would permanently block it. Both map to the
+# same `promo` GRANT type so they're spent first and can expire.
+_KIND_TO_GRANT = {"promo": "promo", "promo_code": "promo", "topup": "purchased",
+                  "admin": "purchased", "refund": "purchased", "subscription": "subscription"}
 
 
 def _parse_ts(s):
@@ -240,13 +139,13 @@ def _insert_notification(user_id, kind, title, body):
 
 _LOW_BALANCE_MSGS = {
     10: ("Low balance — $10 left",
-         "You have about $10 in credit remaining. Add funds or subscribe to avoid interruption."),
+         "You have about $10 in credit remaining. Add funds to avoid interruption."),
     5:  ("Low balance — $5 left",
-         "You have about $5 in credit remaining. Add funds or subscribe to keep your calls running."),
+         "You have about $5 in credit remaining. Add funds to keep your calls running."),
     1:  ("Low balance — $1 left",
          "You have only $1 remaining. Add a payment method to continue using our services without interruption."),
     0:  ("Balance empty",
-         "Your credit is used up. Subscribe to a plan or add funds to keep making calls."),
+         "Your credit is used up. Add funds to keep making calls."),
 }
 
 
@@ -271,6 +170,145 @@ def _notify_low_balance(user_id, old_balance, new_balance):
             continue  # already alerted since the last top-up
         title, body = _LOW_BALANCE_MSGS[t]
         _insert_notification(user_id, kind, title, body)
+
+
+def _sync_inbound_routing(user_id: str, block: bool) -> None:
+    """Fire-and-forget: suspend/restore this user's inbound numbers to/from the
+    fallback assistant as their balance crosses to/from $0. Local import avoids a
+    circular import (telephony.py already imports from this module)."""
+    try:
+        import asyncio
+        from routers.telephony import sync_inbound_routing_for_balance
+        asyncio.create_task(sync_inbound_routing_for_balance(user_id, block))
+    except RuntimeError:
+        pass  # no running event loop (e.g. called from a script) — skip, non-critical
+    except Exception:
+        logger.exception("Failed to schedule inbound routing sync for user %s", user_id)
+
+
+# ── Auto-recharge (off-session top-up from the saved default card) ──
+# Charges the customer's default card without them present when the balance falls to or
+# below their threshold. Every guard below matters: this moves real money unattended.
+
+AUTO_RECHARGE_PENDING_TTL_MINUTES = 15
+
+
+def get_default_payment_method(customer_id: str) -> str | None:
+    """The customer's default card, per Stripe's invoice_settings (our source of truth)."""
+    try:
+        customer = stripe.Customer.retrieve(customer_id)
+        settings_obj = getattr(customer, "invoice_settings", None)
+        pm = getattr(settings_obj, "default_payment_method", None) if settings_obj else None
+        if pm:
+            return pm if isinstance(pm, str) else getattr(pm, "id", None)
+        # No explicit default — fall back to the only saved card, if there is exactly one.
+        cards = stripe.Customer.list_payment_methods(customer_id, type="card", limit=2)
+        data = getattr(cards, "data", []) or []
+        return data[0].id if len(data) == 1 else None
+    except Exception:
+        logger.exception("Failed to resolve default payment method for %s", customer_id)
+        return None
+
+
+def credit_auto_recharge(user_id: str, payment_intent_id: str, amount: float) -> None:
+    """Credit an auto-recharge payment. Idempotent: passing the PaymentIntent id as
+    stripe_session_id means the synchronous path and the webhook can't double-credit
+    (wallet_transactions has a partial unique index on that column)."""
+    credit_balance(
+        user_id, amount, "topup",
+        f"Auto recharge — added ${amount:.2f}",
+        stripe_session_id=payment_intent_id,
+    )
+    supabase.table("billing").update(
+        {"auto_recharge_pending_at": None}
+    ).eq("user_id", user_id).execute()
+
+
+def _run_auto_recharge(user_id: str) -> None:
+    """Attempt one off-session charge. Runs in a thread (never blocks call billing) and
+    swallows every failure — a Stripe problem must not break the debit that triggered it."""
+    try:
+        billing = get_or_create_billing(user_id)
+        amount = round(float(billing.get("auto_recharge_amount") or 0), 2)
+        if amount < TOPUP_MIN:
+            logger.warning("auto-recharge for %s skipped: amount %.2f below minimum", user_id, amount)
+            return
+
+        customer_id = billing.get("stripe_customer_id")
+        pm_id = get_default_payment_method(customer_id) if customer_id else None
+        if not pm_id:
+            # Nothing we can charge — tell the user instead of silently doing nothing.
+            supabase.table("billing").update(
+                {"auto_recharge_pending_at": None}
+            ).eq("user_id", user_id).execute()
+            _insert_notification(
+                user_id, "auto_recharge_no_card",
+                "Auto recharge needs a card",
+                "Your balance is low but no default payment method is saved. "
+                "Add a card under Billing → Payment methods to enable auto recharge.",
+            )
+            return
+
+        intent = stripe.PaymentIntent.create(
+            customer=customer_id,
+            amount=int(round(amount * 100)),
+            currency="usd",
+            payment_method=pm_id,
+            off_session=True,
+            confirm=True,
+            description="EDM Nexus — automatic balance top-up",
+            metadata={"type": "auto_recharge", "user_id": user_id, "amount": f"{amount:.2f}"},
+        )
+        if intent.status == "succeeded":
+            credit_auto_recharge(user_id, intent.id, amount)
+            _insert_notification(
+                user_id, "auto_recharge_ok", "Balance topped up automatically",
+                f"We added ${amount:.2f} to your balance using your saved card.",
+            )
+        # Any other status resolves via the Stripe webhook; leave pending_at set so we
+        # don't fire a second charge while this one is still in flight.
+    except stripe.error.CardError as e:
+        supabase.table("billing").update(
+            {"auto_recharge_pending_at": None}
+        ).eq("user_id", user_id).execute()
+        msg = getattr(e, "user_message", None) or "Your card was declined."
+        _insert_notification(
+            user_id, "auto_recharge_failed", "Auto recharge failed",
+            f"{msg} Add funds manually or update your card under Billing → Payment methods.",
+        )
+    except Exception:
+        supabase.table("billing").update(
+            {"auto_recharge_pending_at": None}
+        ).eq("user_id", user_id).execute()
+        logger.exception("Auto-recharge failed for user %s", user_id)
+
+
+def _maybe_auto_recharge(user_id: str, billing: dict, new_balance: float) -> None:
+    """Decide whether to fire an auto-recharge, then run it off the event loop.
+    Claims `auto_recharge_pending_at` FIRST so a burst of concurrent calls each crossing
+    the threshold can only trigger one charge."""
+    if not billing.get("auto_recharge_enabled"):
+        return
+    threshold = float(billing.get("auto_recharge_threshold") or 0)
+    if new_balance > threshold:
+        return
+
+    pending = billing.get("auto_recharge_pending_at")
+    if pending:
+        age = datetime.now(timezone.utc) - _parse_ts(pending)
+        if age < timedelta(minutes=AUTO_RECHARGE_PENDING_TTL_MINUTES):
+            return  # a charge is already in flight
+    supabase.table("billing").update(
+        {"auto_recharge_pending_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("user_id", user_id).execute()
+
+    try:
+        import asyncio
+        asyncio.get_running_loop().run_in_executor(None, _run_auto_recharge, user_id)
+    except RuntimeError:
+        _run_auto_recharge(user_id)  # no event loop (script/CLI) — just run it inline
+    except Exception:
+        logger.exception("Failed to schedule auto-recharge for user %s", user_id)
 
 
 def _record_wallet_txn(user_id, kind, amount, balance_after, description,
@@ -304,7 +342,7 @@ def credit_balance(user_id, amount, kind, description, stripe_session_id=None,
         )
         if existing.data:
             return get_balance(user_id)
-    get_or_create_billing(user_id)
+    old_balance = _sync_cached_balance(user_id)
     gtype = grant_type or _KIND_TO_GRANT.get(kind, "purchased")
     supabase.table("credit_grants").insert({
         "user_id": user_id, "type": gtype, "amount": amount, "remaining": amount,
@@ -312,6 +350,8 @@ def credit_balance(user_id, amount, kind, description, stripe_session_id=None,
     }).execute()
     new_balance = _sync_cached_balance(user_id)
     _record_wallet_txn(user_id, kind, amount, new_balance, description, stripe_session_id, ref_id)
+    if old_balance <= 0 < new_balance:
+        _sync_inbound_routing(user_id, block=False)
     return new_balance
 
 
@@ -337,49 +377,23 @@ def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
     new_balance = _sync_cached_balance(user_id)
     _record_wallet_txn(user_id, kind, -actual, new_balance, description, None, ref_id)
     _notify_low_balance(user_id, old_balance, new_balance)
+    if old_balance > 0 >= new_balance:
+        _sync_inbound_routing(user_id, block=True)
+    # Re-read: the row may have changed (e.g. pending_at) since `old_balance` was taken.
+    _maybe_auto_recharge(user_id, get_or_create_billing(user_id), new_balance)
     return new_balance
 
 
 def check_call_quota(user_id: str, direction: str) -> bool:
+    """Prepaid wallet, no plans: placing an outbound call requires a positive balance
+    (the exact per-minute cost is metered and debited when the call ends). Inbound
+    calls aren't gated — they're billed the same way once they complete."""
     billing = get_or_create_billing(user_id)
     if not billing.get("is_active", True):
         return False
-
-    # Prepaid wallet: placing an outbound call requires a positive balance
-    # (the exact per-minute cost is metered and debited when the call ends).
-    if direction == "outbound" and float(billing.get("balance") or 0) <= 0:
-        return False
-
     if direction == "outbound":
-        limit = (billing.get("outbound_limit") or 0) + (billing.get("credits") or 0)
-        used = billing.get("outbound_used") or 0
-    else:
-        limit = (billing.get("inbound_limit") or 0) + (billing.get("credits") or 0)
-        used = billing.get("inbound_used") or 0
-
-    return used < limit
-
-
-def check_agent_quota(user_id: str) -> bool:
-    billing = get_or_create_billing(user_id)
-    if not billing.get("is_active", True):
-        return False
-
-    agents_limit = billing.get("agents_limit") or FREE_TIER["agents_limit"]
-    agent_count = (
-        supabase.table("ai_agents")
-        .select("id", count="exact")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return (agent_count.count or 0) < agents_limit
-
-
-def increment_usage(user_id: str, direction: str):
-    billing = get_or_create_billing(user_id)
-    field = "outbound_used" if direction == "outbound" else "inbound_used"
-    current = billing.get(field) or 0
-    supabase.table("billing").update({field: current + 1}).eq("user_id", user_id).execute()
+        return float(billing.get("balance") or 0) > 0
+    return True
 
 
 def _twilio_leg(duration_seconds: int, direction: str) -> float:
@@ -504,76 +518,285 @@ def record_call_cost(
     return cost
 
 
-class CheckoutRequest(BaseModel):
-    plan_id: str
-    success_url: Optional[str] = None
-    cancel_url: Optional[str] = None
-
-
-@router.get("/plans")
-async def get_plans():
-    public_plans = []
-    for p in PLANS:
-        public_plans.append({
-            "id": p["id"],
-            "name": p["name"],
-            "price": p["price"],
-            "price_display": p["price_display"],
-            "description": p["description"],
-            "features": p["features"],
-            "popular": p.get("popular", False),
-            "outbound_limit": p["outbound_limit"],
-            "inbound_limit": p["inbound_limit"],
-            "agents_limit": p["agents_limit"],
-            "rate_per_minute": p.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
-        })
-    return {"data": public_plans, "error": None}
-
-
 @router.get("/status")
 async def get_billing_status(user=Depends(get_current_user)):
     billing = get_or_create_billing(user["user_id"])
-
-    agent_count = (
-        supabase.table("ai_agents")
-        .select("id", count="exact")
-        .eq("user_id", user["user_id"])
-        .execute()
-    )
-
     return {
         "data": {
-            **billing,
-            "agents_used": agent_count.count or 0,
+            "is_active": billing.get("is_active", True),
+            "rate_per_minute": float(billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE),
+            "cost_multiplier": float(billing.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER),
+            "total_charges": float(billing.get("total_charges") or 0),
+            "balance": float(billing.get("balance") or 0),
+            "auto_recharge_enabled": bool(billing.get("auto_recharge_enabled")),
+            "auto_recharge_threshold": float(billing.get("auto_recharge_threshold") or 10.0),
+            "auto_recharge_amount": float(billing.get("auto_recharge_amount") or 50.0),
         },
         "error": None,
     }
 
 
-@router.get("/usage")
-async def get_usage(user=Depends(get_current_user)):
+@router.get("/config")
+async def get_stripe_config(user=Depends(get_current_user)):
+    """Stripe publishable key for the in-app card form. Served from the backend (rather
+    than baked into the bundle) so it always matches the secret key's test/live mode."""
+    return {"data": {"publishable_key": settings.active_stripe_publishable_key}, "error": None}
+
+
+# ── Payment methods (saved cards) ──
+
+def _require_stripe():
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+
+
+@router.get("/payment-methods")
+async def list_payment_methods(user=Depends(get_current_user)):
+    """Saved cards for this customer. Returns [] for users who never paid (no customer yet)."""
+    if not settings.stripe_secret_key:
+        return {"data": [], "error": None}
     billing = get_or_create_billing(user["user_id"])
-    agent_count = (
-        supabase.table("ai_agents")
-        .select("id", count="exact")
-        .eq("user_id", user["user_id"])
-        .execute()
-    )
+    customer_id = billing.get("stripe_customer_id")
+    if not customer_id:
+        return {"data": [], "error": None}
+    try:
+        default_pm = get_default_payment_method(customer_id)
+        cards = stripe.Customer.list_payment_methods(customer_id, type="card", limit=20)
+        items = []
+        for pm in (getattr(cards, "data", []) or []):
+            card = getattr(pm, "card", None)
+            items.append({
+                "id": pm.id,
+                "brand": (getattr(card, "brand", "") or "card").title(),
+                "last4": getattr(card, "last4", "") or "",
+                "exp_month": getattr(card, "exp_month", 0) or 0,
+                "exp_year": getattr(card, "exp_year", 0) or 0,
+                "is_default": pm.id == default_pm,
+            })
+        return {"data": items, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+@router.post("/payment-methods/setup-intent")
+async def create_setup_intent(user=Depends(get_current_user)):
+    """Client secret for the in-app card form. usage='off_session' so the saved card can
+    later be charged unattended by auto-recharge."""
+    _require_stripe()
+    try:
+        customer_id = _get_or_create_stripe_customer(user)
+        intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            usage="off_session",
+            payment_method_types=["card"],
+            metadata={"user_id": user["user_id"]},
+        )
+        return {"data": {"client_secret": intent.client_secret}, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+def _assert_pm_belongs_to(customer_id: str, payment_method_id: str) -> None:
+    """Never let a user touch a card that isn't attached to their own customer."""
+    try:
+        pm = stripe.PaymentMethod.retrieve(payment_method_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    owner = getattr(pm, "customer", None)
+    owner_id = owner if isinstance(owner, str) else getattr(owner, "id", None)
+    if owner_id != customer_id:
+        raise HTTPException(status_code=403, detail="This payment method does not belong to you")
+
+
+@router.post("/payment-methods/{payment_method_id}/default")
+async def set_default_payment_method(payment_method_id: str, user=Depends(get_current_user)):
+    _require_stripe()
+    billing = get_or_create_billing(user["user_id"])
+    customer_id = billing.get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="No saved payment methods yet")
+    _assert_pm_belongs_to(customer_id, payment_method_id)
+    try:
+        stripe.Customer.modify(
+            customer_id,
+            invoice_settings={"default_payment_method": payment_method_id},
+        )
+        return {"data": {"id": payment_method_id, "is_default": True}, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+@router.delete("/payment-methods/{payment_method_id}")
+async def delete_payment_method(payment_method_id: str, user=Depends(get_current_user)):
+    _require_stripe()
+    billing = get_or_create_billing(user["user_id"])
+    customer_id = billing.get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    _assert_pm_belongs_to(customer_id, payment_method_id)
+
+    # Removing the last card while auto-recharge is on would silently break it.
+    if billing.get("auto_recharge_enabled"):
+        try:
+            cards = stripe.Customer.list_payment_methods(customer_id, type="card", limit=2)
+            if len(getattr(cards, "data", []) or []) <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This is your only card and auto recharge is on. "
+                           "Turn off auto recharge or add another card first.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # if the count check fails, fall through to the detach attempt
+
+    try:
+        stripe.PaymentMethod.detach(payment_method_id)
+        return {"data": {"deleted": payment_method_id}, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+# ── Auto-recharge settings ──
+
+class AutoRechargeUpdate(BaseModel):
+    enabled: bool
+    threshold: Optional[float] = None
+    amount: Optional[float] = None
+
+
+@router.put("/auto-recharge")
+async def update_auto_recharge(body: AutoRechargeUpdate, user=Depends(get_current_user)):
+    billing = get_or_create_billing(user["user_id"])
+    updates: dict = {"auto_recharge_enabled": bool(body.enabled)}
+
+    if body.threshold is not None:
+        threshold = round(float(body.threshold), 2)
+        if threshold < 0 or threshold > 500:
+            raise HTTPException(status_code=400, detail="Threshold must be between $0 and $500")
+        updates["auto_recharge_threshold"] = threshold
+    if body.amount is not None:
+        amount = round(float(body.amount), 2)
+        if amount < TOPUP_MIN or amount > TOPUP_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Recharge amount must be between ${TOPUP_MIN:.0f} and ${TOPUP_MAX:.0f}",
+            )
+        updates["auto_recharge_amount"] = amount
+
+    # Enabling without a chargeable card would just fail silently later — block it here.
+    if body.enabled:
+        customer_id = billing.get("stripe_customer_id")
+        if not customer_id or not get_default_payment_method(customer_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Add a payment method before enabling auto recharge.",
+            )
+        updates["auto_recharge_pending_at"] = None  # clear any stale in-flight marker
+
+    supabase.table("billing").update(updates).eq("user_id", user["user_id"]).execute()
+    fresh = get_or_create_billing(user["user_id"])
     return {
         "data": {
-            "outbound_used": billing.get("outbound_used", 0),
-            "outbound_limit": billing.get("outbound_limit", 0),
-            "inbound_used": billing.get("inbound_used", 0),
-            "inbound_limit": billing.get("inbound_limit", 0),
-            "agents_used": agent_count.count or 0,
-            "agents_limit": billing.get("agents_limit", FREE_TIER["agents_limit"]),
-            "credits": billing.get("credits", 0),
-            "plan": billing.get("plan", "free"),
-            "is_active": billing.get("is_active", True),
-            "rate_per_minute": float(billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE),
-            "total_charges": float(billing.get("total_charges") or 0),
-            "balance": float(billing.get("balance") or 0),
+            "auto_recharge_enabled": bool(fresh.get("auto_recharge_enabled")),
+            "auto_recharge_threshold": float(fresh.get("auto_recharge_threshold") or 10.0),
+            "auto_recharge_amount": float(fresh.get("auto_recharge_amount") or 50.0),
         },
+        "error": None,
+    }
+
+
+# ── Promotions (redeemable codes) ──
+
+class RedeemPromo(BaseModel):
+    code: str
+
+
+@router.get("/promotions")
+async def list_promotions(user=Depends(get_current_user)):
+    """This user's applied promotions, for the Promotions tab."""
+    rows = (
+        supabase.table("promo_code_redemptions")
+        .select("id, promo_code_id, amount, created_at")
+        .eq("user_id", user["user_id"])
+        .order("created_at", desc=True)
+        .execute().data or []
+    )
+    # Resolve code labels (small N — one lookup per redemption is fine here).
+    items = []
+    for r in rows:
+        pc = (
+            supabase.table("promo_codes").select("code")
+            .eq("id", r["promo_code_id"]).maybe_single().execute().data
+        )
+        items.append({
+            "id": r["id"],
+            "code": (pc or {}).get("code", "—"),
+            "amount": float(r.get("amount") or 0),
+            "created_at": r.get("created_at"),
+        })
+    return {"data": items, "error": None}
+
+
+@router.post("/promotions/redeem")
+async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
+    code = (body.code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Enter a promotion code")
+
+    promo = supabase.table("promo_codes").select("*").eq("code", code).maybe_single().execute().data
+    if not promo or not promo.get("active"):
+        raise HTTPException(status_code=404, detail="That promotion code isn't valid")
+
+    valid_until = promo.get("valid_until")
+    if valid_until and _parse_ts(valid_until) <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="That promotion code has expired")
+
+    max_redemptions = promo.get("max_redemptions")
+    if max_redemptions is not None and int(promo.get("redemption_count") or 0) >= int(max_redemptions):
+        raise HTTPException(status_code=400, detail="That promotion code has been fully claimed")
+
+    already = (
+        supabase.table("promo_code_redemptions").select("id")
+        .eq("promo_code_id", promo["id"]).eq("user_id", user["user_id"])
+        .limit(1).execute().data
+    )
+    if already:
+        raise HTTPException(status_code=400, detail="You've already used that promotion code")
+
+    amount = round(float(promo.get("amount") or 0), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="That promotion code has no credit attached")
+
+    # The UNIQUE(promo_code_id, user_id) constraint is the real race guard — if two
+    # requests land at once, the loser's insert fails and we bail out before crediting.
+    try:
+        supabase.table("promo_code_redemptions").insert({
+            "promo_code_id": promo["id"],
+            "user_id": user["user_id"],
+            "amount": amount,
+        }).execute()
+    except Exception:
+        raise HTTPException(status_code=400, detail="You've already used that promotion code")
+
+    supabase.table("promo_codes").update(
+        {"redemption_count": int(promo.get("redemption_count") or 0) + 1}
+    ).eq("id", promo["id"]).execute()
+
+    days = promo.get("expiry_days")
+    expires = (
+        (datetime.now(timezone.utc) + timedelta(days=int(days))).isoformat()
+        if days else None
+    )
+    # kind="promo_code" (NOT "promo") so _has_promo_credit() still gates only the
+    # automatic signup welcome bonus. grant_type="promo" keeps it spent-first + expiring.
+    new_balance = credit_balance(
+        user["user_id"], amount, "promo_code",
+        f"Promotion code {code}",
+        ref_id=str(promo["id"]), grant_type="promo", expires_at=expires,
+    )
+    return {
+        "data": {"code": code, "amount": amount, "balance": new_balance},
         "error": None,
     }
 
@@ -608,100 +831,6 @@ async def get_invoices(user=Depends(get_current_user)):
         return {"data": items, "error": None}
     except Exception as e:
         return {"data": [], "error": str(e)}
-
-
-@router.post("/checkout")
-async def create_checkout(body: CheckoutRequest, user=Depends(get_current_user)):
-    if not settings.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-
-    plan = get_plan_by_id(body.plan_id)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Invalid plan")
-
-    billing = get_or_create_billing(user["user_id"])
-
-    # One plan at a time: block Stripe plan checkout while another paid plan is active.
-    current = billing.get("plan")
-    if current in PAID_PLAN_IDS and plan["id"] != current:
-        current_name = (get_plan_by_id(current) or {}).get("name", current)
-        raise HTTPException(
-            status_code=400,
-            detail=f"You're already on the {current_name} plan — unsubscribe first to change plans.",
-        )
-
-    customer_id = billing.get("stripe_customer_id")
-
-    if not customer_id:
-        profile_res = supabase.table("profiles").select("full_name").eq("id", user["user_id"]).execute()
-        profile_row = profile_res.data[0] if profile_res.data else None
-        email = user.get("email")
-        name = profile_row.get("full_name") if profile_row else None
-
-        try:
-            customer = stripe.Customer.create(
-                email=email,
-                name=name,
-                metadata={"user_id": user["user_id"]},
-            )
-            customer_id = customer.id
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
-
-        supabase.table("billing").update(
-            {"stripe_customer_id": customer_id}
-        ).eq("user_id", user["user_id"]).execute()
-
-    success_url = body.success_url or f"{_app_base()}/dashboard/billing?success=true"
-    cancel_url = body.cancel_url or f"{_app_base()}/dashboard/billing?canceled=true"
-
-    try:
-        session = stripe.checkout.Session.create(
-            customer=customer_id,
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": f"EDM Nexus — {plan['name']} Plan",
-                        "description": plan["description"],
-                    },
-                    "unit_amount": plan["price"],
-                    "recurring": {"interval": "month"},
-                },
-                "quantity": 1,
-            }],
-            mode="subscription",
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={
-                "user_id": user["user_id"],
-                "plan_id": plan["id"],
-            },
-        )
-        return {"data": {"checkout_url": session.url, "session_id": session.id}, "error": None}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Stripe checkout error: {str(e)}")
-
-
-@router.post("/portal")
-async def create_portal_session(user=Depends(get_current_user)):
-    if not settings.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-
-    billing_res = supabase.table("billing").select("stripe_customer_id").eq("user_id", user["user_id"]).execute()
-    billing_row = billing_res.data[0] if billing_res.data else None
-    if not billing_row or not billing_row.get("stripe_customer_id"):
-        raise HTTPException(status_code=400, detail="No billing account found. Subscribe to a plan first.")
-
-    try:
-        session = stripe.billing_portal.Session.create(
-            customer=billing_row["stripe_customer_id"],
-            return_url="http://localhost:8082/dashboard/billing",
-        )
-        return {"data": {"portal_url": session.url}, "error": None}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Stripe portal error: {str(e)}")
 
 
 class TopupRequest(BaseModel):
@@ -757,6 +886,9 @@ async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
             }],
             success_url=success_url,
             cancel_url=cancel_url,
+            # Retain the card on the customer so it shows up under Payment methods and
+            # can be charged unattended by auto-recharge.
+            payment_intent_data={"setup_future_usage": "off_session"},
             metadata={"type": "wallet_topup", "user_id": user["user_id"], "amount": f"{amount:.2f}"},
         )
         return {"data": {"checkout_url": session.url, "session_id": session.id}, "error": None}
@@ -823,88 +955,6 @@ async def list_transactions(user=Depends(get_current_user), include_calls: bool 
         query = query.neq("kind", "call")
     result = query.order("created_at", desc=True).limit(50).execute()
     return {"data": result.data or [], "error": None}
-
-
-class SubscribeBalance(BaseModel):
-    plan_id: str
-
-
-PAID_PLAN_IDS = {"starter", "growth", "business"}
-
-
-@router.post("/subscribe-with-balance")
-async def subscribe_with_balance(body: SubscribeBalance, user=Depends(get_current_user)):
-    """Activate a plan by paying its monthly price from the wallet balance.
-
-    One plan at a time: while a paid plan is active, switching to any other plan
-    requires unsubscribing first (POST /billing/unsubscribe)."""
-    plan = get_plan_by_id(body.plan_id)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Invalid plan")
-
-    billing = get_or_create_billing(user["user_id"])
-    current = billing.get("plan")
-    if current in PAID_PLAN_IDS and plan["id"] != current:
-        current_name = (get_plan_by_id(current) or {}).get("name", current)
-        raise HTTPException(
-            status_code=400,
-            detail=f"You're already on the {current_name} plan — unsubscribe first to change plans.",
-        )
-
-    price = round(float(plan["price"]) / 100.0, 2)  # plan["price"] is in cents
-
-    # Paid plans are charged to the wallet; $0 plans (e.g. Pay As You Go) activate free.
-    if price > 0:
-        if not has_balance(user["user_id"], price):
-            raise HTTPException(
-                status_code=402,
-                detail=f"Insufficient balance. This plan costs ${price:.2f}/mo — add funds first.",
-            )
-        debit_balance(user["user_id"], price, "plan", f"{plan['name']} plan (1 month)")
-    supabase.table("billing").update({
-        "plan": plan["id"],
-        "status": "active",
-        "outbound_limit": plan["outbound_limit"],
-        "inbound_limit": plan["inbound_limit"],
-        "agents_limit": plan["agents_limit"],
-        "rate_per_minute": plan.get("rate_per_minute", DEFAULT_RATE_PER_MINUTE),
-        "cost_multiplier": plan.get("cost_multiplier", DEFAULT_COST_MULTIPLIER),
-        "outbound_used": 0,
-        "inbound_used": 0,
-    }).eq("user_id", user["user_id"]).execute()
-
-    # Grant the plan's included monthly credit (= the fee) as a subscription credit that
-    # expires at the end of this cycle (consumed after promo + purchased).
-    included = float(plan.get("included_credit") or 0)
-    if included > 0:
-        expires = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-        credit_balance(user["user_id"], included, "subscription",
-                       f"{plan['name']} included credit",
-                       grant_type="subscription", expires_at=expires)
-
-    return {"data": {"plan": plan["id"], "balance": get_balance(user["user_id"])}, "error": None}
-
-
-@router.post("/unsubscribe")
-async def unsubscribe_plan(user=Depends(get_current_user)):
-    """Cancel the active paid plan and return to Pay As You Go immediately.
-    The remaining days of the current month are not refunded; the wallet is untouched."""
-    billing = get_or_create_billing(user["user_id"])
-    if billing.get("plan") not in PAID_PLAN_IDS:
-        raise HTTPException(status_code=400, detail="No active paid plan to unsubscribe from")
-
-    payg = get_plan_by_id("payg")
-    supabase.table("billing").update({
-        "plan": "payg",
-        "status": "active",
-        "outbound_limit": payg["outbound_limit"],
-        "inbound_limit": payg["inbound_limit"],
-        "agents_limit": payg["agents_limit"],
-        "rate_per_minute": payg["rate_per_minute"],
-        "cost_multiplier": payg["cost_multiplier"],
-        "current_period_end": None,
-    }).eq("user_id", user["user_id"]).execute()
-    return {"data": {"plan": "payg"}, "error": None}
 
 
 @router.get("/call-costs")

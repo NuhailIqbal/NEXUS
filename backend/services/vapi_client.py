@@ -211,6 +211,30 @@ def build_transfer_tool_payload(agent_name: str | None, number: str) -> dict:
     }
 
 
+def build_fallback_assistant_payload() -> dict:
+    """A minimal, shared assistant used to answer inbound calls for accounts whose
+    wallet balance is empty. Plays a short message and hangs up — `maxDurationSeconds`
+    ends the call reliably without depending on the model invoking an end-call tool."""
+    return {
+        "name": "NEXUS — Balance Unavailable",
+        "firstMessage": (
+            "We're sorry, this line is temporarily unavailable because the account "
+            "balance is empty. Please contact the account owner. Goodbye."
+        ),
+        "model": {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": "Say only the first message, then stay silent."}
+            ],
+        },
+        "transcriber": {"provider": "deepgram", "language": "en"},
+        "voice": _resolve_voice(None),
+        "maxDurationSeconds": 15,
+        "silenceTimeoutSeconds": 5,
+    }
+
+
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
                              system_prompt: str = None, first_message: str = None,
                              tool_ids: list[str] | None = None) -> dict:

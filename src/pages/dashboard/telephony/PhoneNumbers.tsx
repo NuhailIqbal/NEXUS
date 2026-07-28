@@ -238,7 +238,6 @@ const PhoneNumbers = () => {
             status: d.active ? "Active" : "Inactive",
             provider: d.serviceProvider,
           };
-          if (d.serviceProvider.toLowerCase() === "vapi" && d.areaCode) payload.area_code = d.areaCode;
           if (d.agentId) payload.agent_id = d.agentId;
           // Twilio: if the wallet has ≥ $3 it's deducted from balance; otherwise the
           // backend returns a Stripe checkout URL to pay for this number directly.

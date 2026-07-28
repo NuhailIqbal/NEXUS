@@ -74,12 +74,38 @@ _TABLE_RE = re.compile(
 _CONSTRAINT_START = re.compile(r"^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|EXCLUDE)\b", re.IGNORECASE)
 
 
+def _strip_sql_comments(body: str) -> str:
+    """Drop `-- …` line comments from a CREATE TABLE body.
+
+    Without this, a comment line inside the body is parsed as a column definition (and
+    any comma in its prose splits it further), producing bogus ALTER TABLE statements.
+    Quoted strings are respected so a literal '--' inside a default value survives.
+    """
+    out: list[str] = []
+    for line in body.splitlines():
+        cleaned: list[str] = []
+        in_quote = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if ch == "'":
+                in_quote = not in_quote
+            elif not in_quote and ch == "-" and line[i + 1:i + 2] == "-":
+                break  # rest of the line is a comment
+            cleaned.append(ch)
+            i += 1
+        out.append("".join(cleaned))
+    return "\n".join(out)
+
+
 def _split_columns(body: str) -> list[str]:
     """Split a CREATE TABLE body on TOP-LEVEL commas only.
 
     Commas inside parentheses (e.g. numeric(10,2)), square brackets
-    (ARRAY['a','b']) or single-quoted strings are ignored.
+    (ARRAY['a','b']) or single-quoted strings are ignored. `--` comments are stripped
+    first so they can never be mistaken for a column.
     """
+    body = _strip_sql_comments(body)
     parts: list[str] = []
     buf: list[str] = []
     depth = 0
@@ -251,6 +277,36 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_tool_id text',
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS monthly_cost numeric DEFAULT 0',
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS stripe_session_id text',
+        # Inbound-call suspension: when a user's balance hits $0, their numbers get
+        # temporarily repointed at a shared "insufficient balance" assistant.
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS suspended_for_balance boolean DEFAULT false',
+        'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS fallback_assistant_id text',
+        # Auto-recharge: top the wallet up off-session from the default card.
+        'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_enabled boolean DEFAULT false',
+        'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_threshold numeric(10,2) DEFAULT 10.00',
+        'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_amount numeric(10,2) DEFAULT 50.00',
+        'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_pending_at timestamptz',
+        # Redeemable promo codes (distinct from the automatic signup welcome bonus).
+        '''CREATE TABLE IF NOT EXISTS public.promo_codes (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            code text NOT NULL UNIQUE,
+            amount numeric(10,2) NOT NULL,
+            expiry_days integer,
+            max_redemptions integer,
+            redemption_count integer DEFAULT 0 NOT NULL,
+            valid_until timestamptz,
+            active boolean DEFAULT true NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS public.promo_code_redemptions (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            promo_code_id uuid NOT NULL REFERENCES public.promo_codes(id) ON DELETE CASCADE,
+            user_id uuid NOT NULL,
+            amount numeric(10,2) NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            UNIQUE (promo_code_id, user_id)
+        )''',
+        'CREATE INDEX IF NOT EXISTS promo_code_redemptions_user_idx ON public.promo_code_redemptions (user_id, created_at)',
         # Wallet: dollar balance + transaction ledger.
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS balance numeric(10,2) DEFAULT 0',
         '''CREATE TABLE IF NOT EXISTS public.wallet_transactions (
@@ -321,18 +377,14 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.billing ALTER COLUMN rate_per_minute SET DEFAULT 0.35',
         # Cost-plus pricing: everyone defaults to Pay As You Go; legacy 'free' trial rows move to payg.
         "UPDATE public.billing SET plan = 'payg', status = 'active', outbound_limit = 999999, inbound_limit = 999999 WHERE plan = 'free'",
-        # Sync each plan's cost multiplier to the current pricing. Transitions the fresh
-        # default (3.00) AND the prior generation (2.75/2.50) once; leaves any other
-        # (admin-customized) value alone.
-        "UPDATE public.billing SET cost_multiplier = 2.70 WHERE plan = 'starter' AND cost_multiplier IN (3.00, 2.75)",
-        "UPDATE public.billing SET cost_multiplier = 2.35 WHERE plan = 'growth' AND cost_multiplier IN (3.00, 2.50)",
-        "UPDATE public.billing SET cost_multiplier = 2.25 WHERE plan = 'business' AND cost_multiplier = 3.00",
-        # Sync advertised/fallback rates to current pricing: transitions legacy <=0.10 and
-        # the prior generation (0.32/0.29/0.26). Custom rates untouched.
-        "UPDATE public.billing SET rate_per_minute = 0.35 WHERE plan = 'payg' AND rate_per_minute <= 0.10",
-        "UPDATE public.billing SET rate_per_minute = 0.31 WHERE plan = 'starter' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.32)",
-        "UPDATE public.billing SET rate_per_minute = 0.27 WHERE plan = 'growth' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.29)",
-        "UPDATE public.billing SET rate_per_minute = 0.23 WHERE plan = 'business' AND (rate_per_minute <= 0.10 OR rate_per_minute = 0.26)",
+        # Tiered subscription plans were removed platform-wide (pure wallet-balance
+        # billing now, like VAPI) — migrate any account still on a paid tier to the
+        # flat rate/multiplier everyone else uses. One-time, idempotent (a no-op once
+        # a row is already on 'payg' at these values).
+        "UPDATE public.billing SET plan = 'payg', status = 'active', "
+        "outbound_limit = 999999, inbound_limit = 999999, "
+        "rate_per_minute = 0.35, cost_multiplier = 3.00 "
+        "WHERE plan IN ('starter', 'growth', 'business')",
     ]
     for stmt in statements:
         try:

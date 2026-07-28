@@ -1,13 +1,13 @@
-import { Phone, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 import { Link } from "react-router-dom";
 import Logo from "@/components/Logo";
 
 const platformLinks: { label: string; to: string }[] = [
-  { label: "Acquisition Engine", to: "/features" },
-  { label: "Brand Studio", to: "/features" },
-  { label: "Operations OS", to: "/technology" },
-  { label: "AI Workforce", to: "/technology" },
-  { label: "Omni-Channel", to: "/use-cases" },
+  { label: "AI Voice Agents", to: "/features" },
+  { label: "Outbound Campaigns", to: "/use-cases" },
+  { label: "AI Receptionist", to: "/use-cases" },
+  { label: "Recordings & Transcripts", to: "/features" },
+  { label: "Technology", to: "/technology" },
   { label: "White-Label", to: "/publishers" },
 ];
 
@@ -19,10 +19,10 @@ const companyLinks: { label: string; to: string }[] = [
   { label: "Publishers", to: "/publishers" },
 ];
 
+// Only list documents that actually exist — a named legal link that quietly lands on
+// another page is worse than no link. Add Terms of Service here once it's written.
 const legalLinks: { label: string; to: string }[] = [
-  { label: "Privacy Policy", to: "/about" },
-  { label: "Terms of Service", to: "/about" },
-  { label: "Cookie Policy", to: "/about" },
+  { label: "Privacy Policy", to: "/privacy" },
 ];
 
 const Footer = () => (
@@ -34,7 +34,7 @@ const Footer = () => (
             <Logo linked={false} />
           </div>
           <p className="text-sm text-muted-foreground">
-            AI powered revenue infrastructure for inbound acquisition at scale.
+            AI voice agents that make and answer your calls, billed by the minute.
           </p>
         </div>
 
@@ -63,9 +63,6 @@ const Footer = () => (
         <div>
           <h4 className="text-sm font-bold text-foreground mb-4">Contact</h4>
           <div className="space-y-3">
-            <a href="tel:+18337118975" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              <Phone size={14} className="text-primary" /> (833) 711-8975
-            </a>
             <a href="mailto:info@edmnexus.ai" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
               <Mail size={14} className="text-primary" /> info@edmnexus.ai
             </a>

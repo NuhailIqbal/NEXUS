@@ -266,6 +266,11 @@ CREATE TABLE IF NOT EXISTS public.automation_runs (
 
 --
 -- Name: billing; Type: TABLE; Schema: public; Owner: -
+-- auto_recharge_*: when the balance falls to/below the threshold, charge the customer's
+-- default card off-session for `amount`. pending_at guards against a burst of calls each
+-- firing a charge; it is cleared when the PaymentIntent resolves.
+-- NB: keep comments OUTSIDE the CREATE TABLE body — migrate.py's column parser reads
+-- the body literally and would treat a comment line as a column definition.
 --
 
 CREATE TABLE IF NOT EXISTS public.billing (
@@ -288,7 +293,11 @@ CREATE TABLE IF NOT EXISTS public.billing (
     rate_per_minute numeric(6,4) DEFAULT 0.35,
     total_charges numeric(10,2) DEFAULT 0.00,
     balance numeric(10,2) DEFAULT 0.00,
-    cost_multiplier numeric(4,2) DEFAULT 3.00
+    cost_multiplier numeric(4,2) DEFAULT 3.00,
+    auto_recharge_enabled boolean DEFAULT false,
+    auto_recharge_threshold numeric(10,2) DEFAULT 10.00,
+    auto_recharge_amount numeric(10,2) DEFAULT 50.00,
+    auto_recharge_pending_at timestamp with time zone
 );
 
 
@@ -338,6 +347,41 @@ CREATE INDEX IF NOT EXISTS credit_grants_user_idx
     ON public.credit_grants (user_id, created_at);
 
 --
+-- Name: promo_codes; Type: TABLE
+-- Admin-created codes a user can redeem for wallet credit. `code` is stored UPPERCASE
+-- and compared case-insensitively. NULL max_redemptions = unlimited; NULL valid_until =
+-- never expires; NULL expiry_days = the granted credit never expires.
+--
+CREATE TABLE IF NOT EXISTS public.promo_codes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    code text NOT NULL UNIQUE,
+    amount numeric(10,2) NOT NULL,
+    expiry_days integer,
+    max_redemptions integer,
+    redemption_count integer DEFAULT 0 NOT NULL,
+    valid_until timestamp with time zone,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+--
+-- Name: promo_code_redemptions; Type: TABLE
+-- One row per (code, user). The UNIQUE constraint is the real guard against
+-- double-redemption — credit_balance() only dedupes on stripe_session_id.
+--
+CREATE TABLE IF NOT EXISTS public.promo_code_redemptions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    promo_code_id uuid NOT NULL REFERENCES public.promo_codes(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL,
+    amount numeric(10,2) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    UNIQUE (promo_code_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS promo_code_redemptions_user_idx
+    ON public.promo_code_redemptions (user_id, created_at);
+
+--
 -- Name: notifications; Type: TABLE
 -- In-app notifications (e.g. low-balance alerts). kind examples: low_balance_10/5/1/0.
 --
@@ -363,6 +407,9 @@ CREATE TABLE IF NOT EXISTS public.platform_settings (
     promo_enabled boolean DEFAULT true,
     promo_amount numeric(10,2) DEFAULT 20.00,
     promo_expiry_days integer DEFAULT 60,
+    -- Shared VAPI assistant used to answer inbound calls for accounts with an empty
+    -- wallet balance (created once, lazily, and reused across every user).
+    fallback_assistant_id text,
     updated_at timestamp with time zone DEFAULT now()
 );
 
@@ -570,6 +617,9 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
 
 --
 -- Name: phone_numbers; Type: TABLE; Schema: public; Owner: -
+-- suspended_for_balance: true while the number is temporarily pointed at the platform's
+-- fallback assistant because the owner's wallet balance is $0 (inbound callers hear a
+-- short "unavailable" message instead of reaching the real agent).
 --
 
 CREATE TABLE IF NOT EXISTS public.phone_numbers (
@@ -585,7 +635,8 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     twilio_sid text,
     monthly_cost numeric(6,2) DEFAULT 1.15,
     label text,
-    stripe_session_id text
+    stripe_session_id text,
+    suspended_for_balance boolean DEFAULT false
 );
 
 

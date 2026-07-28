@@ -6,7 +6,7 @@ from services import vapi_client
 from services.openai_client import chat_reply, OpenAIError
 from services.agent_tools import provision_tools_for_agent
 from config import settings
-from routers.billing import check_agent_quota, get_or_create_billing
+from routers.billing import get_or_create_billing
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -41,8 +41,6 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     billing = get_or_create_billing(user["user_id"])
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
-    if not check_agent_quota(user["user_id"]):
-        raise HTTPException(status_code=403, detail="Agent limit reached. Upgrade your plan to create more agents.")
 
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
 

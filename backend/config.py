@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # Publishable key, served to the frontend via GET /billing/config so it always
+    # matches the secret key's mode (test vs live) without a frontend rebuild.
+    # Accepts either STRIPE_PUBLISHABLE_KEY or the legacy VITE_STRIPE_PUBLIC_KEY name.
+    stripe_publishable_key: str = ""
+    vite_stripe_public_key: str = ""
+
+    @property
+    def active_stripe_publishable_key(self) -> str:
+        return self.stripe_publishable_key or self.vite_stripe_public_key
 
     # Twilio (platform account) — one-time server config; used to auto-purchase numbers
     twilio_account_sid: str = ""
@@ -77,6 +86,12 @@ class Settings(BaseSettings):
     # ADMIN_PASSWORD (and ideally ADMIN_USERNAME) with a strong secret via env.
     admin_username: str = "qarib"
     admin_password: str = "test123"
+    # Optional second admin account — both vars must be set to enable.
+    admin_username_2: str = ""
+    admin_password_2: str = ""
+    # Optional third admin account — both vars must be set to enable.
+    admin_username_3: str = ""
+    admin_password_3: str = ""
 
     # Server
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
@@ -119,6 +134,15 @@ class Settings(BaseSettings):
     def admin_email_list(self) -> list[str]:
         return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
+    def verify_admin_login(self, username: str, password: str) -> bool:
+        """Return True if username/password match any configured platform admin."""
+        pairs = [(self.admin_username, self.admin_password)]
+        if self.admin_username_2 and self.admin_password_2:
+            pairs.append((self.admin_username_2, self.admin_password_2))
+        if self.admin_username_3 and self.admin_password_3:
+            pairs.append((self.admin_username_3, self.admin_password_3))
+        return any(username == u and password == p for u, p in pairs)
+
     @property
     def allowed_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -151,3 +175,7 @@ if settings.is_production:
         _log.warning("CORS_ORIGINS is not set to a production domain")
     if settings.admin_password == "test123":
         _log.warning("ADMIN_PASSWORD is still the default — set a strong ADMIN_PASSWORD in production")
+    if settings.admin_password_2 == "test123":
+        _log.warning("ADMIN_PASSWORD_2 is still the default — set a strong ADMIN_PASSWORD_2 in production")
+    if settings.admin_password_3 == "test123":
+        _log.warning("ADMIN_PASSWORD_3 is still the default — set a strong ADMIN_PASSWORD_3 in production")

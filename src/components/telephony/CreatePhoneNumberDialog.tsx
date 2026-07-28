@@ -23,11 +23,10 @@ export type PhoneNumberData = {
   useForHumanAgent: boolean;
   useForSms: boolean;
   serviceProvider: string;
-  areaCode: string;
   agentId: string;
 };
 
-const PROVIDERS = ["VAPI", "Twilio"];
+const PROVIDERS = ["Twilio"];
 
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
@@ -38,7 +37,6 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     useForHumanAgent: false,
     useForSms: false,
     serviceProvider: "",
-    areaCode: "",
     agentId: "",
   });
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
@@ -49,10 +47,8 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     }
   }, [open]);
 
-  const isVapi = data.serviceProvider.toLowerCase() === "vapi";
-
   const reset = () =>
-    setData({ title: "", description: "", active: false, useForCall: false, useForHumanAgent: false, useForSms: false, serviceProvider: "", areaCode: "", agentId: "" });
+    setData({ title: "", description: "", active: false, useForCall: false, useForHumanAgent: false, useForSms: false, serviceProvider: "", agentId: "" });
 
   const close = (v: boolean) => {
     if (!v) reset();
@@ -62,9 +58,6 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   const create = () => {
     if (!data.title.trim()) return toast.error("Title is required");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
-    if (isVapi && (!data.areaCode.trim() || !/^\d{3}$/.test(data.areaCode.trim()))) {
-      return toast.error("Enter a valid 3-digit area code for VAPI (e.g. 415)");
-    }
     onCreate?.(data);
     close(false);
   };
@@ -121,19 +114,6 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 </div>
               </div>
-
-              {isVapi && (
-                <div>
-                  <label className="block text-sm font-semibold mb-1.5">Area Code <span className="text-destructive">*</span></label>
-                  <Input
-                    placeholder="e.g. 415"
-                    maxLength={3}
-                    value={data.areaCode}
-                    onChange={(e) => setData({ ...data, areaCode: e.target.value.replace(/\D/g, "") })}
-                  />
-                  <p className="mt-1 text-xs text-muted-foreground">3-digit US area code. VAPI will provision a number in this area.</p>
-                </div>
-              )}
 
               {data.serviceProvider.toLowerCase() === "twilio" && (
                 <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">

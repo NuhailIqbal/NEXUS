@@ -1,59 +1,67 @@
-import { Target, Palette, Settings, Bot, MessageSquare, Building2 } from "lucide-react";
+import { Bot, PhoneOutgoing, PhoneIncoming, FileAudio, Users, CreditCard } from "lucide-react";
 
+// Each module below is a real section of the dashboard — the feature chips and the
+// stat are things the platform actually does today, not aspirational copy.
 const modules = [
   {
-    icon: Target,
-    tag: "High-Intent Leads",
-    title: "Acquisition Engine",
-    description: "Proprietary algorithms surface high-intent prospects across 6+ verticals.",
-    features: ["150+ Active Campaigns", "20,000+ Calls/Day", "$500K+ Weekly Payouts", "Form Fills & Live Transfers"],
-    stat: "95%",
-    statLabel: "Intent Match Rate",
-  },
-  {
-    icon: Palette,
-    tag: "Professional Identity",
-    title: "Brand Studio",
-    description: "Enterprise-grade brand identity and conversion-optimized digital presence.",
-    features: ["Custom Website Design", "Brand Identity Package", "Marketing Assets", "SEO Optimization"],
-    stat: "48hr",
-    statLabel: "Turnaround Time",
-  },
-  {
-    icon: Settings,
-    tag: "Streamlined Operations",
-    title: "Operations OS",
-    description: "Automated workflows, CRM, billing, and analytics in one control center.",
-    features: ["Workflow Automation", "Real-Time Analytics", "CRM Integration", "Automated Billing"],
-    stat: "80%",
-    statLabel: "Time Saved",
-  },
-  {
     icon: Bot,
-    tag: "Intelligent Agents",
-    title: "AI Workforce Cloud",
-    description: "Deploy AI agents for sales, support, and retention at infinite scale.",
-    features: ["Sales AI Agents", "Customer Service AI", "Retention & Collections", "Admin & Scheduling AI"],
-    stat: "∞",
-    statLabel: "Scalability",
+    tag: "Build in minutes",
+    title: "AI Voice Agents",
+    description:
+      "A guided setup walks you through the agent's goal, industry, voice and knowledge, then lets you test it before it ever dials out.",
+    features: ["Knowledge upload", "Custom system prompt", "Voice selection", "Test before launch"],
+    stat: "13",
+    statLabel: "built-in voices",
   },
   {
-    icon: MessageSquare,
-    tag: "Always Connected",
-    title: "Omni-Channel Hub",
-    description: "Unified voice, SMS, email, chat, and WhatsApp across 29+ languages.",
-    features: ["Voice & SMS", "Live Chat & WhatsApp", "24/7/365 Availability", "29+ Languages"],
+    icon: PhoneOutgoing,
+    tag: "Dial at scale",
+    title: "Outbound Campaigns",
+    description:
+      "Point an agent at a contact list and launch. Calls are placed in batches and every attempt is logged with its outcome.",
+    features: ["CSV contact import", "List targeting", "Campaign analytics", "Full call logs"],
+    stat: "CSV",
+    statLabel: "list import",
+  },
+  {
+    icon: PhoneIncoming,
+    tag: "Never miss a call",
+    title: "AI Receptionist",
+    description:
+      "Assign an agent to your number and it answers inbound calls, qualifies the caller, and transfers to a human when it matters.",
+    features: ["Inbound call logs", "Agent per number", "Live transfer", "After-hours cover"],
     stat: "24/7",
-    statLabel: "Availability",
+    statLabel: "always answering",
   },
   {
-    icon: Building2,
-    tag: "Your Brand, Our Power",
-    title: "White-Label Platform",
-    description: "Fully branded infrastructure with API access and revenue-share models.",
-    features: ["Fully Branded Platform", "Unlimited Users", "Revenue Share Model", "Enterprise Security"],
-    stat: "100%",
-    statLabel: "Your Brand",
+    icon: FileAudio,
+    tag: "Full call history",
+    title: "Recordings & Transcripts",
+    description:
+      "Every call is recorded and transcribed with speaker labels, plus an AI summary — all pulled into your dashboard automatically.",
+    features: ["Audio playback", "Speaker transcript", "Call summary", "Automatic sync"],
+    stat: "Every",
+    statLabel: "call recorded",
+  },
+  {
+    icon: Users,
+    tag: "Your data",
+    title: "Contacts & Lists",
+    description:
+      "Import your contacts from CSV, group them into lists for targeting, and add your own fields to track whatever matters to you.",
+    features: ["CSV import", "Lists & segments", "Custom fields", "Consent tracking"],
+    stat: "Custom",
+    statLabel: "fields per contact",
+  },
+  {
+    icon: CreditCard,
+    tag: "Pay as you go",
+    title: "Numbers & Billing",
+    description:
+      "Provision a phone number, top up a balance, and see the exact cost of every single call. No plans, no monthly commitment.",
+    features: ["Phone numbers", "Wallet balance", "Auto recharge", "Per-call costs"],
+    stat: "~$0.35",
+    statLabel: "per minute",
   },
 ];
 
@@ -63,10 +71,11 @@ const PlatformModules = () => (
       <div className="text-center mb-16">
         <span className="badge-pill mb-4">THE PLATFORM</span>
         <h2 className="text-3xl md:text-5xl font-bold mt-4">
-          One Infrastructure. <span className="text-gradient">Unlimited Revenue.</span>
+          Everything you need to <span className="text-gradient">run AI phone calls</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-xl mx-auto">
-          Six integrated modules that power, scale, and monetize your inbound acquisition pipeline.
+          Six parts of the platform, all in one dashboard — from building the agent to seeing what
+          each call cost.
         </p>
       </div>
 

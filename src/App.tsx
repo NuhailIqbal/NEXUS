@@ -19,6 +19,7 @@ import Register from "./pages/Register.tsx";
 import VerifyEmail from "./pages/VerifyEmail.tsx";
 import ResetPassword from "./pages/ResetPassword.tsx";
 import RequestAccess from "./pages/RequestAccess.tsx";
+import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 import DashboardLayout from "./pages/dashboard/DashboardLayout.tsx";
@@ -37,7 +38,10 @@ import Outbound from "./pages/dashboard/telephony/Outbound.tsx";
 import Inbound from "./pages/dashboard/telephony/Inbound.tsx";
 import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
 import PhoneNumbers from "./pages/dashboard/telephony/PhoneNumbers.tsx";
-import Billing from "./pages/dashboard/Billing.tsx";
+import BillingLayout from "./components/billing/BillingLayout.tsx";
+import BillingOverview from "./components/billing/BillingOverview.tsx";
+import PaymentMethods from "./components/billing/PaymentMethods.tsx";
+import Promotions from "./components/billing/Promotions.tsx";
 import Admin from "./pages/dashboard/Admin.tsx";
 import {
   AnalyticsChannel,
@@ -81,6 +85,7 @@ const App = () => {
                 <Route path="/verify-email" element={<VerifyEmail />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/request-access" element={<RequestAccess />} />
+                <Route path="/privacy" element={<PrivacyPolicy />} />
 
                 <Route path="/dashboard" element={<DashboardLayout />}>
                   <Route index element={<DashboardIndex />} />
@@ -103,7 +108,11 @@ const App = () => {
                   <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
                   <Route path="analytics/scenario" element={<AnalyticsScenario />} />
                   <Route path="analytics/flow" element={<AnalyticsFlow />} />
-                  <Route path="billing" element={<Billing />} />
+                  <Route path="billing" element={<BillingLayout />}>
+                    <Route index element={<BillingOverview />} />
+                    <Route path="payment-methods" element={<PaymentMethods />} />
+                    <Route path="promotions" element={<Promotions />} />
+                  </Route>
 
                 </Route>
 

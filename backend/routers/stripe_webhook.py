@@ -1,8 +1,6 @@
 import stripe
 from fastapi import APIRouter, Request, HTTPException
-from database import supabase
 from config import settings
-from routers.billing import get_plan_by_id, FREE_TIER
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,121 +11,80 @@ stripe.api_key = settings.stripe_secret_key
 
 @router.post("/webhooks/stripe")
 async def stripe_webhook(request: Request):
+    """Handles auto-recharge PaymentIntents. There are no subscriptions here — billing is
+    a prepaid wallet, and interactive top-ups are confirmed client-side via
+    /billing/topup/confirm. This webhook is the safety net for OFF-SESSION auto-recharge
+    charges, whose result we may not see synchronously (network loss, SCA, async decline)."""
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
     if settings.stripe_webhook_secret:
         try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.stripe_webhook_secret
-            )
+            event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
         except stripe.error.SignatureVerificationError:
             raise HTTPException(status_code=400, detail="Invalid signature")
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
     else:
+        # No signing secret configured (local dev) — parse without verification.
         import json
-        event = json.loads(payload)
+        try:
+            event = json.loads(payload)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid payload")
 
     event_type = event.get("type") if isinstance(event, dict) else event["type"]
-    data_object = event.get("data", {}).get("object", {}) if isinstance(event, dict) else event["data"]["object"]
+    obj = (event.get("data", {}) or {}).get("object", {}) if isinstance(event, dict) else event["data"]["object"]
 
-    if event_type == "checkout.session.completed":
-        _handle_checkout_completed(data_object)
-    elif event_type == "invoice.paid":
-        _handle_invoice_paid(data_object)
-    elif event_type == "customer.subscription.updated":
-        _handle_subscription_updated(data_object)
-    elif event_type == "customer.subscription.deleted":
-        _handle_subscription_deleted(data_object)
+    try:
+        if event_type == "payment_intent.succeeded":
+            _handle_pi_succeeded(obj)
+        elif event_type in ("payment_intent.payment_failed", "payment_intent.canceled"):
+            _handle_pi_failed(obj)
+    except Exception:
+        # Never 500 back at Stripe — that just triggers pointless retries.
+        logger.exception("Error handling Stripe webhook %s", event_type)
 
     return {"received": True}
 
 
-def _handle_checkout_completed(session: dict):
-    user_id = session.get("metadata", {}).get("user_id")
-    plan_id = session.get("metadata", {}).get("plan_id")
-    customer_id = session.get("customer")
-    subscription_id = session.get("subscription")
+def _meta(obj: dict) -> dict:
+    return (obj.get("metadata") or {}) if isinstance(obj, dict) else {}
 
+
+def _handle_pi_succeeded(intent: dict) -> None:
+    """Credit an auto-recharge that succeeded. Safe to run even if the synchronous path
+    already credited it — credit_balance dedupes on the PaymentIntent id."""
+    meta = _meta(intent)
+    if meta.get("type") != "auto_recharge":
+        return
+    user_id = meta.get("user_id")
     if not user_id:
-        logger.warning("checkout.session.completed without user_id in metadata")
         return
-
-    plan = get_plan_by_id(plan_id) if plan_id else None
-
-    billing_data = {
-        "plan": plan_id or "starter",
-        "status": "active",
-        "stripe_customer_id": customer_id,
-        "stripe_subscription_id": subscription_id,
-        "outbound_used": 0,
-        "inbound_used": 0,
-    }
-
-    if plan:
-        billing_data["outbound_limit"] = plan["outbound_limit"]
-        billing_data["inbound_limit"] = plan["inbound_limit"]
-        billing_data["agents_limit"] = plan["agents_limit"]
-        billing_data["rate_per_minute"] = plan.get("rate_per_minute", 0.10)
-        billing_data["total_charges"] = 0
-
-    existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
-
-    if existing.data:
-        supabase.table("billing").update(billing_data).eq("user_id", user_id).execute()
-    else:
-        billing_data["user_id"] = user_id
-        supabase.table("billing").insert(billing_data).execute()
-
-    logger.info(f"Billing activated for user {user_id}, plan={plan_id}")
-
-
-def _handle_invoice_paid(invoice: dict):
-    customer_id = invoice.get("customer")
-    if not customer_id:
+    amount = float(meta.get("amount") or 0) or (int(intent.get("amount") or 0) / 100.0)
+    if amount <= 0:
         return
-
-    billing = supabase.table("billing").select("user_id").eq("stripe_customer_id", customer_id).execute()
-    if billing.data:
-        supabase.table("billing").update({
-            "status": "active",
-            "outbound_used": 0,
-            "inbound_used": 0,
-        }).eq("stripe_customer_id", customer_id).execute()
+    from routers.billing import credit_auto_recharge
+    credit_auto_recharge(user_id, intent.get("id"), round(amount, 2))
+    logger.info("Auto-recharge credited via webhook for user %s (%s)", user_id, intent.get("id"))
 
 
-def _handle_subscription_updated(subscription: dict):
-    customer_id = subscription.get("customer")
-    status = subscription.get("status")
-    current_period_end = subscription.get("current_period_end")
-
-    if not customer_id:
+def _handle_pi_failed(intent: dict) -> None:
+    """Clear the in-flight marker so the next low balance can retry, and tell the user."""
+    meta = _meta(intent)
+    if meta.get("type") != "auto_recharge":
         return
-
-    updates = {}
-    if status:
-        updates["status"] = status
-    if current_period_end:
-        from datetime import datetime
-        updates["current_period_end"] = datetime.utcfromtimestamp(current_period_end).isoformat()
-
-    if updates:
-        supabase.table("billing").update(updates).eq("stripe_customer_id", customer_id).execute()
-
-
-def _handle_subscription_deleted(subscription: dict):
-    customer_id = subscription.get("customer")
-    if not customer_id:
+    user_id = meta.get("user_id")
+    if not user_id:
         return
-
-    supabase.table("billing").update({
-        "status": "canceled",
-        "plan": "free",
-        "outbound_limit": FREE_TIER["outbound_limit"],
-        "inbound_limit": FREE_TIER["inbound_limit"],
-        "agents_limit": FREE_TIER["agents_limit"],
-        "outbound_used": 0,
-        "inbound_used": 0,
-        "credits": 0,
-    }).eq("stripe_customer_id", customer_id).execute()
+    from database import supabase
+    from routers.billing import _insert_notification
+    supabase.table("billing").update(
+        {"auto_recharge_pending_at": None}
+    ).eq("user_id", user_id).execute()
+    reason = ((intent.get("last_payment_error") or {}).get("message")
+              or "Your card was declined.")
+    _insert_notification(
+        user_id, "auto_recharge_failed", "Auto recharge failed",
+        f"{reason} Add funds manually or update your card under Billing → Payment methods.",
+    )

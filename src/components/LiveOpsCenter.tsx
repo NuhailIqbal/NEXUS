@@ -1,21 +1,47 @@
-import { Activity, Users, Phone, Languages, MessageSquare, Zap, CheckCircle, Shield, Star } from "lucide-react";
+import { FileAudio, FileText, Sparkles, Receipt, PhoneForwarded, Bell } from "lucide-react";
 
-const metrics = [
-  { icon: Users, value: "1,247", label: "Active AI Agents", sub: "Operating globally right now" },
-  { icon: Phone, value: "18,436", label: "Calls Handled Today", sub: "Across all time zones" },
-  { icon: Languages, value: "12", label: "Languages Active", sub: "Real-time translations" },
-  { icon: MessageSquare, value: "142,866", label: "Messages Processed", sub: "Chat, email, and SMS" },
-  { icon: Zap, value: "374ms", label: "Avg Response Time", sub: "Lightning-fast replies" },
-  { icon: CheckCircle, value: "45,233", label: "Tasks Completed", sub: "Automated workflows today" },
-  { icon: Star, value: "98.4%", label: "Satisfaction Rate", sub: "Customer happiness score" },
-  { icon: Shield, value: "100.0%", label: "System Uptime", sub: "24/7/365 reliability" },
+// What the dashboard actually gives you once a call ends. Each item below maps to a
+// real field on the conversation record, not a marketing metric.
+const afterCall = [
+  {
+    icon: FileAudio,
+    title: "The recording",
+    desc: "Play back the full call straight from the conversation list.",
+  },
+  {
+    icon: FileText,
+    title: "The transcript",
+    desc: "Speaker-labelled, so you can see who said what and when.",
+  },
+  {
+    icon: Sparkles,
+    title: "An AI summary",
+    desc: "A short write-up of what happened, generated automatically.",
+  },
+  {
+    icon: Receipt,
+    title: "What it cost",
+    desc: "The duration and the actual charge for that specific call, itemised.",
+  },
+  {
+    icon: PhoneForwarded,
+    title: "Transfer outcome",
+    desc: "Whether the agent handed the caller off to a human, and to which number.",
+  },
+  {
+    icon: Bell,
+    title: "Balance alerts",
+    desc: "Get notified as your credit runs low, before calls start failing.",
+  },
 ];
 
-const activityFeed = [
-  { flag: "🇳🇴", text: "Support ticket resolved in Norwegian", detail: "Issue #11551" },
-  { flag: "🇮🇱", text: "Invoice sent in Hebrew", detail: "€1,850.00" },
-  { flag: "🇷🇴", text: "Appointment scheduled in Romanian", detail: "Tomorrow 10:00 AM" },
-  { flag: "🇫🇮", text: "Customer onboarded in Finnish", detail: "Premium Plan" },
+// Illustrative example only. Calls are billed on their ACTUAL cost (the voice + carrier
+// cost of that specific call), which works out to roughly $0.35/min — so the exact
+// figure varies slightly call to call. Keep this framed as approximate.
+const exampleRows = [
+  { label: "Call duration", value: "2 min 30 sec" },
+  { label: "Typical rate", value: "~$0.35 / min" },
+  { label: "Charged to balance", value: "~$0.88", strong: true },
 ];
 
 const LiveOpsCenter = () => (
@@ -23,47 +49,50 @@ const LiveOpsCenter = () => (
     <div className="absolute inset-0 bg-gradient-to-b from-primary/[0.02] via-transparent to-transparent pointer-events-none" />
     <div className="container mx-auto px-4 relative z-10">
       <div className="text-center mb-16">
-        <span className="badge-pill mb-4">Live Operations Center</span>
+        <span className="badge-pill mb-4">Full Visibility</span>
         <h2 className="text-3xl md:text-5xl font-bold mt-4">
-          Real-Time <span className="text-gradient">Business Intelligence</span>
+          Know exactly what happened <span className="text-gradient">on every call</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-xl mx-auto">
-          Watch your AI workforce in action. Every metric updates live.
+          Nothing is a black box. Each completed call lands in your dashboard with the audio, the
+          transcript and its cost attached.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {metrics.map((m) => (
-          <div key={m.label} className="surface-card p-5">
-            <m.icon size={18} className="text-primary mb-3" />
-            <div className="text-2xl font-black text-foreground">{m.value}</div>
-            <div className="text-sm font-semibold text-foreground mt-1">{m.label}</div>
-            <div className="text-xs text-muted-foreground">{m.sub}</div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
+        {afterCall.map((item) => (
+          <div key={item.title} className="surface-card p-5">
+            <item.icon size={18} className="text-primary mb-3" />
+            <div className="text-sm font-semibold text-foreground">{item.title}</div>
+            <div className="text-xs text-muted-foreground mt-1">{item.desc}</div>
           </div>
         ))}
       </div>
 
-      {/* Activity feed */}
-      <div className="surface-card p-6 max-w-2xl mx-auto">
-        <div className="flex items-center gap-2 mb-4">
-          <Activity size={16} className="text-primary animate-pulse" />
-          <h3 className="text-sm font-bold text-foreground">Live Activity Feed</h3>
-        </div>
-        <div className="space-y-3">
-          {activityFeed.map((item, i) => (
-            <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-secondary/50">
-              <span className="text-xl">{item.flag}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-foreground">{item.text}</div>
-              </div>
-              <span className="text-xs text-primary font-medium">{item.detail}</span>
+      {/* Worked pricing example */}
+      <div className="surface-card p-6 max-w-md mx-auto">
+        <h3 className="text-sm font-bold text-foreground mb-1">How a call is billed</h3>
+        <p className="text-xs text-muted-foreground mb-4">
+          An example, so there are no surprises on your balance.
+        </p>
+        <div className="space-y-2">
+          {exampleRows.map((row) => (
+            <div
+              key={row.label}
+              className={`flex items-center justify-between rounded-lg px-3 py-2.5 text-sm ${
+                row.strong ? "bg-primary/10 font-semibold text-foreground" : "bg-secondary/50 text-muted-foreground"
+              }`}
+            >
+              <span>{row.label}</span>
+              <span className={row.strong ? "text-primary" : "text-foreground"}>{row.value}</span>
             </div>
           ))}
         </div>
-        <div className="flex items-center gap-4 mt-4 pt-4 border-t border-border text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-primary animate-pulse" /> All systems operational</span>
-          <span>Serving 47 countries</span>
-        </div>
+        <p className="mt-4 pt-4 border-t border-border text-xs text-muted-foreground">
+          You're only charged for connected minutes, and each call is billed at its actual cost — so
+          the real figure varies slightly per call. Phone numbers are billed separately at $3 per
+          month.
+        </p>
       </div>
     </div>
   </section>
