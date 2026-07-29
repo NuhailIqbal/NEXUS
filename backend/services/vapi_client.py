@@ -148,8 +148,13 @@ async def delete_phone_number(phone_id: str) -> None:
 # Vapi's own built-in voice provider (provider="vapi") — real voices available on
 # every Vapi account with no third-party provider key required. voiceIds are exact
 # (case-sensitive on Vapi's side); we accept any casing from the wizard and map to
-# the canonical form. Verified live against the Vapi API (each accepted on assistant
-# creation). Source: https://docs.vapi.ai/providers/voice/vapi-voices
+# the canonical form. Verified directly against Vapi's live assistant-creation API
+# (POST /assistant), which validates voiceId strictly and rejects unknown values with
+# a 400 listing every currently-valid id — these 13 bare names all confirmed valid.
+# Do NOT add a " New" suffix or a "version" field speculatively based on Vapi's docs
+# site: the docs page previously seen for this project did not match the live API and
+# caused a real regression (see git history) — trust a live create_assistant() +
+# get_assistant() round trip over the docs if the two ever disagree again.
 _VAPI_VOICE_IDS = [
     "Elliot", "Savannah", "Rohan", "Emma", "Clara", "Nico", "Kai",
     "Sagar", "Godfrey", "Neil", "Layla", "Sid", "Naina",
