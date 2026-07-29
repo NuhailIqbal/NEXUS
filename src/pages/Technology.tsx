@@ -1,23 +1,39 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { Brain, Cpu, Database, Cloud, Lock, Zap, GitBranch, Server, Activity } from "lucide-react";
+import { Mic, Ear, MessageSquare, FileAudio, Lock, Wallet, PhoneCall, Cpu, Activity } from "lucide-react";
 
 const techStack = [
-  { icon: Brain, label: "Neural Networks", desc: "Deep learning models trained on billions of call interactions for routing optimization" },
-  { icon: Cpu, label: "Edge Computing", desc: "Sub-200ms latency through globally distributed edge inference nodes" },
-  { icon: Database, label: "Real-Time Data Pipeline", desc: "Stream processing engine handling 10M+ events per second" },
-  { icon: Cloud, label: "Cloud-Native Infrastructure", desc: "Auto-scaling Kubernetes clusters across 12 global regions" },
-  { icon: Lock, label: "Security", desc: "Encrypted in transit, per-account access control, and card details handled entirely by Stripe" },
-  { icon: Zap, label: "AutoML Pipeline", desc: "Self-improving models that retrain on live performance data every 6 hours" },
+  { icon: Ear, label: "Speech Recognition", desc: "Call audio is transcribed to text in real time as the conversation happens" },
+  { icon: MessageSquare, label: "Conversational AI", desc: "A language model drives the agent's side of the conversation, guided by the instructions and knowledge you give it" },
+  { icon: Mic, label: "Natural Voice Output", desc: "Text responses are converted back to speech using one of 13 production voices" },
+  { icon: FileAudio, label: "Recording & Transcription", desc: "Every call is recorded and transcribed automatically, with an AI summary generated afterward" },
+  { icon: Lock, label: "Security", desc: "Encrypted in transit, per-account access control, and payment card details handled entirely by our payment processor" },
+  { icon: Wallet, label: "Usage-Based Billing", desc: "Each call's actual cost is calculated and deducted from your balance individually" },
 ];
 
-const metrics = [
-  { value: "< 200ms", label: "Avg Routing Latency" },
-  { value: "99.99%", label: "Uptime SLA" },
-  { value: "10M+", label: "Events/Second" },
-  { value: "12", label: "Global Regions" },
-  { value: "2B+", label: "Calls Processed" },
-  { value: "6hr", label: "Model Retrain Cycle" },
+const pipeline = [
+  {
+    icon: PhoneCall,
+    title: "The call connects",
+    desc: "A phone number rings in, or an outbound call is placed to a contact from your list.",
+  },
+  {
+    icon: Cpu,
+    title: "The agent listens and responds",
+    desc: "Speech is transcribed, the agent decides what to say using its configured goal and knowledge, and a voice speaks the reply — in a continuous back-and-forth for the length of the call.",
+  },
+  {
+    icon: Activity,
+    title: "The call is wrapped up",
+    desc: "Once the call ends, the recording, transcript, and summary are generated and the exact cost of that call is calculated and charged to your balance.",
+  },
+];
+
+const facts = [
+  { value: "13", label: "Production Voices" },
+  { value: "5", label: "Languages Supported" },
+  { value: "Every", label: "Call Recorded" },
+  { value: "24/7", label: "Inbound Availability" },
 ];
 
 const Technology = () => (
@@ -31,40 +47,28 @@ const Technology = () => (
         <div className="text-center mb-16">
           <div className="badge-pill mx-auto mb-6 animate-slide-up">
             <span className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-            ENGINEERING
+            HOW IT WORKS
           </div>
           <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            The AI <span className="text-gradient">Architecture</span>
+            What happens on <span className="text-gradient">every call</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            Purpose-built infrastructure turning raw signal into revenue at machine speed.
+            A plain look at the pipeline behind each call your agent makes or answers.
           </p>
         </div>
 
-        {/* Architecture Visual */}
+        {/* Pipeline */}
         <div className="glow-border rounded-2xl p-8 mb-16 animate-slide-up" style={{ animationDelay: "0.3s" }}>
           <div className="grid md:grid-cols-3 gap-8">
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
-                <Activity size={28} className="text-primary" />
+            {pipeline.map((step) => (
+              <div key={step.title} className="text-center">
+                <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
+                  <step.icon size={28} className="text-primary" />
+                </div>
+                <h3 className="text-lg font-bold text-foreground mb-2">{step.title}</h3>
+                <p className="text-sm text-muted-foreground">{step.desc}</p>
               </div>
-              <h3 className="text-lg font-bold text-foreground mb-2">Signal Ingestion</h3>
-              <p className="text-sm text-muted-foreground">Multi-channel data intake from calls, clicks, forms, and IoT signals processed through unified stream architecture.</p>
-            </div>
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-4">
-                <GitBranch size={28} className="text-accent" />
-              </div>
-              <h3 className="text-lg font-bold text-foreground mb-2">Neural Processing</h3>
-              <p className="text-sm text-muted-foreground">Transformer-based models score, classify, and route each interaction through proprietary decision graphs.</p>
-            </div>
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
-                <Server size={28} className="text-primary" />
-              </div>
-              <h3 className="text-lg font-bold text-foreground mb-2">Execution Layer</h3>
-              <p className="text-sm text-muted-foreground">Real-time bid optimization, dynamic routing, and automated campaign management with full observability.</p>
-            </div>
+            ))}
           </div>
         </div>
 
@@ -81,12 +85,12 @@ const Technology = () => (
           ))}
         </div>
 
-        {/* Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          {metrics.map((m, i) => (
-            <div key={m.label} className="text-center p-4 rounded-xl border border-border bg-card animate-slide-up" style={{ animationDelay: `${0.05 * i}s` }}>
-              <div className="text-2xl font-black text-gradient mb-1">{m.value}</div>
-              <div className="text-xs text-muted-foreground">{m.label}</div>
+        {/* Facts */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {facts.map((f, i) => (
+            <div key={f.label} className="text-center p-4 rounded-xl border border-border bg-card animate-slide-up" style={{ animationDelay: `${0.05 * i}s` }}>
+              <div className="text-2xl font-black text-gradient mb-1">{f.value}</div>
+              <div className="text-xs text-muted-foreground">{f.label}</div>
             </div>
           ))}
         </div>

@@ -8,15 +8,15 @@ const platformLinks: { label: string; to: string }[] = [
   { label: "AI Receptionist", to: "/use-cases" },
   { label: "Recordings & Transcripts", to: "/features" },
   { label: "Technology", to: "/technology" },
-  { label: "White-Label", to: "/publishers" },
+  { label: "Live Call Transfer", to: "/features" },
 ];
 
 const companyLinks: { label: string; to: string }[] = [
   { label: "About", to: "/about" },
   { label: "Pricing", to: "/pricing" },
   { label: "Contact", to: "/request-access" },
-  { label: "Advertisers", to: "/advertisers" },
-  { label: "Publishers", to: "/publishers" },
+  { label: "For Agencies", to: "/advertisers" },
+  { label: "For Inbound Teams", to: "/publishers" },
 ];
 
 // Only list documents that actually exist — a named legal link that quietly lands on

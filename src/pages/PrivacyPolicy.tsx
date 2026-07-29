@@ -2,50 +2,6 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Link } from "react-router-dom";
 
-// Third parties that actually receive data, taken from the services the platform calls.
-const subprocessors = [
-  {
-    name: "Vapi",
-    purpose: "Runs the voice agent during a call; generates and stores call recordings and transcripts",
-    data: "Call audio, transcripts, phone numbers, call metadata",
-  },
-  {
-    name: "Twilio",
-    purpose: "Supplies phone numbers and carries the actual phone call",
-    data: "Phone numbers, call times and durations",
-  },
-  {
-    name: "OpenAI",
-    purpose: "Powers the agent's side of the conversation",
-    data: "Conversation text, your agent's instructions and knowledge content",
-  },
-  {
-    name: "Deepgram",
-    purpose: "Converts speech to text so the call can be transcribed",
-    data: "Call audio",
-  },
-  {
-    name: "Google (Gemini)",
-    purpose: "Produces the post-call summary and sentiment read-out",
-    data: "Call transcript text",
-  },
-  {
-    name: "Stripe",
-    purpose: "Processes payments and stores your card securely",
-    data: "Name, email, billing details, card data (handled entirely by Stripe)",
-  },
-  {
-    name: "Brevo",
-    purpose: "Sends email on your behalf, where you have connected it",
-    data: "Recipient email addresses and message content",
-  },
-  {
-    name: "Google (Gmail SMTP)",
-    purpose: "Sends our own service emails, such as email verification",
-    data: "Your email address",
-  },
-];
-
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
     <section id={id} className="scroll-mt-24">
@@ -65,176 +21,203 @@ const PrivacyPolicy = () => (
         <h1 className="text-4xl md:text-5xl font-bold">Privacy Policy</h1>
 
         <div className="mt-12 space-y-10">
-          <Section id="intro" title="1. Who this covers">
+          <Section id="intro" title="1. Introduction and Scope">
             <p>
-              This policy explains how EDM Nexus ("we", "us") handles personal information when you
-              use our AI voice calling platform at edmnexus.ai, including the dashboard, the phone
-              agents you build, and our website.
+              This Privacy Policy (the "Policy") describes how EDM Nexus ("the Company," "we,"
+              "us," or "our") collects, uses, discloses, and safeguards information in connection
+              with its AI voice calling platform, accessible at edmnexus.ai, including the
+              dashboard, the AI voice agents configured through it, and associated websites
+              (collectively, the "Service").
             </p>
             <p>
-              There are two different roles to keep in mind. For your own account information, we
-              decide how the data is used. For the contact data you upload and the people your
-              agents call, <strong className="text-foreground">you</strong> decide how that data is
-              used and we simply process it on your instructions.
+              This Policy distinguishes between two categories of information. Information
+              relating to a registered user of the Service (a "Customer") and their account is
+              processed by the Company as a controller. Information relating to a Customer's own
+              contacts and the individuals reached or answered by a Customer's AI voice agents
+              ("Call Data" and "Contact Data") is processed by the Company as a processor, strictly
+              on the Customer's instructions and for the purposes the Customer configures. The
+              Customer remains responsible for the lawfulness of that processing, as described
+              further in Section 3.
             </p>
           </Section>
 
-          <Section id="collect" title="2. What we collect">
-            <p><strong className="text-foreground">Account information.</strong> Your name, email
-              address, company name, and password (stored only as a secure hash).</p>
-            <p><strong className="text-foreground">Billing information.</strong> Your wallet
-              balance, top-ups, promotional credit, and per-call charges. Card details are entered
-              directly with Stripe and never reach our servers. We only keep an identifier plus the
-              card brand, last four digits and expiry so you can recognise it.</p>
-            <p><strong className="text-foreground">Contact data you upload.</strong> Names, phone
-              numbers, email addresses, list membership and any custom fields you create, including
-              a consent field if you use it.</p>
-            <p><strong className="text-foreground">Call data.</strong> For every call your agents
-              make or answer we store the phone numbers involved, the time and duration, the
-              outcome, the cost, an{" "}
+          <Section id="collect" title="2. Information We Collect">
+            <p>
+              <strong className="text-foreground">Account Information.</strong> Name, email
+              address, company name, and password. Passwords are stored only as an irreversible
+              cryptographic hash and are never retained in plain text.
+            </p>
+            <p>
+              <strong className="text-foreground">Billing Information.</strong> Wallet balance,
+              top-up history, promotional credit, and per-call charges. Payment card details are
+              submitted directly to the Company's payment processor and are never transmitted to
+              or stored on Company servers. The Company retains only a reference identifier
+              together with the card brand, last four digits, and expiration date for display
+              purposes.
+            </p>
+            <p>
+              <strong className="text-foreground">Contact Data.</strong> Names, telephone numbers,
+              email addresses, list assignments, and any custom fields configured by the Customer,
+              including a consent-tracking field where used.
+            </p>
+            <p>
+              <strong className="text-foreground">Call Data.</strong> For each call placed or
+              received by a Customer's AI voice agent, the Company records the telephone numbers
+              involved, the time and duration of the call, its outcome, its cost, an{" "}
               <strong className="text-foreground">audio recording</strong>, a{" "}
-              <strong className="text-foreground">written transcript</strong> and an AI-generated
-              summary. See section 3.</p>
-            <p><strong className="text-foreground">Technical information.</strong> Server logs
-              including IP address and request details, kept for security and debugging.</p>
+              <strong className="text-foreground">written transcript</strong>, and an
+              AI-generated summary. See Section 3.
+            </p>
+            <p>
+              <strong className="text-foreground">Technical Information.</strong> Server logs,
+              including IP address and request metadata, retained for security monitoring and
+              diagnostic purposes.
+            </p>
           </Section>
 
-          <Section id="recording" title="3. Call recording and transcription (please read)">
+          <Section id="recording" title="3. Call Recording and Transcription">
             <p className="text-foreground">
-              Every call placed or answered by an agent on this platform is recorded and
+              Every call placed or answered by an AI voice agent on the Service is recorded and
               transcribed by default.
             </p>
             <p>
-              Recording a phone call is regulated, and the rules differ by country and by US state.
-              Several states require the consent of <em>everyone</em> on the call before it can be
-              recorded. Automated and pre-recorded outbound calls are separately regulated in the
-              United States under the TCPA, and some jurisdictions now also require you to disclose
-              that the caller is an AI rather than a person.
+              The recording of telephone calls is subject to regulation that varies by
+              jurisdiction. Certain jurisdictions, including a number of U.S. states, require the
+              consent of all parties to a call prior to recording. Automated and prerecorded
+              outbound calls are separately regulated in the United States under the Telephone
+              Consumer Protection Act ("TCPA"), and certain jurisdictions additionally require
+              disclosure that a caller is an automated system rather than a natural person.
             </p>
             <p>
-              Because you control who your agents call and what they say, you are responsible for
-              meeting those obligations, including getting whatever consent is required, honouring
-              do-not-call requests, respecting calling hours, and disclosing recording and the use
-              of AI where the law requires it. A practical way to handle this is to have your agent
-              say so in its opening line.
+              As the Customer determines who its agents contact and what those agents
+              communicate, the Customer is solely responsible for compliance with all applicable
+              recording-consent, telemarketing, and AI-disclosure laws, including obtaining any
+              consent required, honoring do-not-call requests, observing permitted calling hours,
+              and disclosing the use of recording and artificial intelligence where legally
+              required. Configuring the agent to make such disclosures in its opening statement is
+              one practical means of satisfying this obligation.
             </p>
             <p>
-              You can review or delete individual call records from your dashboard at any time.
+              Customers may review or delete individual call records from the dashboard at any
+              time.
             </p>
           </Section>
 
-          <Section id="use" title="4. How we use information">
-            <p>We use the information above to operate your account and place and receive calls; to
-              generate recordings, transcripts and summaries so you can review calls; to calculate
-              what each call cost and bill your balance; to send service emails such as email
-              verification and low-balance alerts; to provide support; to detect abuse and protect
-              the platform; and to meet our legal obligations.</p>
+          <Section id="use" title="4. How We Use Information">
             <p>
-              We do not sell your personal information, and we do not use your call recordings,
-              transcripts or contact lists to advertise to you.
+              The Company uses the information described above to: operate Customer accounts and
+              place and receive calls; generate recordings, transcripts, and summaries for
+              Customer review; calculate call costs and process billing; deliver service
+              communications, including email verification and low-balance notifications; provide
+              customer support; detect and prevent misuse of the Service; and comply with
+              applicable legal obligations.
+            </p>
+            <p>
+              The Company does not sell personal information and does not use call recordings,
+              transcripts, or Contact Data to advertise to Customers or the individuals they
+              contact.
             </p>
           </Section>
 
-          <Section id="subprocessors" title="5. Who else receives data">
+          <Section id="subprocessors" title="5. Disclosure to Service Providers">
             <p>
-              Running a phone call requires several specialist providers. These are the third
-              parties that receive data, and why:
+              The Company engages a limited number of trusted third-party service providers to
+              operate the Service, including providers of voice and telephony infrastructure,
+              speech transcription, cloud computing and hosting, payment processing, and
+              transactional email delivery. These providers receive only the information necessary
+              to perform their function and are contractually bound to use it solely for that
+              purpose.
             </p>
-            <div className="mt-4 overflow-hidden rounded-xl border border-border">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-muted/50 uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="px-4 py-3">Provider</th>
-                      <th className="px-4 py-3">Why</th>
-                      <th className="px-4 py-3">What they receive</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {subprocessors.map((s) => (
-                      <tr key={s.name} className="border-t border-border">
-                        <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
-                        <td className="px-4 py-3">{s.purpose}</td>
-                        <td className="px-4 py-3">{s.data}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <p className="mt-4">
-              These providers operate under their own terms and may process data outside your
-              country. We may also disclose information if we are legally required to, or to
-              protect our rights or someone's safety.
+            <p>
+              Payment card information is collected and stored exclusively by the Company's
+              payment processor and is never transmitted to or held on Company servers.
+            </p>
+            <p>
+              Each provider processes data under its own terms of service and privacy policy and
+              may process data outside the Customer's country of residence. The Company may also
+              disclose information where required by law, legal process, or governmental request,
+              or where necessary to protect the rights, property, or safety of the Company, its
+              users, or the public.
             </p>
           </Section>
 
-          <Section id="retention" title="6. How long we keep it">
+          <Section id="retention" title="6. Data Retention">
             <p>
-              Account, billing and call records are kept for as long as your account is open,
-              because you need them for your own records and we need them for tax and accounting
-              purposes. You can delete individual contacts and call records yourself at any time.
+              Account, billing, and call records are retained for as long as the associated
+              account remains active, for the Customer's own reference and for the Company's tax
+              and accounting purposes. Customers may delete individual contacts and call records
+              at any time through the dashboard.
             </p>
             <p>
-              If you close your account we delete your data, except where we are required to retain
-              transaction records for legal or accounting reasons.
-            </p>
-          </Section>
-
-          <Section id="rights" title="7. Your rights">
-            <p>
-              You can access and correct your account details in the dashboard, and you can ask us
-              to delete your account and its data.
-            </p>
-            <p>
-              <strong className="text-foreground">California residents.</strong> Under the CCPA and
-              CPRA you may request access to the personal information we hold about you, request its
-              deletion or correction, and ask us to disclose what we collect and share. We do not
-              sell personal information or share it for cross-context behavioural advertising, and
-              we will not discriminate against you for exercising these rights.
-            </p>
-            <p>
-              <strong className="text-foreground">Visitors in the UK and EEA.</strong> Where the
-              GDPR applies to you, you also have rights to object to or restrict processing, to data
-              portability, and to lodge a complaint with your local supervisory authority. We rely
-              on performing our contract with you to run your account, on our legitimate interests
-              to keep the platform secure, and on consent where we ask for it.
-            </p>
-            <p>To make a request, email us using the contact details in section 11.</p>
-          </Section>
-
-          <Section id="security" title="8. Security">
-            <p>
-              Traffic to the platform is encrypted in transit. Passwords are stored only as
-              hashes, access to your data requires your login, and payment card details are handled
-              entirely by Stripe so they never reach our systems.
-            </p>
-            <p>
-              We do not currently hold a SOC 2, ISO 27001 or HIPAA attestation, and the platform is
-              not intended for protected health information. No system is perfectly secure, so we
-              cannot guarantee absolute security.
+              Upon account closure, the Company deletes Customer data except where retention of
+              transaction records is required by applicable law or accounting standards.
             </p>
           </Section>
 
-          <Section id="cookies" title="9. Cookies and local storage">
+          <Section id="rights" title="7. Your Rights and Choices">
             <p>
-              We keep this deliberately minimal. The site stores your login token and your
-              light/dark theme preference in your browser's local storage. These are needed for the
-              product to work. We do not use advertising or cross-site tracking cookies.
+              Customers may access and correct their account information through the dashboard,
+              and may request deletion of their account and associated data at any time.
+            </p>
+            <p>
+              <strong className="text-foreground">California Residents.</strong> Under the
+              California Consumer Privacy Act and California Privacy Rights Act, California
+              residents may request access to, deletion of, or correction of the personal
+              information the Company holds about them, and may request disclosure of the
+              categories of information collected and shared. The Company does not sell personal
+              information and does not share personal information for cross-context behavioral
+              advertising. The Company will not discriminate against any individual for exercising
+              these rights.
+            </p>
+            <p>
+              <strong className="text-foreground">Users in the United Kingdom and European
+              Economic Area.</strong> Where the General Data Protection Regulation applies, data
+              subjects additionally have the right to object to or restrict processing, the right
+              to data portability, and the right to lodge a complaint with their local supervisory
+              authority. The Company's processing is based on the performance of its contract with
+              the Customer, its legitimate interests in maintaining the security and integrity of
+              the Service, and consent where consent is obtained.
+            </p>
+            <p>Requests may be submitted using the contact details in Section 11.</p>
+          </Section>
+
+          <Section id="security" title="8. Data Security">
+            <p>
+              Data transmitted to and from the Service is encrypted in transit. Passwords are
+              stored only as cryptographic hashes, access to account data requires authentication,
+              and payment card details are handled exclusively by the Company's payment processor
+              and are never transmitted to or stored on Company infrastructure.
+            </p>
+            <p>
+              The Company does not currently hold a SOC 2, ISO 27001, or HIPAA attestation, and
+              the Service is not intended for the collection or processing of protected health
+              information. No method of transmission or storage is guaranteed to be entirely
+              secure, and the Company cannot warrant absolute security.
             </p>
           </Section>
 
-          <Section id="children" title="10. Children">
+          <Section id="cookies" title="9. Cookies and Local Storage">
             <p>
-              The platform is for business use and is not intended for anyone under 18. We do not
-              knowingly collect information from children. If you believe a child has given us
-              information, contact us and we will delete it.
+              The Service uses browser local storage to retain an authentication token and a
+              display theme preference, both of which are strictly necessary for the Service to
+              function. The Company does not use advertising or cross-site tracking cookies.
             </p>
           </Section>
 
-          <Section id="contact" title="11. Contact us">
+          <Section id="children" title="10. Children's Privacy">
             <p>
-              For any privacy question or request, including access and deletion:
+              The Service is intended for business use and is not directed to, nor intended for
+              use by, individuals under the age of 18. The Company does not knowingly collect
+              personal information from children. Any person who becomes aware that a child has
+              provided personal information to the Company should contact us, and the information
+              will be deleted.
+            </p>
+          </Section>
+
+          <Section id="contact" title="11. Contact Information">
+            <p>
+              Questions regarding this Policy, or requests to exercise the rights described
+              herein, including access and deletion requests, may be directed to:
             </p>
             <p className="text-foreground">
               Email:{" "}
@@ -242,17 +225,18 @@ const PrivacyPolicy = () => (
                 info@edmnexus.ai
               </a>
             </p>
-            <p className="rounded-lg border border-dashed border-border bg-secondary/40 p-3 text-xs">
-              <strong className="text-foreground">To be completed before publishing:</strong> the
-              full legal entity name and registered postal address of the company operating EDM
-              Nexus, and the governing state for any disputes.
+            <p className="text-xs text-muted-foreground/80 italic">
+              The registered legal entity name, principal place of business, and governing
+              jurisdiction of the Company will be included here upon finalization of the Company's
+              corporate registration details.
             </p>
           </Section>
 
-          <Section id="changes" title="12. Changes to this policy">
+          <Section id="changes" title="12. Changes to This Policy">
             <p>
-              We may update this policy from time to time. If a change materially affects how we
-              handle your information, we will tell you directly.
+              The Company may revise this Policy from time to time. Where a revision materially
+              affects the manner in which Customer information is handled, the Company will
+              provide direct notice to affected Customers in advance of the change taking effect.
             </p>
           </Section>
         </div>

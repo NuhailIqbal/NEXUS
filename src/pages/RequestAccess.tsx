@@ -3,13 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sparkles, ArrowRight, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 const benefits = [
-  "AI powered call routing & optimization",
-  "Access to 500+ premium buyers",
-  "Real-time analytics dashboard",
-  "Dedicated account management",
-  "24/7 multilingual AI agents",
+  "AI voice agents for outbound and inbound calls",
+  "Every call recorded, transcribed, and summarized",
+  "Itemized cost on every single call",
+  "Custom rate available for high call volume",
+  "No monthly platform fee",
 ];
 
 const RequestAccess = () => {
@@ -52,11 +53,11 @@ const RequestAccess = () => {
                 GET STARTED
               </div>
               <h1 className="text-3xl md:text-4xl font-black text-foreground mb-4">
-                Request <span className="text-gradient">Platform Access</span>
+                Talk to <span className="text-gradient">our team</span>
               </h1>
               <p className="text-muted-foreground mb-8">
-                Join the leading AI powered revenue platform. Our team will set you up 
-                with a customized solution for your business.
+                Tell us about your call volume and what you're trying to do — we'll follow up
+                about getting you set up, including a custom rate if you need one.
               </p>
               <ul className="space-y-3">
                 {benefits.map((b) => (
@@ -97,9 +98,8 @@ const RequestAccess = () => {
                   <label className="text-sm font-medium text-foreground mb-1.5 block">I am a...</label>
                   <select className="w-full h-10 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
                     <option value="">Select one</option>
-                    <option value="advertiser">Advertiser / Buyer</option>
-                    <option value="publisher">Publisher / Affiliate</option>
-                    <option value="agency">Agency</option>
+                    <option value="business">Business, using it directly</option>
+                    <option value="agency">Agency, running campaigns for clients</option>
                     <option value="other">Other</option>
                   </select>
                 </div>
@@ -107,7 +107,8 @@ const RequestAccess = () => {
                   <Sparkles size={16} /> Submit Request <ArrowRight size={16} />
                 </Button>
                 <p className="text-xs text-muted-foreground text-center">
-                  By submitting, you agree to our terms of service and privacy policy.
+                  By submitting, you agree to our{" "}
+                  <Link to="/privacy" className="text-primary hover:underline">privacy policy</Link>.
                 </p>
               </form>
             </div>

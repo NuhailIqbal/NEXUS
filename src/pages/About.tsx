@@ -1,23 +1,30 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, MapPin, Users, Zap, Award } from "lucide-react";
+import { ArrowRight, Headset, ShieldCheck, Sparkles, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const values = [
-  { icon: Zap, title: "Innovation First", desc: "We push the boundaries of what AI can do in performance marketing. Every feature starts with a research question." },
-  { icon: Users, title: "Partner Success", desc: "Our partners' growth is our growth. We invest deeply in relationships, providing dedicated support and strategic guidance." },
-  { icon: Award, title: "Relentless Quality", desc: "From 99.99% uptime to sub-200ms routing, we obsess over every millisecond and every data point." },
-  { icon: MapPin, title: "Global Scale", desc: "Operating across 12 regions with AI agents speaking 29+ languages, we connect the world's buyers and sellers." },
-];
-
-const milestones = [
-  { year: "2019", event: "Founded with a vision to bring AI to performance marketing" },
-  { year: "2020", event: "Launched neural call routing engine, processing 100K calls/month" },
-  { year: "2021", event: "Reached $100M in platform revenue, expanded to 15+ verticals" },
-  { year: "2022", event: "Deployed multilingual AI agents covering 29+ languages globally" },
-  { year: "2023", event: "Processed 2 billionth call, launched predictive buyer matching" },
-  { year: "2024", event: "Introduced autonomous campaign optimization and self-improving ML models" },
+  {
+    icon: Headset,
+    title: "Built for real calls",
+    desc: "Every feature exists because a call needed to be answered, transferred, or followed up on — not because it looked good on a roadmap.",
+  },
+  {
+    icon: Sparkles,
+    title: "No black boxes",
+    desc: "Every call you make or answer comes back with the recording, the transcript, and the summary attached. You should never have to wonder what happened on a call.",
+  },
+  {
+    icon: Wallet,
+    title: "Pay for what you use",
+    desc: "No seat licenses, no tiered plans, no annual contracts. You top up a balance and calls draw down from it, minute by minute.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "You stay in control",
+    desc: "You decide who your agents call, what they say, and when they hand off to a person. We give you the tools; the judgment calls stay with you.",
+  },
 ];
 
 const About = () => (
@@ -34,21 +41,23 @@ const About = () => (
             ABOUT EDM NEXUS
           </div>
           <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            The Future of <span className="text-gradient">Revenue Infrastructure</span>
+            An AI agent for <span className="text-gradient">your phone</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            EDM Nexus is the AI powered performance marketing platform that connects advertisers 
-            with publishers through intelligent, real-time revenue optimization.
+            EDM Nexus lets any business build an AI voice agent, put it on a real phone number,
+            and have it make or answer calls — with every call recorded, transcribed, and billed
+            by the minute.
           </p>
         </div>
 
         {/* Mission */}
         <div className="glow-border rounded-2xl p-8 md:p-12 mb-16 text-center animate-slide-up" style={{ animationDelay: "0.3s" }}>
-          <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-4">Our Mission</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-4">Why we built this</h2>
           <p className="text-muted-foreground text-lg max-w-3xl mx-auto leading-relaxed">
-            To build the world's most intelligent revenue infrastructure where every inbound interaction 
-            is matched, qualified, and monetized by AI, creating unprecedented value for advertisers, 
-            publishers, and the consumers they serve.
+            Most calls that matter to a small or mid-size business — the after-hours enquiry, the
+            appointment reminder, the lead that went cold — never get made because there's no one
+            free to make them. We built EDM Nexus so a team can put an AI agent on the phone in
+            minutes, without hiring, scripting a call center, or signing a contract.
           </p>
         </div>
 
@@ -65,26 +74,10 @@ const About = () => (
           ))}
         </div>
 
-        {/* Timeline */}
-        <div className="max-w-2xl mx-auto mb-16">
-          <h2 className="text-2xl font-bold text-foreground text-center mb-8 animate-slide-up">Our Journey</h2>
-          <div className="space-y-4">
-            {milestones.map((m, i) => (
-              <div key={m.year} className="flex gap-4 items-start animate-slide-up" style={{ animationDelay: `${0.05 * i}s` }}>
-                <div className="w-16 shrink-0 text-right">
-                  <span className="font-mono font-bold text-primary">{m.year}</span>
-                </div>
-                <div className="w-px bg-primary/30 shrink-0 self-stretch" />
-                <p className="text-sm text-muted-foreground pb-4">{m.event}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
         <div className="text-center animate-slide-up" style={{ animationDelay: "0.4s" }}>
-          <Link to="/request-access">
+          <Link to="/register">
             <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 px-8 gap-2">
-              Join Our Network <ArrowRight size={18} />
+              Start with $20 free credit <ArrowRight size={18} />
             </Button>
           </Link>
         </div>

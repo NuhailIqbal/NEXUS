@@ -1,62 +1,18 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
-import { Check, ArrowRight, Sparkles } from "lucide-react";
+import { Check, ArrowRight, Gift } from "lucide-react";
 import { Link } from "react-router-dom";
 
-const plans = [
-  {
-    name: "Starter",
-    price: "Custom",
-    description: "For emerging publishers and advertisers getting started with performance marketing.",
-    features: [
-      "Up to 5,000 calls/month",
-      "Basic AI call routing",
-      "Standard analytics dashboard",
-      "Email support",
-      "5 campaign slots",
-      "API access",
-    ],
-    cta: "Get Started",
-    highlighted: false,
-  },
-  {
-    name: "Growth",
-    price: "Custom",
-    description: "For scaling teams that need advanced AI optimization and premium buyer access.",
-    features: [
-      "Up to 50,000 calls/month",
-      "Neural routing engine",
-      "Advanced analytics & reporting",
-      "Priority support + Slack channel",
-      "Unlimited campaigns",
-      "Full API + webhook access",
-      "AI agent deployment (5 agents)",
-      "Fraud detection suite",
-      "Custom integrations",
-    ],
-    cta: "Request Access",
-    highlighted: true,
-  },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    description: "For organizations requiring unlimited scale, dedicated infrastructure, and SLA guarantees.",
-    features: [
-      "Unlimited calls",
-      "Dedicated neural routing cluster",
-      "White-label platform option",
-      "24/7 dedicated account team",
-      "Unlimited everything",
-      "Custom ML model training",
-      "Unlimited AI agents (29+ languages)",
-      "Advanced fraud & compliance",
-      "Custom SLA & uptime guarantees",
-      "On-premise deployment option",
-    ],
-    cta: "Contact Sales",
-    highlighted: false,
-  },
+const included = [
+  "Unlimited AI agents",
+  "13 production voices, 5 languages",
+  "Outbound campaigns with CSV import",
+  "24/7 AI receptionist for inbound calls",
+  "Call recording, transcripts, and AI summaries on every call",
+  "Live transfer to a human",
+  "Contacts, lists, and custom fields",
+  "Itemized cost on every single call",
 ];
 
 const Pricing = () => (
@@ -73,63 +29,51 @@ const Pricing = () => (
             PRICING
           </div>
           <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            Built to <span className="text-gradient">Scale With You</span>
+            One rate. <span className="text-gradient">No plans to pick.</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            Performance-based pricing aligned with your revenue goals. No upfront fees, no hidden costs.
+            Every feature is available to every account from day one. You only pay for the minutes
+            your agents are actually on a call.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-          {plans.map((plan, i) => (
-            <div
-              key={plan.name}
-              className={`rounded-2xl p-6 animate-slide-up flex flex-col ${
-                plan.highlighted
-                  ? "glow-border bg-card relative"
-                  : "surface-card"
-              }`}
-              style={{ animationDelay: `${0.1 * i}s` }}
-            >
-              {plan.highlighted && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-primary text-primary-foreground">
-                    <Sparkles size={12} /> MOST POPULAR
-                  </span>
-                </div>
-              )}
-              <div className="mb-6">
-                <h3 className="text-xl font-bold text-foreground mb-1">{plan.name}</h3>
-                <div className="text-3xl font-black text-gradient mb-2">{plan.price}</div>
-                <p className="text-sm text-muted-foreground">{plan.description}</p>
-              </div>
-              <ul className="space-y-3 mb-8 flex-1">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <Check size={16} className="text-primary mt-0.5 shrink-0" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              <Link to="/request-access">
-                <Button
-                  className={`w-full gap-2 ${
-                    plan.highlighted
-                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  }`}
-                >
-                  {plan.cta} <ArrowRight size={16} />
-                </Button>
-              </Link>
+        <div className="max-w-lg mx-auto animate-slide-up" style={{ animationDelay: "0.3s" }}>
+          <div className="glow-border rounded-2xl p-8 bg-card">
+            <div className="text-center mb-6">
+              <div className="text-5xl font-black text-gradient mb-2">~$0.35</div>
+              <p className="text-sm text-muted-foreground">per minute, billed at the call's actual cost</p>
             </div>
-          ))}
+
+            <div className="flex items-center justify-center gap-2 mb-6 px-4 py-2 rounded-lg bg-primary/10 text-sm text-primary">
+              <Gift size={16} /> New accounts start with $20 in free credit
+            </div>
+
+            <ul className="space-y-3 mb-8">
+              {included.map((f) => (
+                <li key={f} className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <Check size={16} className="text-primary mt-0.5 shrink-0" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+
+            <Link to="/register">
+              <Button className="w-full gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
+                Start with $20 free credit <ArrowRight size={16} />
+              </Button>
+            </Link>
+
+            <p className="text-xs text-muted-foreground text-center mt-4">
+              Phone numbers are $3/month each, charged from the same balance. No card required to
+              sign up.
+            </p>
+          </div>
         </div>
 
         <div className="text-center mt-12 animate-slide-up" style={{ animationDelay: "0.4s" }}>
           <p className="text-sm text-muted-foreground">
-            Calls are billed per connected minute with no monthly platform fee.
-            <Link to="/request-access" className="text-primary hover:underline ml-1">Contact us</Link> for volume pricing.
+            Running a high volume of calls?{" "}
+            <Link to="/request-access" className="text-primary hover:underline">Contact us</Link> about a custom rate.
           </p>
         </div>
       </div>

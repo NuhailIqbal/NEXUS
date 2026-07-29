@@ -559,6 +559,12 @@ async def list_payment_methods(user=Depends(get_current_user)):
     customer_id = billing.get("stripe_customer_id")
     if not customer_id:
         return {"data": [], "error": None}
+    if _stripe_customer_is_stale(customer_id):
+        # Orphaned by a Stripe mode switch (test -> live) or a deleted customer. There's
+        # nothing to list under an id that no longer exists — clear it so the next "Add
+        # payment method" creates a fresh, valid customer instead of retrying this one.
+        supabase.table("billing").update({"stripe_customer_id": None}).eq("user_id", user["user_id"]).execute()
+        return {"data": [], "error": None}
     try:
         default_pm = get_default_payment_method(customer_id)
         cards = stripe.Customer.list_payment_methods(customer_id, type="card", limit=20)
@@ -613,7 +619,7 @@ async def set_default_payment_method(payment_method_id: str, user=Depends(get_cu
     _require_stripe()
     billing = get_or_create_billing(user["user_id"])
     customer_id = billing.get("stripe_customer_id")
-    if not customer_id:
+    if not customer_id or _stripe_customer_is_stale(customer_id):
         raise HTTPException(status_code=400, detail="No saved payment methods yet")
     _assert_pm_belongs_to(customer_id, payment_method_id)
     try:
@@ -631,7 +637,7 @@ async def delete_payment_method(payment_method_id: str, user=Depends(get_current
     _require_stripe()
     billing = get_or_create_billing(user["user_id"])
     customer_id = billing.get("stripe_customer_id")
-    if not customer_id:
+    if not customer_id or _stripe_customer_is_stale(customer_id):
         raise HTTPException(status_code=404, detail="Payment method not found")
     _assert_pm_belongs_to(customer_id, payment_method_id)
 
@@ -844,10 +850,24 @@ TOPUP_MAX = 1000.0
 _BILLING_BASE_URL = f"{_app_base()}/dashboard/billing"
 
 
+def _stripe_customer_is_stale(customer_id: str) -> bool:
+    """True if this customer id doesn't exist under the currently active Stripe key.
+
+    Happens when a customer was created under a different Stripe mode (test vs live) —
+    test-mode and live-mode customers are entirely separate namespaces, so switching the
+    account's secret key orphans any customer id created under the old one.
+    """
+    try:
+        stripe.Customer.retrieve(customer_id)
+        return False
+    except stripe.error.InvalidRequestError as e:
+        return e.code == "resource_missing"
+
+
 def _get_or_create_stripe_customer(user) -> str:
     billing = get_or_create_billing(user["user_id"])
     customer_id = billing.get("stripe_customer_id")
-    if customer_id:
+    if customer_id and not _stripe_customer_is_stale(customer_id):
         return customer_id
     customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": user["user_id"]})
     supabase.table("billing").update({"stripe_customer_id": customer.id}).eq("user_id", user["user_id"]).execute()

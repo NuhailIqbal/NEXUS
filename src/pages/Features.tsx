@@ -1,79 +1,92 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { Brain, Route, BarChart3, Shield, Globe, Zap, Radio, Cpu, Network, Layers, Target, Gauge } from "lucide-react";
+import {
+  Bot,
+  PhoneOutgoing,
+  PhoneIncoming,
+  FileAudio,
+  Users,
+  CreditCard,
+  Mic,
+  PhoneForwarded,
+  FileText,
+  Sparkles,
+  Phone,
+  Bell,
+} from "lucide-react";
 
 const features = [
   {
-    icon: Brain,
-    title: "Neural Call Routing",
-    description: "AI powered routing engine that analyzes caller intent, geographic signals, and historical patterns to match calls with the highest-converting buyers in real time.",
-    highlight: "98.7% match accuracy",
+    icon: Bot,
+    title: "Guided Agent Builder",
+    description: "Set your agent's goal, industry, and knowledge through a guided setup, then test it in the same session before it ever dials out.",
+    highlight: "No code required",
   },
   {
-    icon: Route,
-    title: "Dynamic Lead Distribution",
-    description: "Intelligent distribution system that balances lead flow across buyer networks using predictive scoring models and real-time capacity management.",
-    highlight: "< 200ms routing",
+    icon: PhoneOutgoing,
+    title: "Outbound Campaigns",
+    description: "Point an agent at a contact list and launch. Every call attempt and its outcome is logged automatically.",
+    highlight: "CSV import",
   },
   {
-    icon: BarChart3,
-    title: "Revenue Optimization Engine",
-    description: "Machine learning models that continuously optimize bid prices, payout structures, and buyer selection to maximize revenue per interaction.",
-    highlight: "+340% avg ROI",
+    icon: PhoneIncoming,
+    title: "AI Receptionist",
+    description: "Assign an agent to a phone number and it answers inbound calls around the clock, including outside business hours.",
+    highlight: "24/7 answering",
   },
   {
-    icon: Shield,
-    title: "Fraud Detection & Prevention",
-    description: "Multi-layer fraud analysis using behavioral biometrics, device fingerprinting, and anomaly detection to protect your revenue pipeline.",
-    highlight: "99.9% fraud catch rate",
+    icon: PhoneForwarded,
+    title: "Live Call Transfer",
+    description: "When a call needs a human, the agent can transfer it directly to your team instead of ending the conversation.",
+    highlight: "Mid-call handoff",
   },
   {
-    icon: Globe,
-    title: "Multi-Language AI Agents",
-    description: "Deploy autonomous conversational AI agents that speak 29+ languages natively, handling qualification, scheduling, and transfers 24/7.",
-    highlight: "29+ languages",
+    icon: FileAudio,
+    title: "Call Recording",
+    description: "Every call is recorded by default, so you can listen back to exactly what was said.",
+    highlight: "Every call",
   },
   {
-    icon: Zap,
-    title: "Real-Time Analytics Dashboard",
-    description: "Live operational intelligence with custom KPI tracking, automated alerts, and predictive forecasting across all campaigns.",
-    highlight: "Live monitoring",
+    icon: FileText,
+    title: "Speaker-Labelled Transcripts",
+    description: "Each recording comes with a written transcript that shows who said what, so you don't have to replay the audio to check details.",
+    highlight: "Full transcript",
   },
   {
-    icon: Radio,
-    title: "Omnichannel Integration",
-    description: "Unified platform connecting inbound calls, SMS, chat, and digital leads through a single intelligent routing infrastructure.",
-    highlight: "4 channels",
+    icon: Sparkles,
+    title: "AI Call Summaries",
+    description: "A short automatic write-up of what happened on the call, generated right after it ends.",
+    highlight: "Auto-generated",
   },
   {
-    icon: Cpu,
-    title: "Predictive Buyer Matching",
-    description: "Deep learning algorithms that predict buyer intent and conversion probability, ensuring every lead reaches its optimal destination.",
-    highlight: "ML-powered",
+    icon: Mic,
+    title: "13 Production Voices",
+    description: "Choose from a roster of American, Canadian, and Indian-American voices and preview any of them before assigning one to an agent.",
+    highlight: "13 voices",
   },
   {
-    icon: Network,
-    title: "API-First Architecture",
-    description: "RESTful and webhook APIs for seamless integration with your existing tech stack CRMs, dialers, analytics platforms, and more.",
-    highlight: "100+ integrations",
+    icon: Users,
+    title: "Contacts, Lists & Custom Fields",
+    description: "Import contacts from CSV, organize them into lists for targeting, and add your own fields to track whatever matters to your business.",
+    highlight: "CSV + custom fields",
   },
   {
-    icon: Layers,
-    title: "Campaign Management Suite",
-    description: "End-to-end campaign orchestration with A/B testing, budget optimization, creative management, and automated performance reporting.",
-    highlight: "Full automation",
+    icon: Phone,
+    title: "Phone Number Provisioning",
+    description: "Get a phone number in the area code you want directly from the dashboard, then assign it to any agent.",
+    highlight: "$3/month",
   },
   {
-    icon: Target,
-    title: "Geo-Targeting & Compliance",
-    description: "Precision geographic targeting with built-in TCPA, GDPR, and state-level regulatory compliance enforcement.",
-    highlight: "Auto-compliant",
+    icon: CreditCard,
+    title: "Per-Call Billing",
+    description: "See exactly what each call cost, down to the individual charge. No estimates, no bundled minutes.",
+    highlight: "Itemized costs",
   },
   {
-    icon: Gauge,
-    title: "Performance Benchmarking",
-    description: "Industry benchmarking tools that compare your performance metrics against anonymized network-wide data to identify growth opportunities.",
-    highlight: "Network insights",
+    icon: Bell,
+    title: "Balance Alerts & Auto Recharge",
+    description: "Get notified as your credit runs low, or turn on auto recharge so a saved card tops up your balance automatically.",
+    highlight: "Never run dry",
   },
 ];
 
@@ -91,10 +104,11 @@ const Features = () => (
             PLATFORM CAPABILITIES
           </div>
           <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            Built for <span className="text-gradient">Intelligence</span>
+            Everything to put an agent <span className="text-gradient">on the phone</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            Every feature is powered by machine learning, designed for scale, and optimized for revenue.
+            From building the agent to seeing exactly what each call cost — it's all in one
+            dashboard.
           </p>
         </div>
 

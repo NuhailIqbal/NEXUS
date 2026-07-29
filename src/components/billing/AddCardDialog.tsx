@@ -58,6 +58,7 @@ function CardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
         </div>
       ) : (
         <PaymentElement
+          options={{ wallets: { link: "never" } }}
           onLoadError={(e) =>
             setLoadError(e?.error?.message || "Stripe could not initialise the payment form.")
           }
