@@ -560,7 +560,7 @@ CREATE TABLE IF NOT EXISTS public.integrations (
     description text,
     status text DEFAULT 'Active'::text NOT NULL,
     category text DEFAULT 'other'::text NOT NULL,
-    config_encrypted jsonb,
+    config_encrypted text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT integrations_category_check CHECK ((category = ANY (ARRAY['voice'::text, 'email'::text, 'other'::text]))),
@@ -651,6 +651,26 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     phone text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: dnc_check_cache; Type: TABLE; Schema: public; Owner: -
+-- Caches DNC/litigation suppression lookups (WhitelistData integration). Scoped per user
+-- because each user screens against their OWN provider account and list scope, so a result
+-- must never be reused across tenants. Doubles as the audit trail of which number was
+-- screened, when, and with what outcome. Reads treat rows older than ~30 days as stale.
+-- NB: keep comments OUTSIDE the CREATE TABLE body — migrate.py's column parser reads the
+-- body literally and would treat a comment line as a column definition.
+--
+
+CREATE TABLE IF NOT EXISTS public.dnc_check_cache (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    phone_key text NOT NULL,
+    suppressed boolean NOT NULL,
+    raw_response jsonb,
+    checked_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -819,6 +839,22 @@ ALTER TABLE ONLY public.conversations
 
 ALTER TABLE ONLY public.custom_fields
     ADD CONSTRAINT custom_fields_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: dnc_check_cache dnc_check_cache_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dnc_check_cache
+    ADD CONSTRAINT dnc_check_cache_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: dnc_check_cache dnc_check_cache_user_phone_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dnc_check_cache
+    ADD CONSTRAINT dnc_check_cache_user_phone_key UNIQUE (user_id, phone_key);
 
 
 --
@@ -1444,6 +1480,14 @@ ALTER TABLE ONLY public.conversations
 
 ALTER TABLE ONLY public.conversations
     ADD CONSTRAINT conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dnc_check_cache dnc_check_cache_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dnc_check_cache
+    ADD CONSTRAINT dnc_check_cache_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

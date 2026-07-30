@@ -162,9 +162,14 @@ const Outbound = () => {
     if (error) return toast.error(error);
     const dialed: number = (data as any)?.dialed ?? 0;
     const errors: number = (data as any)?.errors ?? 0;
+    const suppressed: number = (data as any)?.suppressed ?? 0;
     const details: { phone: string; error: string }[] = (data as any)?.error_details ?? [];
-    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown VAPI error"}`);
-    else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed`);
+    // Suppressed numbers aren't failures — they were deliberately skipped by DNC screening,
+    // so they're reported separately from VAPI errors.
+    const skipped = suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "";
+    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown VAPI error"}${skipped}`);
+    else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed${skipped}`);
+    else if (suppressed > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
     else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);
     fetchCampaigns();
   };

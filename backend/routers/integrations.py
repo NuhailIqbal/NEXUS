@@ -4,6 +4,7 @@ from database import supabase
 from models.schemas import IntegrationCreate, IntegrationUpdate
 from services.encryption import encrypt_config, decrypt_config, mask_config
 from services.integration_test import run_test
+from services import whitelist_service
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -44,6 +45,23 @@ async def create_integration(body: IntegrationCreate, user=Depends(get_current_u
         created["config_masked"] = mask_config(body.config)
         del created["config_encrypted"]
     return {"data": created, "error": None}
+
+
+@router.get("/dnc-status")
+async def dnc_status(user=Depends(get_current_user)):
+    """Whether this user's WhitelistData integration is configured and Active, plus its row
+    id so the campaign wizard's toggle can flip it on/off via PATCH /integrations/{id} below.
+    Visibility only here — dial-time enforcement independently re-checks via
+    whitelist_service.check_number on every call, so this endpoint can never itself be the
+    thing that lets an unsuppressed number through."""
+    integration = await whitelist_service.find_whitelist_integration(user["user_id"])
+    return {
+        "data": {
+            "enabled": bool(integration and integration["status"] == "Active"),
+            "integration_id": integration["id"] if integration else None,
+        },
+        "error": None,
+    }
 
 
 @router.get("/{integration_id}")
@@ -108,7 +126,7 @@ async def delete_integration(integration_id: str, user=Depends(get_current_user)
 async def test_integration(integration_id: str, user=Depends(get_current_user)):
     row = (
         supabase.table("integrations")
-        .select("name, config_encrypted, status")
+        .select("name, config_encrypted, status, category")
         .eq("id", integration_id)
         .eq("user_id", user["user_id"])
         .maybe_single()

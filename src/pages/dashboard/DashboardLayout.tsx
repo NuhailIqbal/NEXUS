@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Search, Menu, X, MessageSquare, CreditCard,
+  Search, Menu, X, MessageSquare, CreditCard, Plug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -69,6 +69,7 @@ const NAV: NavItem[] = [
       { label: "Flow Statistics", to: "/dashboard/analytics/flow" },
     ],
   },
+  { label: "Integrations", to: "/dashboard/integrations", icon: Plug },
   { label: "Billing", to: "/dashboard/billing", icon: CreditCard },
   { label: "Profile & Teams", to: "/dashboard/profile", icon: Users },
   { label: "Support", to: "/dashboard/support", icon: LifeBuoy },

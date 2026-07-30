@@ -11,7 +11,7 @@ from models.schemas import (
     PhoneNumberCreate, PhoneNumberUpdate,
     OutboundCallCreate,
 )
-from services import vapi_client, twilio_service
+from services import vapi_client, twilio_service, whitelist_service
 from config import settings
 from routers.billing import (
     check_call_quota,
@@ -25,6 +25,31 @@ CAMPAIGN_BATCH_SIZE = 20
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telephony", tags=["Telephony"])
+
+
+def _notify_suppressed(user_id: str, campaign_id: str, campaign_name: str, count: int) -> None:
+    """Tell the user numbers were skipped by DNC screening — once per campaign, not per
+    number. Best-effort: a notification must never affect the campaign's outcome."""
+    from routers.billing import _insert_notification
+
+    kind = f"dnc_suppressed_{campaign_id}"
+    try:
+        already = (
+            supabase.table("notifications").select("id")
+            .eq("user_id", user_id).eq("kind", kind).limit(1).execute().data
+        )
+        if already:
+            return
+    except Exception:
+        pass  # dedup check is an optimization, not a correctness requirement
+
+    _insert_notification(
+        user_id, kind,
+        f"{count} number{'s' if count != 1 else ''} skipped in {campaign_name}",
+        f"DNC/litigation screening blocked {count} number"
+        f"{'s' if count != 1 else ''} in this campaign, so no call was placed to "
+        f"{'them' if count != 1 else 'it'}.",
+    )
 
 
 # ── Inbound-call suspension on empty balance ──
@@ -419,6 +444,13 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     if not check_call_quota(user["user_id"], "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
+    # DNC/litigation screening. No-op unless the user has an Active WhitelistData
+    # integration; when they do, an unavailable check blocks the call rather than
+    # risking a call to a suppressed number.
+    screen = await whitelist_service.check_number(user["user_id"], body.phone_number)
+    if not screen["allowed"]:
+        raise HTTPException(status_code=403, detail=screen["reason"] or "This number is suppressed.")
+
     agent = (
         supabase.table("ai_agents")
         .select("vapi_assistant_id")
@@ -635,7 +667,21 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not phone_number_id:
         raise HTTPException(status_code=400, detail="The campaign's phone number is not linked to VAPI yet. Wait for activation or re-provision the number.")
 
-    async def dial_contact(contact):
+    async def dial_contact(contact, cached_verdict=None):
+        # Screen before dialing. A suppressed (or unverifiable) number is skipped, and the
+        # loop below carries on with the rest of the list — matching how a failed dial is
+        # already handled, rather than aborting the whole campaign.
+        screen = await whitelist_service.check_number(
+            user["user_id"], contact["phone"], cached=cached_verdict
+        )
+        if not screen["allowed"]:
+            return {
+                "success": False,
+                "suppressed": True,
+                "phone": contact["phone"],
+                "error": screen["reason"] or "Suppressed",
+            }
+
         call_payload = {
             "assistantId": vapi_assistant_id,
             "customer": {"number": contact["phone"]},
@@ -649,14 +695,22 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             return {"success": False, "phone": contact["phone"], "error": str(e)}
 
     dialed = 0
+    suppressed = []
     errors = []
     all_contacts = contacts.data
     for i in range(0, len(all_contacts), CAMPAIGN_BATCH_SIZE):
         batch = all_contacts[i:i + CAMPAIGN_BATCH_SIZE]
-        results = await asyncio.gather(*[dial_contact(c) for c in batch])
+        # One cache read for the whole batch, so only unscreened numbers reach the provider.
+        keys = [whitelist_service.normalize_phone(c["phone"]) for c in batch]
+        cached = whitelist_service.cache_get_many(user["user_id"], [k for k in keys if k])
+        results = await asyncio.gather(*[
+            dial_contact(c, cached.get(k)) for c, k in zip(batch, keys)
+        ])
         for r in results:
             if r["success"]:
                 dialed += 1
+            elif r.get("suppressed"):
+                suppressed.append({"phone": r["phone"], "reason": r.get("error", "Suppressed")})
             else:
                 errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
 
@@ -665,8 +719,17 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         "contacts_count": len(contacts.data),
     }).eq("id", campaign_id).execute()
 
+    if suppressed:
+        _notify_suppressed(user["user_id"], campaign_id, camp.get("name") or "Campaign", len(suppressed))
+
     return {
-        "data": {"dialed": dialed, "errors": len(errors), "error_details": errors[:5]},
+        "data": {
+            "dialed": dialed,
+            "errors": len(errors),
+            "error_details": errors[:5],
+            "suppressed": len(suppressed),
+            "suppressed_details": suppressed[:5],
+        },
         "error": None,
     }
 

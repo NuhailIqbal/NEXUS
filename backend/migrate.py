@@ -307,6 +307,35 @@ def _ensure_columns(conn) -> None:
             UNIQUE (promo_code_id, user_id)
         )''',
         'CREATE INDEX IF NOT EXISTS promo_code_redemptions_user_idx ON public.promo_code_redemptions (user_id, created_at)',
+        # DNC/litigation suppression lookups (WhitelistData integration). Cached per user
+        # because each user checks against their OWN provider account and list scope, so a
+        # result must never be reused across tenants. Also serves as the audit trail of
+        # which number was screened, when, and with what outcome.
+        '''CREATE TABLE IF NOT EXISTS public.dnc_check_cache (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            phone_key text NOT NULL,
+            suppressed boolean NOT NULL,
+            raw_response jsonb,
+            checked_at timestamptz DEFAULT now() NOT NULL,
+            UNIQUE (user_id, phone_key)
+        )''',
+        'CREATE INDEX IF NOT EXISTS dnc_check_cache_lookup_idx ON public.dnc_check_cache (user_id, phone_key)',
+        # integrations.config_encrypted holds an opaque Fernet ciphertext token, which is
+        # text, not JSON — declaring it jsonb meant every credential INSERT failed with
+        # "invalid input syntax for type json". Convert in place; `#>> '{}'` unwraps any
+        # row already stored as a JSON string scalar. Guarded so it's a no-op once done.
+        '''DO $$
+           BEGIN
+             IF EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'integrations'
+                 AND column_name = 'config_encrypted' AND data_type = 'jsonb'
+             ) THEN
+               ALTER TABLE public.integrations
+                 ALTER COLUMN config_encrypted TYPE text USING config_encrypted #>> '{}';
+             END IF;
+           END $$''',
         # Wallet: dollar balance + transaction ledger.
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS balance numeric(10,2) DEFAULT 0',
         '''CREATE TABLE IF NOT EXISTS public.wallet_transactions (

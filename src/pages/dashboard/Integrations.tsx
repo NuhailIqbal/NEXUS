@@ -138,15 +138,21 @@ const Integrations = () => {
 
   const handleCreateIntegration = async (d: { name: string; description: string; type: string; credentials: Record<string, string> }) => {
     const category = categorize(d.type);
+    // Must be `config` (a dict) — the backend model is IntegrationCreate.config, and an
+    // unknown `config_encrypted` field is silently dropped by Pydantic, saving a row with
+    // no credentials at all.
     const { data, error } = await api.createIntegration({
       name: d.name,
       description: d.description || d.type,
       status: "Active",
       category,
-      config_encrypted: JSON.stringify(d.credentials),
+      config: d.credentials,
     });
     if (error) return toast.error(error);
-    if (data) setIntegrations((prev) => [data, ...prev]);
+    if (data) {
+      setIntegrations((prev) => [data, ...prev]);
+      toast.success(`${d.name} connected`);
+    }
   };
 
   const handleCreateSipTrunk = async (d: { name: string; description: string; domain: string }) => {
@@ -337,8 +343,8 @@ const Integrations = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  {/* Only these two — integrations_status_check rejects anything else. */}
                   <SelectItem value="Active">Active</SelectItem>
-                  <SelectItem value="Paused">Paused</SelectItem>
                   <SelectItem value="Inactive">Inactive</SelectItem>
                 </SelectContent>
               </Select>

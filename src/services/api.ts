@@ -186,6 +186,7 @@ export const api = {
   updateIntegration: (id: string, data: any) => patch(`/integrations/${id}`, data),
   deleteIntegration: (id: string) => del(`/integrations/${id}`),
   testIntegration: (id: string) => post(`/integrations/${id}/test`),
+  getDncStatus: () => get("/integrations/dnc-status"),
 
   // Analytics
   getAnalyticsOverview: () => get("/analytics/overview"),

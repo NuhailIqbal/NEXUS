@@ -12,6 +12,8 @@ import time
 import httpx
 from urllib.parse import quote
 
+from services import whitelist_service
+
 
 async def _http_test(method: str, url: str, *, headers: dict | None = None,
                      auth: tuple[str, str] | None = None,
@@ -192,6 +194,29 @@ async def test_gemini(config: dict) -> dict:
     )
 
 
+async def test_whitelistdata(config: dict) -> dict:
+    """Screen a throwaway number to prove the credentials work. There's no dedicated
+    health endpoint, so the lookup itself is the probe — a 2xx means the key is live,
+    regardless of whether the number happens to be listed."""
+    api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
+    if not api_key:
+        return {"ok": False, "message": "Missing apiKey"}
+    missing = [f for f in ("code", "secret") if not (config.get(f) or "").strip()]
+    if missing:
+        return {"ok": False, "message": f"Missing {', '.join(missing)}"}
+    return await _http_test(
+        "GET", whitelist_service.BASE_URL,
+        params={
+            "code": config["code"],
+            "secret": config["secret"],
+            "phoneNumber": "5555555555",
+            "apiKey": api_key,
+            "return_key": "found",
+            "type": config.get("type") or whitelist_service.DEFAULT_SUPPRESSION_TYPE,
+        },
+    )
+
+
 # ── Provider registry & dispatcher ──
 
 PROVIDERS = [
@@ -211,6 +236,7 @@ PROVIDERS = [
     ("slack",      test_slack,      "Slack"),
     ("zapier",     test_zapier,     "Zapier"),
     ("gemini",     test_gemini,     "Gemini"),
+    ("whitelist",  test_whitelistdata, "WhitelistData"),
 ]
 
 

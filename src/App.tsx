@@ -31,6 +31,7 @@ import AIVoices from "./pages/dashboard/AIVoices.tsx";
 import Profile from "./pages/dashboard/Profile.tsx";
 import Support from "./pages/dashboard/Support.tsx";
 import Conversations from "./pages/dashboard/Conversations.tsx";
+import Integrations from "./pages/dashboard/Integrations.tsx";
 import Contacts from "./pages/dashboard/database/Contacts.tsx";
 import Lists from "./pages/dashboard/database/Lists.tsx";
 import CustomFields from "./pages/dashboard/database/CustomFields.tsx";
@@ -94,6 +95,7 @@ const App = () => {
                   <Route path="ai-agents/create" element={<CreateAIAgent />} />
                   <Route path="ai-voices" element={<AIVoices />} />
                   <Route path="conversations" element={<Conversations />} />
+                  <Route path="integrations" element={<Integrations />} />
                   <Route path="profile" element={<Profile />} />
                   <Route path="support" element={<Support />} />
                   <Route path="database/contacts" element={<Contacts />} />

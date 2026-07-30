@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { toast } from "sonner";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -13,38 +13,18 @@ type Props = {
 
 type FieldDef = { key: string; label: string; placeholder: string; help: string; type?: string };
 
-const INTEGRATION_TYPES: { value: string; label: string; fields: FieldDef[] }[] = [
-  { value: "Brevo", label: "Brevo", fields: [{ key: "apiKey", label: "API Key", placeholder: "xkeysib-…", help: "Your Brevo API key" }] },
-  { value: "Custom", label: "Custom", fields: [
-    { key: "baseUrl", label: "Base URL", placeholder: "https://api.example.com", help: "API base URL" },
-    { key: "apiKey", label: "API Key", placeholder: "your-api-key", help: "Authentication key" },
+// `provider` is written into the saved config blob so the backend can identify this
+// integration reliably, independent of whatever the user types as its display name.
+//
+// Only WhitelistData is offered here — every other entry that used to live in this list
+// (Brevo, Twilio, Stripe, OpenAI, Gemini, and a long tail of placeholder providers with no
+// backend behind them at all) has been removed at the user's request.
+const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlPaste?: boolean; fields: FieldDef[] }[] = [
+  { value: "WhitelistData", label: "WhitelistData (DNC screening)", provider: "whitelistdata", urlPaste: true, fields: [
+    { key: "apiKey", label: "API Key", placeholder: "d5078618-5c1c-4e3e-…", help: "The apiKey value from your WhitelistData account" },
+    { key: "code", label: "Function Code", placeholder: "ONbKJs8jpJZWJU5vO9Zg…", help: "The code value from your WhitelistData endpoint URL" },
+    { key: "secret", label: "Secret", placeholder: "sha290OpGRNz", help: "The secret value from your WhitelistData endpoint URL", type: "password" },
   ]},
-  { value: "Direct 7 Network", label: "Direct 7 Network", fields: [{ key: "apiKey", label: "API Key", placeholder: "api-key", help: "Your Direct 7 API key" }] },
-  { value: "Gemini", label: "Gemini", fields: [{ key: "apiKey", label: "API Key", placeholder: "AIza…", help: "Your Gemini API key" }] },
-  { value: "HubSpot CRM", label: "HubSpot CRM", fields: [{ key: "accessToken", label: "Access Token", placeholder: "pat-…", help: "Private app access token" }] },
-  { value: "IDT International", label: "IDT International", fields: [
-    { key: "username", label: "Username", placeholder: "username", help: "IDT username" },
-    { key: "password", label: "Password", placeholder: "password", help: "IDT password", type: "password" },
-  ]},
-  { value: "MondayCRM", label: "MondayCRM", fields: [{ key: "apiKey", label: "API Key", placeholder: "api-key", help: "Monday API key" }] },
-  { value: "OpenAI", label: "OpenAI", fields: [{ key: "apiKey", label: "API Key", placeholder: "sk-…", help: "Your OpenAI secret key" }] },
-  { value: "SIP Trunk", label: "SIP Trunk", fields: [
-    { key: "domain", label: "SIP Domain", placeholder: "sip.provider.com", help: "Your SIP domain" },
-    { key: "username", label: "Username", placeholder: "username", help: "SIP username" },
-    { key: "password", label: "Password", placeholder: "password", help: "SIP password", type: "password" },
-  ]},
-  { value: "SMS South Africa", label: "SMS South Africa", fields: [{ key: "apiKey", label: "API Key", placeholder: "api-key", help: "Your SMS South Africa API key" }] },
-  { value: "Salesforce CRM", label: "Salesforce CRM", fields: [{ key: "accessToken", label: "Access Token", placeholder: "00D…", help: "Salesforce OAuth token" }] },
-  { value: "Silverstreet", label: "Silverstreet", fields: [{ key: "apiKey", label: "API Key", placeholder: "api-key", help: "Silverstreet API key" }] },
-  { value: "Slack Notifications", label: "Slack Notifications", fields: [{ key: "webhookUrl", label: "Webhook URL", placeholder: "https://hooks.slack.com/…", help: "Slack incoming webhook URL" }] },
-  { value: "Stripe", label: "Stripe", fields: [{ key: "secretKey", label: "Secret Key", placeholder: "sk_live_…", help: "Your Stripe secret key", type: "password" }] },
-  { value: "Twilio", label: "Twilio", fields: [
-    { key: "sid", label: "SID", placeholder: "ac id", help: "Your Twilio Account SID" },
-    { key: "token", label: "Token", placeholder: "auth token", help: "Your Twilio Auth Token", type: "password" },
-  ]},
-  { value: "Volt", label: "Volt", fields: [{ key: "apiKey", label: "API Key", placeholder: "api-key", help: "Volt API key" }] },
-  { value: "Zapier", label: "Zapier", fields: [{ key: "webhookUrl", label: "Webhook URL", placeholder: "https://hooks.zapier.com/…", help: "Zapier webhook URL" }] },
-  { value: "Zoho", label: "Zoho", fields: [{ key: "accessToken", label: "Access Token", placeholder: "1000.…", help: "Zoho OAuth access token" }] },
 ];
 
 export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
@@ -79,8 +59,33 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
     if (step === 2) {
       const missing = selected?.fields.find((f) => !creds[f.key]?.trim());
       if (missing) return toast.error(`${missing.label} is required`);
-      onCreate?.({ name, description, type, credentials: creds });
+      const credentials = selected?.provider
+        ? { ...creds, provider: selected.provider }
+        : creds;
+      onCreate?.({ name, description, type, credentials });
       setStep(3);
+    }
+  };
+
+  /** Pull apiKey/code/secret straight out of a pasted provider URL, so the three fields
+   *  don't have to be picked apart by hand. */
+  const fillFromUrl = (raw: string) => {
+    if (!raw.trim()) return;
+    try {
+      const qs = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : raw;
+      const params = new URLSearchParams(qs);
+      const picked: Record<string, string> = {};
+      for (const key of ["apiKey", "code", "secret", "type"]) {
+        const val = params.get(key);
+        if (val) picked[key] = val;
+      }
+      if (!Object.keys(picked).length) {
+        return toast.error("Couldn't find apiKey, code or secret in that URL");
+      }
+      setCreds((c) => ({ ...c, ...picked }));
+      toast.success(`Filled ${Object.keys(picked).join(", ")}`);
+    } catch {
+      toast.error("That doesn't look like a valid URL");
     }
   };
 
@@ -88,7 +93,9 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-xl gap-0 p-0 sm:rounded-xl [&>button]:hidden">
         <div className="flex items-start justify-between border-b border-border p-5">
-          <h2 className="text-lg font-semibold">Create Integration</h2>
+          {/* DialogTitle rather than a bare h2 — Radix needs it to label the dialog for
+              screen readers, and warns at runtime when it's missing. */}
+          <DialogTitle className="text-lg font-semibold">Create Integration</DialogTitle>
           <button onClick={() => close(false)} className="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
@@ -134,6 +141,19 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
           {step === 2 && selected && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">Authenticate with {selected.label} using API key</p>
+              {selected.urlPaste && (
+                <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                  <label className="mb-1.5 block text-sm font-medium">Paste your full API URL</label>
+                  <Input
+                    placeholder="https://hooks.whitelistdata.com/api/…?code=…&secret=…&apiKey=…"
+                    onChange={(e) => fillFromUrl(e.target.value)}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Optional shortcut — this fills the fields below automatically. You can also
+                    enter them by hand.
+                  </p>
+                </div>
+              )}
               {selected.fields.map((f) => (
                 <div key={f.key}>
                   <label className="mb-1.5 block text-sm font-medium">{f.label} <span className="text-destructive">*</span></label>
