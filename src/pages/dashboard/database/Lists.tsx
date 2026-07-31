@@ -23,11 +23,19 @@ type ListItem = {
   createdAt: string;
 };
 
+type ListContact = {
+  id: string;
+  name: string;
+  phone: string;
+};
+
 const Lists = () => {
   const [open, setOpen] = useState(false);
   const [lists, setLists] = useState<ListItem[]>([]);
 
   const [viewTarget, setViewTarget] = useState<ListItem | null>(null);
+  const [viewContacts, setViewContacts] = useState<ListContact[]>([]);
+  const [viewContactsLoading, setViewContactsLoading] = useState(false);
   const [editTarget, setEditTarget] = useState<ListItem | null>(null);
   const [editForm, setEditForm] = useState<Partial<ListItem>>({});
 
@@ -63,6 +71,23 @@ const Lists = () => {
     }
     toast.success("List deleted");
     fetchLists();
+  };
+
+  const openView = async (l: ListItem) => {
+    setViewTarget(l);
+    setViewContacts([]);
+    setViewContactsLoading(true);
+    const { data, error } = await api.getContacts();
+    setViewContactsLoading(false);
+    if (error || !Array.isArray(data)) {
+      toast.error("Failed to load contacts");
+      return;
+    }
+    setViewContacts(
+      (data as any[])
+        .filter((c) => c.list_id === l.id)
+        .map((c) => ({ id: c.id, name: c.name || "—", phone: c.phone || "—" })),
+    );
   };
 
   const openEdit = (l: ListItem) => {
@@ -106,7 +131,7 @@ const Lists = () => {
             <div className="text-xs text-muted-foreground">contacts</div>
             <div className="mt-3 border-t border-border pt-3">
               <RowActions
-                onView={() => setViewTarget(l)}
+                onView={() => openView(l)}
                 onSettings={() => openEdit(l)}
                 onDelete={() => handleDelete(l)}
               />
@@ -144,6 +169,23 @@ const Lists = () => {
               <dd className="col-span-2 font-mono text-xs">{viewTarget.id}</dd>
             </dl>
           )}
+          <div className="border-t border-border pt-3">
+            <p className="mb-2 text-xs font-semibold text-muted-foreground">Contacts in this list</p>
+            {viewContactsLoading ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+            ) : viewContacts.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">No contacts in this list yet.</p>
+            ) : (
+              <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
+                {viewContacts.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-1.5 text-sm">
+                    <span className="truncate font-medium text-foreground">{c.name}</span>
+                    <span className="ml-2 shrink-0 font-mono text-xs text-muted-foreground">{c.phone}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setViewTarget(null)}>Close</Button>
           </DialogFooter>
