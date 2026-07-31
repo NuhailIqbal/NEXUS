@@ -48,22 +48,6 @@ class ListUpdate(BaseModel):
     name: Optional[str] = None
 
 
-# ── Custom Fields ──
-
-class CustomFieldCreate(BaseModel):
-    name: str
-    type: str = "Text"
-    options: Optional[list] = None
-    default_value: Optional[str] = None
-
-
-class CustomFieldUpdate(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    options: Optional[list] = None
-    default_value: Optional[str] = None
-
-
 # ── Team ──
 
 class TeamInvite(BaseModel):

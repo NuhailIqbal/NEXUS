@@ -39,7 +39,6 @@ const NAV: NavItem[] = [
     children: [
       { label: "Contacts", to: "/dashboard/database/contacts" },
       { label: "Lists", to: "/dashboard/database/lists" },
-      { label: "Custom Fields", to: "/dashboard/database/custom-fields" },
     ],
   },
   {

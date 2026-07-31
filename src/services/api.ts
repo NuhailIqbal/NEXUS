@@ -123,12 +123,6 @@ export const api = {
   updateList: (id: string, data: any) => patch(`/lists/${id}`, data),
   deleteList: (id: string) => del(`/lists/${id}`),
 
-  // Custom Fields
-  getCustomFields: () => get("/custom-fields"),
-  createCustomField: (data: any) => post("/custom-fields", data),
-  updateCustomField: (id: string, data: any) => patch(`/custom-fields/${id}`, data),
-  deleteCustomField: (id: string) => del(`/custom-fields/${id}`),
-
   // Tools
   getTools: () => get("/tools"),
   createTool: (data: any) => post("/tools", data),

@@ -12,7 +12,6 @@ from routers import (
     agents,
     contacts,
     lists,
-    custom_fields,
     tools,
     conversations,
     telephony,
@@ -126,7 +125,6 @@ app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(contacts.router)
 app.include_router(lists.router)
-app.include_router(custom_fields.router)
 app.include_router(tools.router)
 app.include_router(conversations.router)
 app.include_router(telephony.router)

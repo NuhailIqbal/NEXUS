@@ -76,13 +76,6 @@ export const lists = [
   { id: 4, name: "Webinar Apr 2025", count: 312, createdAt: "2025-04-01" },
 ];
 
-export const customFields = [
-  { id: 1, name: "Company Size", type: "Number" },
-  { id: 2, name: "Lifecycle Stage", type: "Dropdown" },
-  { id: 3, name: "Last Touch Channel", type: "Text" },
-  { id: 4, name: "Lead Score", type: "Number" },
-];
-
 export const flows = [
   { id: "fl_001", uuid: "9c2-aa1", name: "Lead Welcome Flow", description: "Welcome new leads via call + email", status: "Active", modifiedAt: "2025-04-15" },
   { id: "fl_002", uuid: "9c2-aa2", name: "Re-engagement", description: "Reach cold contacts after 30 days", status: "Inactive", modifiedAt: "2025-04-10" },

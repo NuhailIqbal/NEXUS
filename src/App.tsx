@@ -34,7 +34,6 @@ import Conversations from "./pages/dashboard/Conversations.tsx";
 import Integrations from "./pages/dashboard/Integrations.tsx";
 import Contacts from "./pages/dashboard/database/Contacts.tsx";
 import Lists from "./pages/dashboard/database/Lists.tsx";
-import CustomFields from "./pages/dashboard/database/CustomFields.tsx";
 import Outbound from "./pages/dashboard/telephony/Outbound.tsx";
 import Inbound from "./pages/dashboard/telephony/Inbound.tsx";
 import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
@@ -100,7 +99,6 @@ const App = () => {
                   <Route path="support" element={<Support />} />
                   <Route path="database/contacts" element={<Contacts />} />
                   <Route path="database/lists" element={<Lists />} />
-                  <Route path="database/custom-fields" element={<CustomFields />} />
                   <Route path="telephony/outbound" element={<Outbound />} />
                   <Route path="telephony/campaigns" element={<Outbound />} />
                   <Route path="telephony/inbound" element={<Inbound />} />
