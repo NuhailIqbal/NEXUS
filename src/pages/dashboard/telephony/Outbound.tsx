@@ -25,6 +25,7 @@ type Campaign = {
   id: string;
   name: string;
   status: string;
+  effectiveStatus?: string;
   agent_id: string;
   list_id: string;
   phone_number_id: string | null;
@@ -74,11 +75,21 @@ const Outbound = () => {
   const [checks, setChecks] = useState<CheckItem[]>([]);
   const [launching, setLaunching] = useState(false);
 
+  // A campaign whose every contact has a completed call has nothing left to dial — shown as
+  // "Completed" regardless of its underlying Active/Paused status, which otherwise never
+  // changes on its own once every contact has been reached.
+  const withEffectiveStatus = (list: Campaign[]): Campaign[] =>
+    list.map((c) => ({
+      ...c,
+      effectiveStatus:
+        c.contacts_count > 0 && c.completed_count >= c.contacts_count ? "Completed" : c.status,
+    }));
+
   const fetchCampaigns = async () => {
     const [campaignsRes, agentsRes, phonesRes, overviewRes] = await Promise.all([
       api.getCampaigns(), api.getAgents(), api.getPhoneNumbers(), api.getAnalyticsOverview(),
     ]);
-    if (Array.isArray(campaignsRes.data)) setCampaigns(campaignsRes.data);
+    if (Array.isArray(campaignsRes.data)) setCampaigns(withEffectiveStatus(campaignsRes.data));
     if (Array.isArray(agentsRes.data))
       setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
     if (Array.isArray(phonesRes.data))
@@ -96,7 +107,7 @@ const Outbound = () => {
 
   const totalContacts = campaigns.reduce((s, c) => s + (c.contacts_count || 0), 0);
   const totalDialed   = campaigns.reduce((s, c) => s + (c.completed_count || 0), 0);
-  const activeCampaigns = campaigns.filter((c) => c.status === "Active").length;
+  const activeCampaigns = campaigns.filter((c) => c.effectiveStatus === "Active").length;
 
   const togglePlay = async (c: Campaign) => {
     if (c.status === "Active") {
@@ -237,19 +248,27 @@ const Outbound = () => {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {campaigns.map((c) => {
             const pct = c.contacts_count > 0 ? Math.round((c.completed_count / c.contacts_count) * 100) : 0;
+            const effectiveStatus = c.effectiveStatus ?? c.status;
+            // Pause/Start toggles the campaign's real underlying status, independent of
+            // whether every contact has already been reached — kept separate from the
+            // completion badge below so the button's label always matches what clicking it does.
             const isActive = c.status === "Active";
-            const statusCls = STATUS_COLOR[c.status] ?? STATUS_COLOR.Inactive;
+            const isCompleted = effectiveStatus === "Completed";
+            // Visual "is this actually running right now" cues (glow, icon, progress fill)
+            // should turn off once completed even if the underlying status is still Active.
+            const showRunning = isActive && !isCompleted;
+            const statusCls = STATUS_COLOR[effectiveStatus] ?? STATUS_COLOR.Inactive;
             return (
               <div
                 key={c.id}
-                className={`rounded-xl border bg-card p-5 transition-shadow hover:shadow-md ${isActive ? "border-primary/30 shadow-sm shadow-primary/10" : "border-border"}`}
+                className={`rounded-xl border bg-card p-5 transition-shadow hover:shadow-md ${showRunning ? "border-primary/30 shadow-sm shadow-primary/10" : "border-border"}`}
               >
                 {/* Top row */}
                 <div className="flex items-start justify-between">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${isActive ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${showRunning ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                     <PhoneOutgoing className="h-5 w-5" />
                   </div>
-                  <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusCls}`}>{c.status}</span>
+                  <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusCls}`}>{effectiveStatus}</span>
                 </div>
 
                 {/* Name + agent */}
@@ -273,7 +292,7 @@ const Outbound = () => {
                   </div>
                   <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all ${isActive ? "bg-primary" : "bg-muted-foreground/40"}`}
+                      className={`h-full rounded-full transition-all ${isCompleted ? "bg-blue-500" : showRunning ? "bg-primary" : "bg-muted-foreground/40"}`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
