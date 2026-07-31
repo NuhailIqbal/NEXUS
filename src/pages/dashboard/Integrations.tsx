@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plug, Mail, Phone, Plus, Trash2, Settings as SettingsIcon, PlayCircle, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Plug, Mail, Phone, Plus, Trash2, Settings as SettingsIcon, PlayCircle, CheckCircle2, XCircle, Loader2, ShieldCheck, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AddIntegrationDialog } from "@/components/integrations/AddIntegrationDialog";
-import { SipTrunkDialog } from "@/components/integrations/SipTrunkDialog";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
@@ -36,7 +35,6 @@ type Integration = {
 
 const Integrations = () => {
   const [openAdd, setOpenAdd] = useState(false);
-  const [openSip, setOpenSip] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -155,17 +153,6 @@ const Integrations = () => {
     }
   };
 
-  const handleCreateSipTrunk = async (d: { name: string; description: string; domain: string }) => {
-    const { data, error } = await api.createIntegration({
-      name: d.name,
-      description: d.description || `SIP Trunk - ${d.domain}`,
-      status: "Active",
-      category: "voice",
-    });
-    if (error) return toast.error(error);
-    if (data) setIntegrations((prev) => [data, ...prev]);
-  };
-
   const Section = ({ title, icon: Icon, items }: { title: string; icon: typeof Plug; items: Integration[] }) =>
     items.length === 0 ? null : (
       <div>
@@ -233,9 +220,6 @@ const Integrations = () => {
           <p className="text-sm text-muted-foreground">Connect telephony providers, email services, and your CRM.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setOpenSip(true)}>
-            <Phone className="mr-2 h-4 w-4" /> Add SIP Trunk
-          </Button>
           <Button onClick={() => setOpenAdd(true)}>
             <Plus className="mr-2 h-4 w-4" /> Add Integration
           </Button>
@@ -243,17 +227,36 @@ const Integrations = () => {
       </div>
       <Section title="Voice & Telephony" icon={Phone} items={voice} />
       <Section title="Email" icon={Mail} items={email} />
-      <Section title="Other Connectors" icon={Plug} items={other} />
+      {/* WhitelistData is currently the only integration type that lands in "other" — name
+          the section after what it actually is instead of a generic catch-all label. */}
+      <Section title="DNC Screening" icon={ShieldCheck} items={other} />
+      {other.length === 0 && (
+        <div className="flex flex-col items-start justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+            <div>
+              <div className="font-medium text-foreground">Screen contacts against DNC & litigation lists</div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                WhitelistData checks phone numbers against Do-Not-Call and litigator lists before you dial.
+                It's a separate service — sign up there to get an API key, then connect it here with Add Integration.
+              </p>
+            </div>
+          </div>
+          <a
+            href="https://app.whitelistdata.com/"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+          >
+            Get an API key <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
+      )}
 
       <AddIntegrationDialog
         open={openAdd}
         onOpenChange={setOpenAdd}
         onCreate={handleCreateIntegration}
-      />
-      <SipTrunkDialog
-        open={openSip}
-        onOpenChange={setOpenSip}
-        onCreate={handleCreateSipTrunk}
       />
 
       {/* Test Connection Modal */}

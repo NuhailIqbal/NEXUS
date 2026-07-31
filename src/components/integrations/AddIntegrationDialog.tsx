@@ -131,7 +131,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
               <div>
                 <label className="mb-1.5 block text-sm font-medium">Select Integration Type <span className="text-destructive">*</span></label>
                 <select value={type} onChange={(e) => { setType(e.target.value); setCreds({}); }} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-                  <option value="">-- Select Integration --</option>
+                  <option value="">Select Integration</option>
                   {INTEGRATION_TYPES.map((t) => (<option key={t.value} value={t.value}>{t.label}</option>))}
                 </select>
               </div>
@@ -141,6 +141,20 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
           {step === 2 && selected && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">Authenticate with {selected.label} using API key</p>
+              {selected.provider === "whitelistdata" && (
+                <p className="text-xs text-muted-foreground">
+                  Don't have credentials yet?{" "}
+                  <a
+                    href="https://app.whitelistdata.com/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                  >
+                    Sign up at whitelistdata.com
+                  </a>{" "}
+                  to generate an apiKey, code, and secret.
+                </p>
+              )}
               {selected.urlPaste && (
                 <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                   <label className="mb-1.5 block text-sm font-medium">Paste your full API URL</label>
