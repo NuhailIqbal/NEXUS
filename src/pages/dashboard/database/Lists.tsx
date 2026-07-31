@@ -154,7 +154,7 @@ const Lists = () => {
       />
 
       <Dialog open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{viewTarget?.name}</DialogTitle>
             <DialogDescription>List details</DialogDescription>
