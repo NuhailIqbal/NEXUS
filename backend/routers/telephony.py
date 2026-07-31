@@ -667,20 +667,26 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not phone_number_id:
         raise HTTPException(status_code=400, detail="The campaign's phone number is not linked to VAPI yet. Wait for activation or re-provision the number.")
 
+    # Per-campaign opt-out: the account-wide WhitelistData status (Integrations page) still
+    # gates whether screening is even possible, but a campaign can additionally choose not
+    # to apply it — e.g. a list the user has already manually vetted.
+    campaign_dnc_enabled = camp.get("dnc_screening_enabled", True)
+
     async def dial_contact(contact, cached_verdict=None):
         # Screen before dialing. A suppressed (or unverifiable) number is skipped, and the
         # loop below carries on with the rest of the list — matching how a failed dial is
         # already handled, rather than aborting the whole campaign.
-        screen = await whitelist_service.check_number(
-            user["user_id"], contact["phone"], cached=cached_verdict
-        )
-        if not screen["allowed"]:
-            return {
-                "success": False,
-                "suppressed": True,
-                "phone": contact["phone"],
-                "error": screen["reason"] or "Suppressed",
-            }
+        if campaign_dnc_enabled:
+            screen = await whitelist_service.check_number(
+                user["user_id"], contact["phone"], cached=cached_verdict
+            )
+            if not screen["allowed"]:
+                return {
+                    "success": False,
+                    "suppressed": True,
+                    "phone": contact["phone"],
+                    "error": screen["reason"] or "Suppressed",
+                }
 
         call_payload = {
             "assistantId": vapi_assistant_id,
@@ -701,8 +707,13 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     for i in range(0, len(all_contacts), CAMPAIGN_BATCH_SIZE):
         batch = all_contacts[i:i + CAMPAIGN_BATCH_SIZE]
         # One cache read for the whole batch, so only unscreened numbers reach the provider.
-        keys = [whitelist_service.normalize_phone(c["phone"]) for c in batch]
-        cached = whitelist_service.cache_get_many(user["user_id"], [k for k in keys if k])
+        # Skipped entirely when this campaign has opted out of DNC screening.
+        if campaign_dnc_enabled:
+            keys = [whitelist_service.normalize_phone(c["phone"]) for c in batch]
+            cached = whitelist_service.cache_get_many(user["user_id"], [k for k in keys if k])
+        else:
+            keys = [None] * len(batch)
+            cached = {}
         results = await asyncio.gather(*[
             dial_contact(c, cached.get(k)) for c, k in zip(batch, keys)
         ])

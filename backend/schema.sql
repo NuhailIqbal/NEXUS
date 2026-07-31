@@ -611,6 +611,7 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     vapi_campaign_id text,
     phone_number_id uuid,
+    dnc_screening_enabled boolean DEFAULT true NOT NULL,
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 

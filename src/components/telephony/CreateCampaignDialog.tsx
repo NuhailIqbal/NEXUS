@@ -28,6 +28,7 @@ type CampaignData = {
   answerTimeout: number;
   maxAttempts: number;
   strategy: string;
+  dncScreeningEnabled: boolean;
   reschedule: {
     noAnswer: { retry: number; interval: string };
     rejected: { retry: number; interval: string };
@@ -59,6 +60,7 @@ const INTERVALS = ["", "5", "10", "15", "30", "60", "120"];
 const emptyData = (): CampaignData => ({
   name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
   answerTimeout: 30, maxAttempts: 1, strategy: "random",
+  dncScreeningEnabled: true,
   reschedule: {
     noAnswer: { retry: 0, interval: "" },
     rejected: { retry: 0, interval: "" },
@@ -75,7 +77,6 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
   const [dncEnabled, setDncEnabled] = useState(false);
   const [dncIntegrationId, setDncIntegrationId] = useState<string | null>(null);
-  const [dncToggling, setDncToggling] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -94,25 +95,6 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
 
   const update = <K extends keyof CampaignData>(key: K, value: CampaignData[K]) =>
     setData((d) => ({ ...d, [key]: value }));
-
-  // Flips the account-wide WhitelistData integration Active/Inactive directly from the
-  // wizard — there's no separate per-campaign setting, this IS the same switch that lives
-  // on the Integrations page. Requires a previously-configured integration to exist
-  // (dncIntegrationId); with none, Step1 shows a "set it up" link instead of a toggle.
-  const toggleDnc = async (nextEnabled: boolean) => {
-    if (!dncIntegrationId) return;
-    const prev = dncEnabled;
-    setDncEnabled(nextEnabled); // optimistic
-    setDncToggling(true);
-    const { error } = await api.updateIntegration(dncIntegrationId, {
-      status: nextEnabled ? "Active" : "Inactive",
-    });
-    setDncToggling(false);
-    if (error) {
-      setDncEnabled(prev);
-      toast.error(error || "Could not update DNC screening");
-    }
-  };
 
   const reset = () => { setStep(0); setData(emptyData()); };
 
@@ -176,7 +158,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your agents, lists, and numbers…
             </div>
           )}
-          {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} dncToggling={dncToggling} onToggleDnc={toggleDnc} />}
+          {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} />}
           {!loading && step === 1 && <Step2 data={data} update={update} />}
           {!loading && step === 2 && <Step3 data={data} update={update} lists={lists} />}
           {!loading && step === 3 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
@@ -204,7 +186,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
 /* ───────────────────────────── Steps ───────────────────────────── */
 
 function Step1({
-  data, update, agents, phoneNumbers, dncEnabled, dncIntegrationId, dncToggling, onToggleDnc,
+  data, update, agents, phoneNumbers, dncEnabled, dncIntegrationId,
 }: {
   data: CampaignData;
   update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void;
@@ -212,8 +194,6 @@ function Step1({
   phoneNumbers: PhoneNumber[];
   dncEnabled: boolean;
   dncIntegrationId: string | null;
-  dncToggling: boolean;
-  onToggleDnc: (next: boolean) => void;
 }) {
   return (
     <div className="space-y-6">
@@ -268,8 +248,9 @@ function Step1({
         )}
       </Section>
 
-      {/* This toggle IS the account-wide WhitelistData integration's Active/Inactive switch
-          (same one on the Integrations page) — there is no separate per-campaign setting. */}
+      {/* Account-wide WhitelistData status (Integrations page) gates whether screening is
+          possible at all; when it's Active, this campaign can additionally opt out on its
+          own — e.g. a list that's already been manually vetted. */}
       <Section icon={ShieldCheck} title="DNC Screening">
         {!dncIntegrationId ? (
           <EmptyHint
@@ -277,19 +258,25 @@ function Step1({
             hint="Add your WhitelistData credentials in Integrations to screen numbers against the DNC/litigation list before every call."
             href="/dashboard/integrations"
           />
+        ) : !dncEnabled ? (
+          <EmptyHint
+            label="WhitelistData is turned off account-wide"
+            hint="Turn it on in Integrations to make screening available to this (and every other) campaign."
+            href="/dashboard/integrations"
+          />
         ) : (
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-sm font-semibold text-foreground">
-                {dncEnabled ? "Screening is on" : "Screening is off"}
+                {data.dncScreeningEnabled ? "Screening is on for this campaign" : "Screening is off for this campaign"}
               </div>
               <p className="text-xs text-muted-foreground">
-                {dncEnabled
+                {data.dncScreeningEnabled
                   ? "Numbers found on your DNC/litigation list will be skipped automatically."
-                  : "Every number in the list will be dialed, including suppressed ones."}
+                  : "Every number in this campaign's list will be dialed, including suppressed ones."}
               </p>
             </div>
-            <Switch checked={dncEnabled} disabled={dncToggling} onCheckedChange={onToggleDnc} />
+            <Switch checked={data.dncScreeningEnabled} onCheckedChange={(v) => update("dncScreeningEnabled", v)} />
           </div>
         )}
       </Section>
@@ -433,12 +420,17 @@ function Step4({
           <ReviewItem label="Strategy"         value={strategyName} />
         </div>
 
-        {/* Read-only visibility into the account-wide WhitelistData setting — this campaign
-            doesn't have its own override, it just reflects Integrations at launch time. */}
-        {dncEnabled ? (
+        {/* Combines the account-wide WhitelistData status with this campaign's own
+            opt-in/opt-out choice from Step 1 — both have to be on for screening to run. */}
+        {dncEnabled && data.dncScreeningEnabled ? (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
             <ShieldCheck className="h-4 w-4 shrink-0" />
-            DNC screening is active — suppressed numbers will be skipped automatically.
+            DNC screening is active for this campaign — suppressed numbers will be skipped automatically.
+          </div>
+        ) : dncEnabled && !data.dncScreeningEnabled ? (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            DNC screening is turned OFF for this campaign, even though it's on account-wide — every number in the list will be dialed.
           </div>
         ) : (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">

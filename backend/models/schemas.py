@@ -161,6 +161,7 @@ class CampaignCreate(BaseModel):
     agent_id: Optional[str] = None
     list_id: Optional[str] = None
     phone_number_id: Optional[str] = None
+    dnc_screening_enabled: bool = True
 
 
 class CampaignUpdate(BaseModel):
@@ -169,6 +170,7 @@ class CampaignUpdate(BaseModel):
     list_id: Optional[str] = None
     phone_number_id: Optional[str] = None
     status: Optional[str] = None
+    dnc_screening_enabled: Optional[bool] = None
 
 
 # ── Inbound Queues ──

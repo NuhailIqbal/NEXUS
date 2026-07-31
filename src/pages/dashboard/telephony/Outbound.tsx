@@ -308,6 +308,7 @@ const Outbound = () => {
             agent_id: d.agentId,
             list_id: d.listId,
             phone_number_id: d.phoneNumberId || null,
+            dnc_screening_enabled: d.dncScreeningEnabled,
           });
           if (error) return toast.error(error);
           toast.success(`Campaign "${d.name}" created`);

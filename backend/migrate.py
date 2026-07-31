@@ -414,6 +414,9 @@ def _ensure_columns(conn) -> None:
         "outbound_limit = 999999, inbound_limit = 999999, "
         "rate_per_minute = 0.35, cost_multiplier = 3.00 "
         "WHERE plan IN ('starter', 'growth', 'business')",
+        # Per-campaign DNC screening override — account-wide WhitelistData status stays the
+        # gate on whether screening can happen at all, but each campaign can opt out.
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS dnc_screening_enabled boolean DEFAULT true NOT NULL',
     ]
     for stmt in statements:
         try:
