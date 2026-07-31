@@ -239,8 +239,20 @@ PROVIDERS = [
     ("whitelist",  test_whitelistdata, "WhitelistData"),
 ]
 
+# Providers that stamp a `provider` marker inside the saved config (see
+# AddIntegrationDialog.tsx / whitelist_service.py) are matched on that first — the display
+# name is free text the user can change, so name/category keyword matching alone would break
+# the moment they rename it away from something containing the keyword.
+PROVIDER_KEY_MAP = {
+    "whitelistdata": (test_whitelistdata, "WhitelistData"),
+}
 
-def detect_provider(integration_name: str, category: str = "") -> tuple[str, callable] | None:
+
+def detect_provider(integration_name: str, category: str = "", config: dict | None = None) -> tuple[str, callable] | None:
+    provider_key = (config or {}).get("provider")
+    if provider_key in PROVIDER_KEY_MAP:
+        prober, label = PROVIDER_KEY_MAP[provider_key]
+        return label, prober
     haystack = f"{integration_name} {category}".lower()
     for keyword, prober, label in PROVIDERS:
         if keyword in haystack:
@@ -256,7 +268,7 @@ async def run_test(integration_name: str, config: dict, category: str = "") -> d
     Returns:
         { ok: bool, message: str, latency_ms: int | None, provider: str | None }
     """
-    match = detect_provider(integration_name, category)
+    match = detect_provider(integration_name, category, config)
     if not match:
         return {
             "ok": False,
