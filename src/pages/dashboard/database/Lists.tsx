@@ -154,7 +154,7 @@ const Lists = () => {
       />
 
       <Dialog open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>{viewTarget?.name}</DialogTitle>
             <DialogDescription>List details</DialogDescription>
@@ -176,7 +176,7 @@ const Lists = () => {
             ) : viewContacts.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">No contacts in this list yet.</p>
             ) : (
-              <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
+              <div className="max-h-60 space-y-1.5 overflow-y-auto pb-1 pr-1">
                 {viewContacts.map((c) => (
                   <div key={c.id} className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-1.5 text-sm">
                     <span className="truncate font-medium text-foreground">{c.name}</span>
