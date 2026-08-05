@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  X, Rocket, Mic, Phone, Clipboard, Clock, Target,
-  SlidersHorizontal, PhoneCall, Shuffle, BookOpen, RefreshCw,
+  X, Rocket, Mic, Phone, Clipboard, BookOpen,
   ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -25,47 +24,22 @@ type CampaignData = {
   agentId: string;
   listId: string;
   phoneNumberId: string;
-  answerTimeout: number;
-  maxAttempts: number;
-  strategy: string;
   dncScreeningEnabled: boolean;
-  reschedule: {
-    noAnswer: { retry: number; interval: string };
-    rejected: { retry: number; interval: string };
-    busy:     { retry: number; interval: string };
-  };
 };
 
 type Agent       = { id: string; name: string };
 type ListRow     = { id: string; name: string; contact_count?: number };
 type PhoneNumber = { id: string; number: string };
 
-const STRATEGIES = [
-  { id: "priority", name: "Priority Based",     desc: "Call high-priority contacts first with more attempts", icon: SlidersHorizontal },
-  { id: "max",      name: "Maximum Attempts",   desc: "Prioritize contact success over volume",               icon: PhoneCall },
-  { id: "min",      name: "Minimum Attempts",   desc: "Reach maximum contacts with fewer attempts",           icon: Target },
-  { id: "random",   name: "Random Strategy",    desc: "Distribute calls randomly across contacts",            icon: Shuffle },
-];
-
 const STEPS = [
-  { title: "Campaign Basics",            subtitle: "Name, agent, phone number" },
-  { title: "Call Settings",              subtitle: "Timeout, attempts, strategy" },
-  { title: "Contact List & Reschedule",  subtitle: "Pick the list and configure retry rules" },
-  { title: "Review & Launch",            subtitle: "Confirm and launch" },
+  { title: "Campaign Basics", subtitle: "Name, agent, phone number" },
+  { title: "Contact List",    subtitle: "Pick the list to dial" },
+  { title: "Review & Launch", subtitle: "Confirm and launch" },
 ];
-
-const ATTEMPT_NUMS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-const INTERVALS = ["", "5", "10", "15", "30", "60", "120"];
 
 const emptyData = (): CampaignData => ({
   name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
-  answerTimeout: 30, maxAttempts: 1, strategy: "random",
   dncScreeningEnabled: true,
-  reschedule: {
-    noAnswer: { retry: 0, interval: "" },
-    rejected: { retry: 0, interval: "" },
-    busy:     { retry: 0, interval: "" },
-  },
 });
 
 export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
@@ -106,8 +80,9 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
     if (step === 0) {
       if (!data.name.trim()) return toast.error("Campaign name is required");
       if (!data.agentId)     return toast.error("Select an agent");
+      if (!data.phoneNumberId) return toast.error("Select a phone number");
     }
-    if (step === 2 && !data.listId) return toast.error("Select a contact list");
+    if (step === 1 && !data.listId) return toast.error("Select a contact list");
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
 
@@ -123,7 +98,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
       <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:rounded-xl [&>button]:hidden">
         <VisuallyHidden>
           <DialogTitle>Create Outbound Campaign</DialogTitle>
-          <DialogDescription>Configure and launch an outbound dialing campaign in 4 steps.</DialogDescription>
+          <DialogDescription>Configure and launch an outbound dialing campaign in 3 steps.</DialogDescription>
         </VisuallyHidden>
 
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
@@ -159,9 +134,8 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
             </div>
           )}
           {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} />}
-          {!loading && step === 1 && <Step2 data={data} update={update} />}
-          {!loading && step === 2 && <Step3 data={data} update={update} lists={lists} />}
-          {!loading && step === 3 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
+          {!loading && step === 1 && <Step3 data={data} update={update} lists={lists} />}
+          {!loading && step === 2 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
         </div>
 
         <div className="flex items-center justify-between border-t border-border bg-card px-6 py-4">
@@ -231,17 +205,17 @@ function Step1({
         {phoneNumbers.length === 0 ? (
           <EmptyHint
             label="No phone numbers provisioned"
-            hint="You can still launch VAPI will use its default outbound caller ID. Add a number in AI Telephony → Phone Numbers to use your own."
+            hint="A phone number is required to launch a campaign. Add one in AI Telephony → Phone Numbers first."
             href="/dashboard/telephony/phone-numbers"
           />
         ) : (
-          <Field label="From number (optional)">
+          <Field label="From Number" required>
             <select
               value={data.phoneNumberId}
               onChange={(e) => update("phoneNumberId", e.target.value)}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
-              <option value="">VAPI default</option>
+              <option value="">Select a number…</option>
               {phoneNumbers.map((p) => (<option key={p.id} value={p.id}>{p.number}</option>))}
             </select>
           </Field>
@@ -284,65 +258,9 @@ function Step1({
   );
 }
 
-function Step2({
-  data, update,
-}: { data: CampaignData; update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void }) {
-  return (
-    <div className="space-y-6">
-      <Section icon={Clock} title="Call Timing">
-        <p className="mb-4 text-sm text-muted-foreground">How long to wait for an answer and how many times to retry.</p>
-        <div className="grid gap-6 md:grid-cols-2">
-          <div>
-            <div className="mb-2 text-sm font-semibold">Answer Timeout: {data.answerTimeout} seconds</div>
-            <input type="range" min={10} max={120} value={data.answerTimeout} onChange={(e) => update("answerTimeout", Number(e.target.value))} className="w-full accent-primary" />
-            <div className="mt-1 flex justify-between text-xs text-muted-foreground"><span>10s</span><span>120s</span></div>
-          </div>
-          <div>
-            <div className="mb-2 text-sm font-semibold">Max Contact Attempts: {data.maxAttempts}</div>
-            <div className="flex flex-wrap gap-2">
-              {ATTEMPT_NUMS.map((n) => (
-                <PillNum key={n} n={n} active={data.maxAttempts === n} onClick={() => update("maxAttempts", n)} />
-              ))}
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      <Section icon={Target} title="Call Strategy">
-        <p className="mb-4 text-sm text-muted-foreground">How to prioritize and distribute calls.</p>
-        <div className="space-y-2">
-          {STRATEGIES.map((s) => {
-            const selected = data.strategy === s.id;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => update("strategy", s.id)}
-                className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition ${selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}
-              >
-                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                  <s.icon className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-semibold">{s.name}</div>
-                  <div className="text-xs text-muted-foreground">{s.desc}</div>
-                </div>
-                {selected && <span className="rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Selected</span>}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-    </div>
-  );
-}
-
 function Step3({
   data, update, lists,
 }: { data: CampaignData; update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void; lists: ListRow[] }) {
-  const setRule = (key: keyof CampaignData["reschedule"], field: "retry" | "interval", value: number | string) =>
-    update("reschedule", { ...data.reschedule, [key]: { ...data.reschedule[key], [field]: value } });
-
   return (
     <div className="space-y-6">
       <Section icon={BookOpen} title="Contact List">
@@ -369,26 +287,6 @@ function Step3({
           </Field>
         )}
       </Section>
-
-      <Section icon={RefreshCw} title="Reschedule Rules">
-        <p className="mb-4 text-sm text-muted-foreground">How to handle failed call outcomes.</p>
-        <div className="grid gap-5 md:grid-cols-3">
-          {(["noAnswer", "rejected", "busy"] as const).map((k) => {
-            const labels = { noAnswer: "No Answer", rejected: "Rejected", busy: "Busy Signal" } as const;
-            return (
-              <div key={k}>
-                <div className="mb-2 text-sm font-semibold">{labels[k]}</div>
-                <label className="mb-2 block text-xs text-muted-foreground">Retry Count:</label>
-                <Input type="number" min={0} value={data.reschedule[k].retry} onChange={(e) => setRule(k, "retry", Number(e.target.value))} />
-                <label className="mb-1 mt-3 block text-xs text-muted-foreground">Interval (min):</label>
-                <select value={data.reschedule[k].interval} onChange={(e) => setRule(k, "interval", e.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-2 text-sm">
-                  {INTERVALS.map((i) => (<option key={i} value={i}>{i ? `${i} min` : "Select"}</option>))}
-                </select>
-              </div>
-            );
-          })}
-        </div>
-      </Section>
     </div>
   );
 }
@@ -405,7 +303,6 @@ function Step4({
   const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? " ", [agents, data.agentId]);
   const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? " ", [lists, data.listId]);
   const numberLabel  = useMemo(() => phoneNumbers.find((p) => p.id === data.phoneNumberId)?.number ?? "VAPI default", [phoneNumbers, data.phoneNumberId]);
-  const strategyName = useMemo(() => STRATEGIES.find((s) => s.id === data.strategy)?.name ?? " ", [data.strategy]);
 
   return (
     <div className="space-y-6">
@@ -415,9 +312,6 @@ function Step4({
           <ReviewItem label="AI Agent"         value={agentName} />
           <ReviewItem label="Contact List"     value={listName} />
           <ReviewItem label="From Number"      value={numberLabel} />
-          <ReviewItem label="Answer Timeout"   value={`${data.answerTimeout}s`} />
-          <ReviewItem label="Max Attempts"     value={String(data.maxAttempts)} />
-          <ReviewItem label="Strategy"         value={strategyName} />
         </div>
 
         {/* Combines the account-wide WhitelistData status with this campaign's own
@@ -425,17 +319,17 @@ function Step4({
         {dncEnabled && data.dncScreeningEnabled ? (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
             <ShieldCheck className="h-4 w-4 shrink-0" />
-            DNC screening is active for this campaign — suppressed numbers will be skipped automatically.
+            DNC screening is active for this campaign. Suppressed numbers will be skipped automatically.
           </div>
         ) : dncEnabled && !data.dncScreeningEnabled ? (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
             <ShieldAlert className="h-4 w-4 shrink-0" />
-            DNC screening is turned OFF for this campaign, even though it's on account-wide — every number in the list will be dialed.
+            DNC screening is turned OFF for this campaign, even though it's on account-wide. Every number in the list will be dialed.
           </div>
         ) : (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
             <ShieldAlert className="h-4 w-4 shrink-0" />
-            DNC screening is off — every number in the list will be dialed.
+            DNC screening is off. Every number in the list will be dialed.
             <a href="/dashboard/integrations" target="_blank" rel="noreferrer" className="ml-auto shrink-0 font-semibold text-primary hover:underline">
               Turn on →
             </a>
@@ -469,14 +363,6 @@ function Field({ label, required, hint, children }: { label: string; required?: 
       {children}
       {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </div>
-  );
-}
-
-function PillNum({ n, active, onClick }: { n: number; active: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className={`flex h-9 w-9 items-center justify-center rounded-full border text-sm font-medium transition ${active ? "border-primary bg-primary text-primary-foreground" : "border-border text-foreground hover:border-primary/50"}`}>
-      {n}
-    </button>
   );
 }
 
