@@ -56,7 +56,7 @@ const RequestAccess = () => {
                 Talk to <span className="text-gradient">our team</span>
               </h1>
               <p className="text-muted-foreground mb-8">
-                Tell us about your call volume and what you're trying to do — we'll follow up
+                Tell us about your call volume and what you're trying to do. We'll follow up
                 about getting you set up, including a custom rate if you need one.
               </p>
               <ul className="space-y-3">

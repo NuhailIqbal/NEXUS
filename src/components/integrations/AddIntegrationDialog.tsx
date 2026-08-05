@@ -163,7 +163,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
                     onChange={(e) => fillFromUrl(e.target.value)}
                   />
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Optional shortcut — this fills the fields below automatically. You can also
+                    Optional shortcut. This fills the fields below automatically. You can also
                     enter them by hand.
                   </p>
                 </div>

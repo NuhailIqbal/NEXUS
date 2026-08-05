@@ -214,7 +214,7 @@ const Admin = () => {
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     setAuthenticated(false);
     setLoading(false);
-    toast.error("Admin session expired — please log in again.");
+    toast.error("Admin session expired. Please log in again.");
   };
 
   const fetchData = async () => {
@@ -292,7 +292,7 @@ const Admin = () => {
     if (!balanceAmount) return toast.error("Enter an amount");
     const { data, error } = await api.adjustUserBalance(userId, balanceAmount, "Admin credit");
     if (error) return toast.error(error);
-    toast.success(`Added $${balanceAmount.toFixed(2)} — new balance $${(data?.balance ?? 0).toFixed(2)}`);
+    toast.success(`Added $${balanceAmount.toFixed(2)}. New balance: $${(data?.balance ?? 0).toFixed(2)}`);
     fetchData();
   };
 

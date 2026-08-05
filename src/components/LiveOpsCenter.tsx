@@ -89,7 +89,7 @@ const LiveOpsCenter = () => (
           ))}
         </div>
         <p className="mt-4 pt-4 border-t border-border text-xs text-muted-foreground">
-          You're only charged for connected minutes, and each call is billed at its actual cost — so
+          You're only charged for connected minutes, and each call is billed at its actual cost, so
           the real figure varies slightly per call. Phone numbers are billed separately at $3 per
           month.
         </p>

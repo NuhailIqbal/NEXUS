@@ -119,7 +119,7 @@ const NotificationBell = () => {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm text-foreground">
-                        {inbound ? "Inbound" : "Outbound"} call — {i.contact_name || i.phone || "Unknown"}
+                        {inbound ? "Inbound" : "Outbound"} call: {i.contact_name || i.phone || "Unknown"}
                       </span>
                       <span className="text-xs text-muted-foreground">{i.status || "—"} · {timeAgo(i.call_time)}</span>
                     </span>

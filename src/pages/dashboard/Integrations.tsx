@@ -238,7 +238,7 @@ const Integrations = () => {
               <div className="font-medium text-foreground">Screen contacts against DNC & litigation lists</div>
               <p className="mt-1 text-sm text-muted-foreground">
                 WhitelistData checks phone numbers against Do-Not-Call and litigator lists before you dial.
-                It's a separate service — sign up there to get an API key, then connect it here with Add Integration.
+                It's a separate service, so sign up there to get an API key, then connect it here with Add Integration.
               </p>
             </div>
           </div>

@@ -79,7 +79,7 @@ const PhoneNumbers = () => {
     const cleanUrl = () => window.history.replaceState({}, "", window.location.pathname);
 
     if (purchase === "canceled") {
-      toast.info("Purchase canceled — no number was created.");
+      toast.info("Purchase canceled. No number was created.");
       cleanUrl();
       return;
     }
@@ -87,7 +87,7 @@ const PhoneNumbers = () => {
       const sessionId = params.get("session_id");
       if (!sessionId || confirming.current) { cleanUrl(); return; }
       confirming.current = true;
-      const t = toast.loading("Payment received — provisioning your number…");
+      const t = toast.loading("Payment received. Provisioning your number…");
       api.confirmPhonePurchase(sessionId).then(({ data, error }) => {
         toast.dismiss(t);
         if (error || !data) toast.error(error || "Could not provision the number after payment.");

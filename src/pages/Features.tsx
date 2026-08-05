@@ -107,7 +107,7 @@ const Features = () => (
             Everything to put an agent <span className="text-gradient">on the phone</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            From building the agent to seeing exactly what each call cost — it's all in one
+            From building the agent to seeing exactly what each call cost, it's all in one
             dashboard.
           </p>
         </div>

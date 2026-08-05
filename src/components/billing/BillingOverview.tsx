@@ -49,14 +49,14 @@ const BillingOverview = () => {
     if (!topup) return;
     const clean = () => window.history.replaceState({}, "", window.location.pathname);
     if (topup === "canceled") {
-      toast.info("Top-up canceled — no funds added.");
+      toast.info("Top-up canceled. No funds added.");
       clean();
       return;
     }
     if (topup === "success") {
       const sessionId = searchParams.get("session_id");
       if (!sessionId) { clean(); return; }
-      const t = toast.loading("Payment received — updating your balance…");
+      const t = toast.loading("Payment received. Updating your balance…");
       api.topupConfirm(sessionId).then(({ data, error }) => {
         toast.dismiss(t);
         if (error) toast.error(error);
@@ -161,7 +161,7 @@ const BillingOverview = () => {
           </div>
           <div className="text-2xl font-bold text-foreground">${rate.toFixed(2)}</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            Estimated — each call is billed by its actual cost
+            Estimated: each call is billed by its actual cost
           </div>
         </div>
       </div>

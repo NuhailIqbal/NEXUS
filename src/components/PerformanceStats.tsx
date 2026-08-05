@@ -36,7 +36,7 @@ const useCases = [
   {
     icon: PackageCheck,
     title: "Status and follow-up calls",
-    desc: "Place routine update calls — order status, document chasing, post-service check-ins — and keep a transcript of each one.",
+    desc: "Place routine update calls such as order status, document chasing, and post-service check-ins, and keep a transcript of each one.",
     tag: "Outbound campaign + transcripts",
   },
 ];
@@ -49,7 +49,7 @@ const PerformanceStats = () => (
           What people <span className="text-gradient">build with it</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-xl mx-auto">
-          Every setup below is the same three ingredients — an agent, a phone number, and
+          Every setup below is the same three ingredients: an agent, a phone number, and
           optionally a contact list.
         </p>
       </div>

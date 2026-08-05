@@ -93,7 +93,7 @@ const AIWorkforce = () => (
               ))}
             </div>
             <p className="mt-4 text-xs text-muted-foreground">
-              Set per agent — the transcriber and voice both follow the language you choose.
+              Set per agent: the transcriber and voice both follow the language you choose.
             </p>
           </div>
 

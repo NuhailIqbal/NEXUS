@@ -6,10 +6,10 @@ import { Link } from "react-router-dom";
 
 const benefits = [
   { icon: PhoneIncoming, title: "Never miss an inbound call", desc: "Every call to your number gets answered instantly, whether it's your first call of the day or your fiftieth at once." },
-  { icon: MoonStar, title: "Cover the hours you can't", desc: "Evenings, weekends, and holidays are covered without a night shift — the agent answers exactly like it would during business hours." },
+  { icon: MoonStar, title: "Cover the hours you can't", desc: "Evenings, weekends, and holidays are covered without a night shift. The agent answers exactly like it would during business hours." },
   { icon: PhoneForwarded, title: "Hand off the calls that matter", desc: "The agent qualifies the caller and transfers to your team the moment a call needs a real person." },
   { icon: FileAudio, title: "A record of every conversation", desc: "Recordings, transcripts, and summaries land in your dashboard automatically, so nothing said on a call gets lost." },
-  { icon: Gauge, title: "Only pay for connected minutes", desc: "There's no seat cost for the agent sitting idle between calls — you're billed per minute of actual call time." },
+  { icon: Gauge, title: "Only pay for connected minutes", desc: "There's no seat cost for the agent sitting idle between calls. You're billed per minute of actual call time." },
   { icon: Layers, title: "One number, one agent, any volume", desc: "Whether your call volume comes from ads, a directory listing, or word of mouth, the same agent handles it without added setup." },
 ];
 
@@ -30,8 +30,8 @@ const Publishers = () => (
             Every inbound call, <span className="text-gradient">answered instantly</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            If your business gets a steady stream of inbound calls — from ads, a listing, or word
-            of mouth — an AI receptionist means none of them go to voicemail.
+            If your business gets a steady stream of inbound calls, from ads, a listing, or word
+            of mouth, an AI receptionist means none of them go to voicemail.
           </p>
         </div>
 

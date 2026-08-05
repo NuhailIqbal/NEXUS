@@ -38,7 +38,7 @@ const modules = [
     tag: "Full call history",
     title: "Recordings & Transcripts",
     description:
-      "Every call is recorded and transcribed with speaker labels, plus an AI summary — all pulled into your dashboard automatically.",
+      "Every call is recorded and transcribed with speaker labels, plus an AI summary. All of it is pulled into your dashboard automatically.",
     features: ["Audio playback", "Speaker transcript", "Call summary", "Automatic sync"],
     stat: "Every",
     statLabel: "call recorded",
@@ -74,7 +74,7 @@ const PlatformModules = () => (
           Everything you need to <span className="text-gradient">run AI phone calls</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-xl mx-auto">
-          Six parts of the platform, all in one dashboard — from building the agent to seeing what
+          Six parts of the platform, all in one dashboard, from building the agent to seeing what
           each call cost.
         </p>
       </div>

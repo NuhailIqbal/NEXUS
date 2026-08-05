@@ -25,7 +25,7 @@ const steps = [
   {
     step: "Step 4",
     title: "Go live",
-    desc: "For outbound, point the agent at a contact list and launch a campaign. For inbound, it simply starts answering — including outside business hours.",
+    desc: "For outbound, point the agent at a contact list and launch a campaign. For inbound, it simply starts answering, including outside business hours.",
     icon: Rocket,
   },
   {
@@ -45,7 +45,7 @@ const DeploymentTimeline = () => (
           From sign-up to your <span className="text-gradient">first call</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-xl mx-auto">
-          It's self-serve — you don't need a sales call or an onboarding project to get an agent
+          It's self-serve. You don't need a sales call or an onboarding project to get an agent
           on the phone.
         </p>
       </div>

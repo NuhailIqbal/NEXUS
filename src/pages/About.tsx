@@ -8,7 +8,7 @@ const values = [
   {
     icon: Headset,
     title: "Built for real calls",
-    desc: "Every feature exists because a call needed to be answered, transferred, or followed up on — not because it looked good on a roadmap.",
+    desc: "Every feature exists because a call needed to be answered, transferred, or followed up on, not because it looked good on a roadmap.",
   },
   {
     icon: Sparkles,
@@ -45,7 +45,7 @@ const About = () => (
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
             EDM Nexus lets any business build an AI voice agent, put it on a real phone number,
-            and have it make or answer calls — with every call recorded, transcribed, and billed
+            and have it make or answer calls, with every call recorded, transcribed, and billed
             by the minute.
           </p>
         </div>
@@ -54,8 +54,8 @@ const About = () => (
         <div className="glow-border rounded-2xl p-8 md:p-12 mb-16 text-center animate-slide-up" style={{ animationDelay: "0.3s" }}>
           <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-4">Why we built this</h2>
           <p className="text-muted-foreground text-lg max-w-3xl mx-auto leading-relaxed">
-            Most calls that matter to a small or mid-size business — the after-hours enquiry, the
-            appointment reminder, the lead that went cold — never get made because there's no one
+            Most calls that matter to a small or mid-size business, like the after-hours enquiry, the
+            appointment reminder, or the lead that went cold, never get made because there's no one
             free to make them. We built EDM Nexus so a team can put an AI agent on the phone in
             minutes, without hiring, scripting a call center, or signing a contract.
           </p>

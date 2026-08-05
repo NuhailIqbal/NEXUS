@@ -5,12 +5,12 @@ import { ArrowRight, Bot, ListChecks, Receipt, FileAudio, Users, Clock } from "l
 import { Link } from "react-router-dom";
 
 const benefits = [
-  { icon: Bot, title: "One agent per client", desc: "Build a separate AI voice agent for each client, each with its own goal, voice, and knowledge — all under a single account." },
+  { icon: Bot, title: "One agent per client", desc: "Build a separate AI voice agent for each client, each with its own goal, voice, and knowledge, all under a single account." },
   { icon: ListChecks, title: "Keep client contacts separate", desc: "Upload each client's contact list independently, group them into lists, and target campaigns without mixing data between clients." },
   { icon: Clock, title: "Launch campaigns in minutes", desc: "Point an agent at a list and go live. No scripts to hire for, no dialer to configure." },
-  { icon: FileAudio, title: "Proof of work for every call", desc: "Every call comes back with a recording, transcript, and summary — an easy way to show a client exactly what was said on their behalf." },
+  { icon: FileAudio, title: "Proof of work for every call", desc: "Every call comes back with a recording, transcript, and summary, an easy way to show a client exactly what was said on their behalf." },
   { icon: Receipt, title: "Itemized cost per call", desc: "See what each individual call cost, so you always know your margin before you bill a client for the campaign." },
-  { icon: Users, title: "Scale up or down per client", desc: "There's no seat limit or plan tier to negotiate — run one client's campaign or several at once, and only pay for the minutes used." },
+  { icon: Users, title: "Scale up or down per client", desc: "There's no seat limit or plan tier to negotiate. Run one client's campaign or several at once, and only pay for the minutes used." },
 ];
 
 const Advertisers = () => (

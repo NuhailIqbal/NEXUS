@@ -78,7 +78,7 @@ const UseCases = () => (
             The same platform, <span className="text-gradient">any industry</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            Every example below uses the same building blocks — an agent, a phone number, and
+            Every example below uses the same building blocks: an agent, a phone number, and
             optionally a contact list.
           </p>
         </div>

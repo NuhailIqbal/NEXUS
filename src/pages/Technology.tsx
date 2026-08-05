@@ -20,7 +20,7 @@ const pipeline = [
   {
     icon: Cpu,
     title: "The agent listens and responds",
-    desc: "Speech is transcribed, the agent decides what to say using its configured goal and knowledge, and a voice speaks the reply — in a continuous back-and-forth for the length of the call.",
+    desc: "Speech is transcribed, the agent decides what to say using its configured goal and knowledge, and a voice speaks the reply, in a continuous back-and-forth for the length of the call.",
   },
   {
     icon: Activity,

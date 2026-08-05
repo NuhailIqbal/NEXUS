@@ -118,7 +118,7 @@ export function AddCardDialog({ open, onOpenChange, onAdded }: Props) {
         <DialogHeader>
           <DialogTitle>Add payment method</DialogTitle>
           <DialogDescription>
-            Your card is stored securely by Stripe — it never touches our servers.
+            Your card is stored securely by Stripe and never touches our servers.
           </DialogDescription>
         </DialogHeader>
 

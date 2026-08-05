@@ -82,7 +82,7 @@ const Comparison = () => (
           ))}
         </div>
         <p className="text-xs text-muted-foreground text-center mt-4">
-          AI agents aren't a replacement for a good sales team — they cover the calls that would
+          AI agents aren't a replacement for a good sales team. They cover the calls that would
           otherwise go unanswered, and hand the promising ones straight over to a person.
         </p>
       </div>

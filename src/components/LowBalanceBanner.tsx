@@ -35,7 +35,7 @@ const LowBalanceBanner = () => {
       <div className="flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 shrink-0" />
         <span>
-          {empty ? "Your credit is used up." : `Low balance — $${balance.toFixed(2)} left.`}{" "}
+          {empty ? "Your credit is used up." : `Low balance: $${balance.toFixed(2)} left.`}{" "}
           Add funds to keep making calls without interruption.
         </span>
       </div>

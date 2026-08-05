@@ -628,7 +628,7 @@ function StepTesting({
         </div>
         <h3 className="mt-3 text-lg font-bold">Test Your Agent</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Send a sample message to preview how your agent replies (optional — you can skip this step).
+          Send a sample message to preview how your agent replies (optional, you can skip this step).
         </p>
       </div>
       <Field label="Test Message">

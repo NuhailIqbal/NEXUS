@@ -150,7 +150,7 @@ const Contacts = () => {
     }
     if (skipped > 0) {
       toast.success(
-        `Imported ${count} contact${count === 1 ? "" : "s"} — skipped ${skipped} row${skipped === 1 ? "" : "s"} with no phone number`,
+        `Imported ${count} contact${count === 1 ? "" : "s"}, skipped ${skipped} row${skipped === 1 ? "" : "s"} with no phone number`,
       );
     } else {
       toast.success(`Imported ${count} contact${count === 1 ? "" : "s"}`);
@@ -203,7 +203,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
             <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
               <li><span className="font-medium text-foreground">name</span> and <span className="font-medium text-foreground">phone</span> are required; <span className="font-medium text-foreground">email</span> is optional.</li>
               <li>Column order doesn&apos;t matter, and headers are case-insensitive.</li>
-              <li>Don&apos;t put commas inside a value (e.g. write <span className="font-medium text-foreground">John Doe</span>, not <span className="font-medium text-foreground">Doe, John</span>) — commas separate columns.</li>
+              <li>Don&apos;t put commas inside a value (e.g. write <span className="font-medium text-foreground">John Doe</span>, not <span className="font-medium text-foreground">Doe, John</span>) since commas separate columns.</li>
               <li>New contacts are added with status <span className="font-medium text-foreground">Active</span>.</li>
             </ul>
           </div>
