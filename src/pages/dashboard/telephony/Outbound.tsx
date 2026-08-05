@@ -340,9 +340,7 @@ const Outbound = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-500/10">
-                <AlertTriangle className="h-4 w-4 text-yellow-500" />
-              </div>
+              <AlertTriangle className="h-4 w-4 text-yellow-500" />
               Pre-launch Checks
             </DialogTitle>
             <DialogDescription>Verifying <span className="font-medium text-foreground">{preflightTarget?.name}</span> is ready to dial.</DialogDescription>
