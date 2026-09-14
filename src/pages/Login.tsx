@@ -159,11 +159,6 @@ const Login = () => {
                   Create Account
                 </Link>
               </p>
-              <p className="text-sm text-muted-foreground">
-                <Link to="/request-access" className="text-primary hover:underline font-medium">
-                  Request Access
-                </Link>
-              </p>
             </div>
           </div>
         </div>
