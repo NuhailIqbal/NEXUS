@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Menu, X, Sparkles, LayoutDashboard } from "lucide-react";
+import { Menu, X, UserPlus, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "react-router-dom";
 import Logo from "@/components/Logo";
@@ -60,7 +60,7 @@ const Navbar = () => {
               </Link>
               <Link to="/register">
                 <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5">
-                  <Sparkles size={14} /> Sign Up
+                  <UserPlus size={14} /> Sign Up
                 </Button>
               </Link>
             </>
