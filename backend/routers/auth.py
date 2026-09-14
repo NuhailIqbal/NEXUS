@@ -48,22 +48,17 @@ class RegisterBody(BaseModel):
     password: str
     full_name: str | None = None
     app_url: str | None = None  # frontend origin, for building the verification link
-    recaptcha_token: str | None = None  # token from grecaptcha.execute() on the sign-up page
+    recaptcha_token: str | None = None  # g-recaptcha-response from the sign-up checkbox widget
 
 
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
-RECAPTCHA_ACTION = "signup"
-# v3 returns a 0.0-1.0 bot-likelihood score instead of a pass/fail — 1.0 is very likely a
-# real human, 0.0 very likely a bot/script. 0.5 is Google's own documented default
-# recommendation; tune down if too many real signups start getting rejected.
-RECAPTCHA_MIN_SCORE = 0.5
 
 
 async def _verify_recaptcha(token: str | None) -> bool:
-    """True if the token is valid and scores high enough, or if RECAPTCHA_SECRET_KEY isn't
-    configured (feature off — never blocks sign-up in an environment that hasn't set it up).
-    Fails closed (rejects) on a missing token, a failed/expired token, an action mismatch, or
-    a low score once the key IS set, since the whole point is to stop bot/phishing sign-ups."""
+    """True if the token is valid, or if RECAPTCHA_SECRET_KEY isn't configured (feature off —
+    never blocks sign-up in an environment that hasn't set it up). Fails closed (rejects) on a
+    missing token or a failed/expired one once the key IS set, since the whole point is to stop
+    bot/phishing sign-ups. v2 checkbox — Google's response is a plain pass/fail, no score."""
     if not settings.recaptcha_secret_key:
         return True
     if not token:
@@ -77,13 +72,6 @@ async def _verify_recaptcha(token: str | None) -> bool:
         result = r.json()
         if not result.get("success"):
             logger.info("reCAPTCHA rejected: %s", result.get("error-codes"))
-            return False
-        if result.get("action") != RECAPTCHA_ACTION:
-            logger.warning("reCAPTCHA action mismatch: %s", result.get("action"))
-            return False
-        score = result.get("score")
-        if score is not None and score < RECAPTCHA_MIN_SCORE:
-            logger.info("reCAPTCHA score too low: %s", score)
             return False
         return True
     except Exception:

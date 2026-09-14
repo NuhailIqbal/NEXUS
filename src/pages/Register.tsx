@@ -3,25 +3,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowRight, Loader2, MailCheck } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
 import Logo from "@/components/Logo";
 
 // Public site key only — safe to ship in the frontend bundle. Blank in an environment that
-// hasn't set one up yet, in which case no captcha script loads and sign-up proceeds without one
-// (mirrors the backend, which skips verification when its secret key is unset).
-// This is a v3 (score-based) key — invisible, no checkbox. Runs in the background and returns
-// a bot-likelihood token on demand via grecaptcha.execute(), scored server-side.
+// hasn't set one up yet, in which case the widget is simply not rendered and sign-up proceeds
+// without a captcha (mirrors the backend, which skips verification when its secret key is unset).
+// v2 "I'm not a robot" checkbox — visible widget, single click, reusable-until-submit response.
 const RECAPTCHA_SITE_KEY = ((import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY ?? "").trim();
 
 declare global {
   interface Window {
     grecaptcha?: {
-      ready: (callback: () => void) => void;
-      execute: (siteKey: string, opts: { action: string }) => Promise<string>;
+      render: (container: HTMLElement, params: { sitekey: string }) => number;
+      getResponse: (widgetId?: number) => string;
+      reset: (widgetId?: number) => void;
     };
+    __onRecaptchaLoad?: () => void;
   }
 }
 
@@ -37,31 +38,41 @@ const Register = () => {
   const { toast } = useToast();
   const { signUp } = useAuth();
 
+  const recaptchaContainerRef = useRef<HTMLDivElement>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
+
   useEffect(() => {
     if (!RECAPTCHA_SITE_KEY) return;
-    if (window.grecaptcha || document.getElementById("recaptcha-script")) return; // already loading/loaded
 
-    // render=<sitekey> tells Google's script which site this page is for, so execute() below
-    // doesn't need to pass it again at call time in a race-prone way.
+    const renderWidget = () => {
+      if (recaptchaWidgetId.current !== null) return; // already rendered (e.g. effect re-ran)
+      if (!recaptchaContainerRef.current || !window.grecaptcha?.render) return;
+      recaptchaWidgetId.current = window.grecaptcha.render(recaptchaContainerRef.current, {
+        sitekey: RECAPTCHA_SITE_KEY,
+      });
+    };
+
+    // Google's script fires its own `load` event as soon as the file downloads — but
+    // grecaptcha.render isn't attached yet at that point, it finishes initializing itself
+    // asynchronously afterward. `render=explicit&onload=<name>` makes Google call our named
+    // global callback only once it's genuinely ready, which is the documented, race-free way
+    // to know when render() is actually safe to call.
+    if (window.grecaptcha?.render) {
+      renderWidget();
+      return;
+    }
+
+    window.__onRecaptchaLoad = renderWidget;
+
+    if (document.getElementById("recaptcha-script")) return; // script already requested
+
     const script = document.createElement("script");
     script.id = "recaptcha-script";
-    script.src = `https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}`;
+    script.src = "https://www.google.com/recaptcha/api.js?onload=__onRecaptchaLoad&render=explicit";
     script.async = true;
     script.defer = true;
     document.body.appendChild(script);
   }, []);
-
-  /** v3 is invisible — a token is pulled fresh on each submit (they're short-lived and
-   *  single-use), not from a checkbox the user interacted with. */
-  const getRecaptchaToken = (): Promise<string | undefined> => {
-    if (!RECAPTCHA_SITE_KEY) return Promise.resolve(undefined);
-    return new Promise((resolve) => {
-      if (!window.grecaptcha) return resolve(undefined);
-      window.grecaptcha.ready(() => {
-        window.grecaptcha!.execute(RECAPTCHA_SITE_KEY, { action: "signup" }).then(resolve).catch(() => resolve(undefined));
-      });
-    });
-  };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,9 +80,11 @@ const Register = () => {
       toast({ title: "Please fill in all required fields", variant: "destructive" });
       return;
     }
-    const recaptchaToken = await getRecaptchaToken();
+    const recaptchaToken = RECAPTCHA_SITE_KEY
+      ? window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined)
+      : undefined;
     if (RECAPTCHA_SITE_KEY && !recaptchaToken) {
-      toast({ title: "reCAPTCHA check failed to load — please refresh and try again", variant: "destructive" });
+      toast({ title: "Please complete the reCAPTCHA", variant: "destructive" });
       return;
     }
     setLoading(true);
@@ -79,6 +92,7 @@ const Register = () => {
     setLoading(false);
     if (error) {
       toast({ title: "Registration failed", description: error, variant: "destructive" });
+      window.grecaptcha?.reset(recaptchaWidgetId.current ?? undefined);
     } else if (pending) {
       setDevVerifyUrl(devVerifyUrl);
       setSubmitted(true);
@@ -213,17 +227,7 @@ const Register = () => {
                 />
               </div>
               {RECAPTCHA_SITE_KEY && (
-                <p className="text-xs text-muted-foreground text-center">
-                  This site is protected by reCAPTCHA and the Google{" "}
-                  <a href="https://policies.google.com/privacy" target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                    Privacy Policy
-                  </a>{" "}
-                  and{" "}
-                  <a href="https://policies.google.com/terms" target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                    Terms of Service
-                  </a>{" "}
-                  apply.
-                </p>
+                <div ref={recaptchaContainerRef} className="flex justify-center" />
               )}
               <Button
                 type="submit"
