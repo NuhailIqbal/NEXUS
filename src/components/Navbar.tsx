@@ -58,9 +58,9 @@ const Navbar = () => {
                   Login
                 </Button>
               </Link>
-              <Link to="/request-access">
+              <Link to="/register">
                 <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5">
-                  <Sparkles size={14} /> Request Access
+                  <Sparkles size={14} /> Sign Up
                 </Button>
               </Link>
             </>
@@ -91,8 +91,8 @@ const Navbar = () => {
               <Link to="/login" onClick={() => setOpen(false)}>
                 <Button variant="ghost" size="sm" className="text-muted-foreground">Login</Button>
               </Link>
-              <Link to="/request-access" onClick={() => setOpen(false)}>
-                <Button size="sm" className="bg-primary text-primary-foreground">Request Access</Button>
+              <Link to="/register" onClick={() => setOpen(false)}>
+                <Button size="sm" className="bg-primary text-primary-foreground">Sign Up</Button>
               </Link>
             </div>
           </div>
