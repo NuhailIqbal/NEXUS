@@ -11,6 +11,7 @@ import secrets
 from datetime import datetime, timezone, timedelta
 
 import bcrypt
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
 from pydantic import BaseModel
@@ -47,6 +48,31 @@ class RegisterBody(BaseModel):
     password: str
     full_name: str | None = None
     app_url: str | None = None  # frontend origin, for building the verification link
+    recaptcha_token: str | None = None  # g-recaptcha-response from the sign-up widget
+
+
+RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+
+
+async def _verify_recaptcha(token: str | None) -> bool:
+    """True if the token is valid, or if RECAPTCHA_SECRET_KEY isn't configured (feature
+    off — never blocks sign-up in an environment that hasn't set it up). Fails closed
+    (rejects) on a missing token or a real verification failure once the key IS set,
+    since the whole point is to stop bot/phishing sign-ups."""
+    if not settings.recaptcha_secret_key:
+        return True
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                RECAPTCHA_VERIFY_URL,
+                data={"secret": settings.recaptcha_secret_key, "response": token},
+            )
+        return bool(r.json().get("success"))
+    except Exception:
+        logger.exception("reCAPTCHA verification request failed")
+        return False
 
 
 class LoginBody(BaseModel):
@@ -127,6 +153,9 @@ async def register(body: RegisterBody):
     email = body.email.strip().lower()
     if not email or not body.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
+
+    if not await _verify_recaptcha(body.recaptcha_token):
+        raise HTTPException(status_code=400, detail="reCAPTCHA verification failed — please try again.")
 
     existing = supabase.table("users").select("id").eq("email", email).maybe_single().execute()
     if existing.data:

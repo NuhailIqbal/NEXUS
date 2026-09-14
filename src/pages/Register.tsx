@@ -3,11 +3,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowRight, Loader2, MailCheck } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/services/api";
 import Logo from "@/components/Logo";
+
+// Public site key only — safe to ship in the frontend bundle. Blank in an environment that
+// hasn't set one up yet, in which case the widget is simply not rendered and sign-up proceeds
+// without a captcha (mirrors the backend, which skips verification when its secret key is unset).
+const RECAPTCHA_SITE_KEY = ((import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY ?? "").trim();
+
+declare global {
+  interface Window {
+    grecaptcha?: {
+      render: (container: HTMLElement, params: { sitekey: string; callback?: () => void }) => number;
+      getResponse: (widgetId?: number) => string;
+      reset: (widgetId?: number) => void;
+    };
+  }
+}
 
 const Register = () => {
   const [fullName, setFullName] = useState("");
@@ -21,17 +36,59 @@ const Register = () => {
   const { toast } = useToast();
   const { signUp } = useAuth();
 
+  const recaptchaContainerRef = useRef<HTMLDivElement>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!RECAPTCHA_SITE_KEY) return;
+
+    const renderWidget = () => {
+      if (recaptchaWidgetId.current !== null) return; // already rendered (e.g. effect re-ran)
+      if (!recaptchaContainerRef.current || !window.grecaptcha) return;
+      recaptchaWidgetId.current = window.grecaptcha.render(recaptchaContainerRef.current, {
+        sitekey: RECAPTCHA_SITE_KEY,
+      });
+    };
+
+    if (window.grecaptcha) {
+      renderWidget();
+      return;
+    }
+
+    const existing = document.getElementById("recaptcha-script") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", renderWidget);
+      return () => existing.removeEventListener("load", renderWidget);
+    }
+
+    const script = document.createElement("script");
+    script.id = "recaptcha-script";
+    script.src = "https://www.google.com/recaptcha/api.js";
+    script.async = true;
+    script.defer = true;
+    script.onload = renderWidget;
+    document.body.appendChild(script);
+  }, []);
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName || !email || !password) {
       toast({ title: "Please fill in all required fields", variant: "destructive" });
       return;
     }
+    const recaptchaToken = RECAPTCHA_SITE_KEY
+      ? window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined)
+      : undefined;
+    if (RECAPTCHA_SITE_KEY && !recaptchaToken) {
+      toast({ title: "Please complete the reCAPTCHA", variant: "destructive" });
+      return;
+    }
     setLoading(true);
-    const { error, pending, devVerifyUrl } = await signUp(email, password, fullName);
+    const { error, pending, devVerifyUrl } = await signUp(email, password, fullName, recaptchaToken);
     setLoading(false);
     if (error) {
       toast({ title: "Registration failed", description: error, variant: "destructive" });
+      window.grecaptcha?.reset(recaptchaWidgetId.current ?? undefined);
     } else if (pending) {
       setDevVerifyUrl(devVerifyUrl);
       setSubmitted(true);
@@ -165,6 +222,9 @@ const Register = () => {
                   required
                 />
               </div>
+              {RECAPTCHA_SITE_KEY && (
+                <div ref={recaptchaContainerRef} className="flex justify-center" />
+              )}
               <Button
                 type="submit"
                 disabled={loading}

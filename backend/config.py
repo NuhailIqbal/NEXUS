@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     def active_stripe_publishable_key(self) -> str:
         return self.stripe_publishable_key or self.vite_stripe_public_key
 
+    # reCAPTCHA v2 ("I'm not a robot" checkbox) on the sign-up page — cuts down on bot/
+    # phishing account creation. Secret key stays server-side, verified against Google's
+    # siteverify API. The matching public site key is VITE_RECAPTCHA_SITE_KEY (frontend-only,
+    # baked into the build — same pattern as VITE_VAPI_PUBLIC_KEY). Optional: if unset,
+    # registration is not gated by a captcha at all (so local dev works with no setup).
+    recaptcha_secret_key: str = ""
+
     # Twilio (platform account) — one-time server config; used to auto-purchase numbers
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -171,6 +178,8 @@ else:
 if settings.is_production:
     if not settings.vapi_webhook_secret:
         _log.warning("VAPI_WEBHOOK_SECRET not set — VAPI webhook signature verification is disabled")
+    if not settings.recaptcha_secret_key:
+        _log.warning("RECAPTCHA_SECRET_KEY not set — sign-up is NOT protected by reCAPTCHA")
     if not settings.cors_origins or "localhost" in settings.cors_origins:
         _log.warning("CORS_ORIGINS is not set to a production domain")
     if settings.admin_password == "test123":
