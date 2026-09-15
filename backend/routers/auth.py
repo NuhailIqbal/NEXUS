@@ -49,6 +49,7 @@ class RegisterBody(BaseModel):
     full_name: str | None = None
     app_url: str | None = None  # frontend origin, for building the verification link
     recaptcha_token: str | None = None  # g-recaptcha-response from the sign-up checkbox widget
+    referral_code: str | None = None  # from ?ref=CODE on the registration page (tracking only)
 
 
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
@@ -105,6 +106,56 @@ def _grant_signup_promo(user_id: str) -> None:
                        grant_type="promo", expires_at=expires)
 
 
+# ── Referral tracking (tracking-only — no credit/payout is ever granted here) ──
+
+_REFERRAL_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L — avoids visual ambiguity
+
+
+def _generate_referral_code(length: int = 8) -> str:
+    return "".join(secrets.choice(_REFERRAL_CODE_ALPHABET) for _ in range(length))
+
+
+def _ensure_referral_code(user_id: str) -> str:
+    """Generate and persist this user's own referral code if they don't have one yet."""
+    row = supabase.table("profiles").select("referral_code").eq("id", user_id).maybe_single().execute().data
+    existing = (row or {}).get("referral_code")
+    if existing:
+        return existing
+    for _ in range(8):
+        code = _generate_referral_code()
+        try:
+            supabase.table("profiles").update({"referral_code": code}).eq("id", user_id).execute()
+            return code
+        except Exception:
+            continue  # UNIQUE collision — retry with a fresh code
+    logger.warning("referrals: failed to allocate a unique code for %s", user_id)
+    return ""
+
+
+def _record_referral_if_valid(referee_id: str, referral_code: str | None) -> None:
+    """Best-effort: if referral_code resolves to an existing user's code, create a
+    'pending' referrals row. Never raises — a bad/unknown/malformed code must never
+    break signup, it's just silently ignored."""
+    code = (referral_code or "").strip().upper()
+    if not code:
+        return
+    try:
+        referrer = (
+            supabase.table("profiles").select("id").eq("referral_code", code)
+            .maybe_single().execute().data
+        )
+        if not referrer or referrer["id"] == referee_id:
+            return  # unknown code, or (structurally impossible) self-referral
+        supabase.table("referrals").insert({
+            "referrer_id": referrer["id"],
+            "referee_id": referee_id,
+            "referral_code": code,
+            "status": "pending",
+        }).execute()
+    except Exception as e:  # noqa: BLE001 — never block registration on this
+        logger.warning("referrals: could not record referral for %s: %s", referee_id, e)
+
+
 async def _issue_verification(user_id: str, email: str, app_url: str | None):
     """Create a verification token and email the link. Returns (url, sent)."""
     token = secrets.token_urlsafe(32)
@@ -144,12 +195,19 @@ def _issue_token(user_id: str, email: str, *, ttl_seconds: int | None = None,
     return jwt.encode(payload, settings.active_jwt_secret, algorithm="HS256")
 
 
-def _provision_user_rows(user_id: str, full_name: str | None) -> None:
-    """Create the profile + billing rows that Supabase's signup trigger used to create."""
+def _provision_user_rows(user_id: str, full_name: str | None, referral_code: str | None = None) -> None:
+    """Create the profile + billing rows that Supabase's signup trigger used to create.
+
+    `referral_code` is the ?ref=CODE this user registered with (if any) — optional, so
+    existing call sites (login's re-provision, admin-created accounts) stay unaffected.
+    """
     existing = supabase.table("profiles").select("id").eq("id", user_id).maybe_single().execute()
     if not existing.data:
         supabase.table("profiles").insert({"id": user_id, "full_name": full_name or ""}).execute()
     get_or_create_billing(user_id)
+    _ensure_referral_code(user_id)
+    if referral_code:
+        _record_referral_if_valid(user_id, referral_code)
 
 
 @router.post("/register")
@@ -174,7 +232,7 @@ async def register(body: RegisterBody):
     }
     result = supabase.table("users").insert(row).execute()
     user = result.data[0]
-    _provision_user_rows(user["id"], body.full_name)  # profile + billing (no promo yet)
+    _provision_user_rows(user["id"], body.full_name, body.referral_code)  # profile + billing (no promo yet)
 
     url, sent = await _issue_verification(user["id"], email, body.app_url)
     data = {"pending_verification": True, "email": email, "email_sent": sent}
@@ -223,6 +281,10 @@ async def verify_email(body: VerifyBody):
     uid = row["user_id"]
     supabase.table("users").update({"email_confirmed_at": datetime.now(timezone.utc).isoformat()}).eq("id", uid).execute()
     supabase.table("email_verification_tokens").update({"used": True}).eq("id", row["id"]).execute()
+    # Tracking only — flips this referral to 'verified', no credit is ever granted for it.
+    supabase.table("referrals").update(
+        {"status": "verified", "verified_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("referee_id", uid).eq("status", "pending").execute()
 
     u = supabase.table("users").select("email").eq("id", uid).maybe_single().execute().data
     email = (u or {}).get("email", "")

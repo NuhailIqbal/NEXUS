@@ -621,6 +621,8 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
 -- suspended_for_balance: true while the number is temporarily pointed at the platform's
 -- fallback assistant because the owner's wallet balance is $0 (inbound callers hear a
 -- short "unavailable" message instead of reaching the real agent).
+-- next_billing_at: when this Twilio number's next monthly charge is due (NULL for free
+-- VAPI numbers, which are never billed). Advanced by one month on every billing sweep pass.
 --
 
 CREATE TABLE IF NOT EXISTS public.phone_numbers (
@@ -637,7 +639,8 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     monthly_cost numeric(6,2) DEFAULT 1.15,
     label text,
     stripe_session_id text,
-    suspended_for_balance boolean DEFAULT false
+    suspended_for_balance boolean DEFAULT false,
+    next_billing_at timestamp with time zone
 );
 
 
@@ -650,9 +653,31 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     full_name text,
     company_name text,
     phone text,
+    referral_code text UNIQUE,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: referrals; Type: TABLE; Schema: public; Owner: -
+-- Tracking-only: records who referred whom. A referee can be referred by exactly one
+-- referrer (UNIQUE on referee_id) — the first valid ?ref= code at registration wins. A
+-- referrer's own code can be reused by unlimited referees. status flips 'pending' ->
+-- 'verified' when the referee verifies their email; no credit/grant is ever created.
+--
+
+CREATE TABLE IF NOT EXISTS public.referrals (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    referrer_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    referee_id uuid NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+    referral_code text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    verified_at timestamp with time zone
+);
+
+CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON public.referrals (referrer_id, created_at DESC);
 
 
 --

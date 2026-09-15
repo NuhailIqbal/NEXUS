@@ -18,6 +18,7 @@ renames — destructive changes still need a manual migration.
 """
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -58,6 +59,8 @@ def bootstrap_schema() -> None:
             _sync_columns_from_schema(conn, schema_sql)
             # Non-column tweaks: default changes, data back-fills, indexes.
             _ensure_columns(conn)
+            _backfill_phone_billing_dates(conn)
+            _backfill_referral_codes(conn)
     except Exception as e:  # noqa: BLE001 — never block startup on migration errors
         logger.error("auto-migrate: schema bootstrap failed: %s", e)
 
@@ -280,6 +283,8 @@ def _ensure_columns(conn) -> None:
         # Inbound-call suspension: when a user's balance hits $0, their numbers get
         # temporarily repointed at a shared "insufficient balance" assistant.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS suspended_for_balance boolean DEFAULT false',
+        # Recurring monthly billing: when this Twilio number's next charge is due.
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS next_billing_at timestamptz',
         'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS fallback_assistant_id text',
         # Auto-recharge: top the wallet up off-session from the default card.
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_enabled boolean DEFAULT false',
@@ -417,9 +422,90 @@ def _ensure_columns(conn) -> None:
         # Per-campaign DNC screening override — account-wide WhitelistData status stays the
         # gate on whether screening can happen at all, but each campaign can opt out.
         'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS dnc_screening_enabled boolean DEFAULT true NOT NULL',
+        # Referral tracking (tracking-only, no credit payout): every user gets their own
+        # short referral_code; a referrals row records referrer/referee once verified.
+        'ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS referral_code text UNIQUE',
+        '''CREATE TABLE IF NOT EXISTS public.referrals (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            referrer_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            referee_id uuid NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+            referral_code text NOT NULL,
+            status text DEFAULT 'pending' NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            verified_at timestamptz
+        )''',
+        'CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON public.referrals (referrer_id, created_at DESC)',
     ]
     for stmt in statements:
         try:
             conn.execute(stmt)
         except Exception as e:  # noqa: BLE001
             logger.warning("auto-migrate: column ensure skipped (%s): %s", stmt.split("EXISTS", 1)[-1].strip(), e)
+
+
+def _backfill_phone_billing_dates(conn) -> None:
+    """One-time backfill for numbers that existed before recurring billing shipped.
+
+    Twilio numbers with no monthly_cost yet get it set (some were provisioned under an
+    older default of $0). Every Twilio number with no next_billing_at yet gets one
+    computed from its own created_at, stepped forward a month at a time until it lands
+    in the future — so nobody is hit with a backlog of missed months on first run.
+    Idempotent: only touches rows that are still NULL/0.
+    """
+    try:
+        conn.execute(
+            "UPDATE public.phone_numbers SET monthly_cost = 3.00 "
+            "WHERE provider = 'twilio' AND (monthly_cost IS NULL OR monthly_cost = 0)"
+        )
+        rows = conn.execute(
+            "SELECT id, created_at FROM public.phone_numbers "
+            "WHERE provider = 'twilio' AND next_billing_at IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        from services.phone_billing import _next_future_billing_date
+
+        now = datetime.now(timezone.utc)
+        for phone_id, created_at in rows:
+            if created_at and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            base = created_at or now
+            next_due = _next_future_billing_date(base, now)
+            conn.execute(
+                "UPDATE public.phone_numbers SET next_billing_at = %s WHERE id = %s",
+                (next_due, phone_id),
+            )
+        logger.info("auto-migrate: backfilled next_billing_at for %d phone number(s)", len(rows))
+    except Exception as e:  # noqa: BLE001 — never block startup on a backfill error
+        logger.warning("auto-migrate: phone billing backfill skipped: %s", e)
+
+
+def _backfill_referral_codes(conn) -> None:
+    """One-time backfill: every existing profile without a referral_code gets one.
+
+    Idempotent — only touches rows still NULL. Each code is checked against the
+    UNIQUE constraint with a retry-on-collision loop, same generator auth.py uses
+    for new signups.
+    """
+    try:
+        from routers.auth import _generate_referral_code
+
+        rows = conn.execute(
+            "SELECT id FROM public.profiles WHERE referral_code IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        for (profile_id,) in rows:
+            for _ in range(8):
+                code = _generate_referral_code()
+                try:
+                    conn.execute(
+                        "UPDATE public.profiles SET referral_code = %s WHERE id = %s",
+                        (code, profile_id),
+                    )
+                    break
+                except Exception:
+                    continue  # collision — retry with a new code
+        logger.info("auto-migrate: backfilled referral_code for %d profile(s)", len(rows))
+    except Exception as e:  # noqa: BLE001 — never block startup on a backfill error
+        logger.warning("auto-migrate: referral_code backfill skipped: %s", e)

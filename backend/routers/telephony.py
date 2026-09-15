@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 import stripe
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
@@ -221,6 +222,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
                 raise HTTPException(status_code=502, detail=f"Purchased {purchased['number']} but VAPI import failed: {str(e)}")
 
         row["monthly_cost"] = monthly_cost or PHONE_NUMBER_MONTHLY_COST
+        from services.phone_billing import _add_one_month
+        row["next_billing_at"] = _add_one_month(datetime.now(timezone.utc)).isoformat()
 
     result = supabase.table("phone_numbers").insert(row).execute()
     return result.data[0] if result.data else row

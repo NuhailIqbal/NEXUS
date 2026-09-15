@@ -2,7 +2,7 @@ import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowRight, Loader2, MailCheck } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -37,6 +37,8 @@ const Register = () => {
   const [resending, setResending] = useState(false);
   const { toast } = useToast();
   const { signUp } = useAuth();
+  const [searchParams] = useSearchParams();
+  const referralCode = searchParams.get("ref") ?? undefined;
 
   const recaptchaContainerRef = useRef<HTMLDivElement>(null);
   const recaptchaWidgetId = useRef<number | null>(null);
@@ -88,7 +90,7 @@ const Register = () => {
       return;
     }
     setLoading(true);
-    const { error, pending, devVerifyUrl } = await signUp(email, password, fullName, recaptchaToken);
+    const { error, pending, devVerifyUrl } = await signUp(email, password, fullName, recaptchaToken, referralCode);
     setLoading(false);
     if (error) {
       toast({ title: "Registration failed", description: error, variant: "destructive" });

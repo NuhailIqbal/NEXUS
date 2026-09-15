@@ -30,6 +30,7 @@ import CreateAIAgent from "./pages/dashboard/CreateAIAgent.tsx";
 import AIVoices from "./pages/dashboard/AIVoices.tsx";
 import Profile from "./pages/dashboard/Profile.tsx";
 import Support from "./pages/dashboard/Support.tsx";
+import Referrals from "./pages/dashboard/Referrals.tsx";
 import Conversations from "./pages/dashboard/Conversations.tsx";
 import Integrations from "./pages/dashboard/Integrations.tsx";
 import Contacts from "./pages/dashboard/database/Contacts.tsx";
@@ -96,6 +97,7 @@ const App = () => {
                   <Route path="conversations" element={<Conversations />} />
                   <Route path="integrations" element={<Integrations />} />
                   <Route path="profile" element={<Profile />} />
+                  <Route path="referrals" element={<Referrals />} />
                   <Route path="support" element={<Support />} />
                   <Route path="database/contacts" element={<Contacts />} />
                   <Route path="database/lists" element={<Lists />} />

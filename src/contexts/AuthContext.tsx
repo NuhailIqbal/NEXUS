@@ -13,7 +13,7 @@ interface AuthContextType {
   session: { access_token: string } | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUp: (email: string, password: string, fullName?: string, recaptchaToken?: string) => Promise<{ error: string | null; pending?: boolean; devVerifyUrl?: string }>;
+  signUp: (email: string, password: string, fullName?: string, recaptchaToken?: string, referralCode?: string) => Promise<{ error: string | null; pending?: boolean; devVerifyUrl?: string }>;
   signOut: () => Promise<void>;
 }
 
@@ -104,13 +104,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return { error: null };
   };
 
-  const signUp = async (email: string, password: string, fullName?: string, recaptchaToken?: string) => {
+  const signUp = async (email: string, password: string, fullName?: string, recaptchaToken?: string, referralCode?: string) => {
     const { data, error } = await api.register({
       email,
       password,
       full_name: fullName,
       app_url: window.location.origin,
       recaptcha_token: recaptchaToken,
+      referral_code: referralCode,
     });
     if (error) return { error };
     // Account created UNVERIFIED — the user must click the emailed link before they

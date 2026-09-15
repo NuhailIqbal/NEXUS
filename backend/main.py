@@ -28,6 +28,7 @@ from routers import (
     admin,
     auth,
     notifications,
+    referrals,
 )
 
 limiter = Limiter(key_func=get_remote_address)
@@ -54,6 +55,16 @@ async def _start_vapi_sync() -> None:
     if settings.vapi_api_key and settings.vapi_sync_interval_seconds > 0:
         from services.vapi_sync import sync_loop
         asyncio.create_task(sync_loop())
+
+
+@app.on_event("startup")
+async def _start_phone_billing_sweep() -> None:
+    """Charge each Twilio phone number's monthly fee on its renewal date; suspend
+    inbound routing (never deprovision) if the charge can't be covered."""
+    import asyncio
+    if settings.phone_billing_sweep_interval_seconds > 0:
+        from services.phone_billing import billing_sweep_loop
+        asyncio.create_task(billing_sweep_loop())
 
 
 app.state.limiter = limiter
@@ -140,3 +151,4 @@ app.include_router(billing.router)
 app.include_router(stripe_webhook.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
+app.include_router(referrals.router)

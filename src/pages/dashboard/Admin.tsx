@@ -3,7 +3,7 @@ import {
   Users, Bot, PhoneOutgoing, CreditCard,
   Loader2, Search, ChevronRight, ChevronDown, ToggleLeft, ToggleRight,
   Plus, LogOut, Lock,
-  LayoutDashboard, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift,
+  LayoutDashboard, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift, Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,9 +102,21 @@ type PromoCode = {
   created_at: string;
 };
 
+type ReferralRow = {
+  id: string;
+  referrer_id: string;
+  referee_id: string;
+  referral_code: string;
+  status: string;
+  created_at: string;
+  verified_at: string | null;
+  referrer_email: string;
+  referee_email: string;
+};
+
 type SectionKey =
   | "overview" | "users" | "agents" | "numbers"
-  | "payments" | "promotions" | "revenue" | "agent-report" | "user-report";
+  | "payments" | "promotions" | "referrals" | "revenue" | "agent-report" | "user-report";
 
 type NavLeaf = { key: SectionKey; label: string; icon: typeof Users };
 type NavGroup = { group: string; icon: typeof Users; children: NavLeaf[] };
@@ -118,6 +130,7 @@ const NAV: NavEntry[] = [
   { key: "numbers",      label: "Numbers",        icon: Phone },
   { key: "payments",     label: "Payments",       icon: CreditCard },
   { key: "promotions",   label: "Promotions",     icon: Gift },
+  { key: "referrals",    label: "Referrals",      icon: Share2 },
   {
     group: "Reports", icon: BarChart3, children: [
       { key: "revenue",      label: "Revenue Report", icon: DollarSign },
@@ -191,6 +204,8 @@ const Admin = () => {
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
   const [newCode, setNewCode] = useState({ code: "", amount: 20, expiry_days: "", max_redemptions: "" });
   const [creatingCode, setCreatingCode] = useState(false);
+  const [referrals, setReferrals] = useState<ReferralRow[]>([]);
+  const [referralsLoaded, setReferralsLoaded] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -277,7 +292,13 @@ const Admin = () => {
     if (section === "user-report" && !userReportLoaded) {
       api.getAdminUsersReport().then((res) => { if (res.data) setUserReport(res.data); setUserReportLoaded(true); });
     }
-  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded]);
+    if (section === "referrals" && !referralsLoaded) {
+      api.getAdminReferrals().then((res) => {
+        if (Array.isArray(res.data)) setReferrals(res.data);
+        setReferralsLoaded(true);
+      });
+    }
+  }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded, referralsLoaded]);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -507,6 +528,7 @@ const Admin = () => {
               {section === "numbers" && renderNumbers()}
               {section === "payments" && renderPayments()}
               {section === "promotions" && renderPromotions()}
+              {section === "referrals" && renderReferrals()}
               {section === "revenue" && renderRevenue()}
               {section === "agent-report" && renderAgentReport()}
               {section === "user-report" && renderUserReport()}
@@ -796,6 +818,53 @@ const Admin = () => {
     if (error) return toast.error(String(error));
     toast.success("Code deleted");
     refreshPromoCodes();
+  }
+
+  function renderReferrals() {
+    const verifiedCount = referrals.filter((r) => r.status === "verified").length;
+    return (
+      <div className="space-y-6">
+        <SectionHeader title="Referrals" subtitle="Every referral relationship platform-wide (tracking only — no credit is granted)." />
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <MiniStat label="Total referrals" value={String(referrals.length)} />
+          <MiniStat label="Verified" value={String(verifiedCount)} />
+          <MiniStat label="Pending" value={String(referrals.length - verifiedCount)} />
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3">Referrer</th>
+                <th className="px-4 py-3">Referee</th>
+                <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Invited</th>
+                <th className="px-4 py-3">Verified</th>
+              </tr>
+            </thead>
+            <tbody>
+              {referrals.map((r) => (
+                <tr key={r.id} className="border-t border-border bg-card/30">
+                  <td className="px-4 py-3 text-foreground">{r.referrer_email || "—"}</td>
+                  <td className="px-4 py-3 text-foreground">{r.referee_email || "—"}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{r.referral_code}</td>
+                  <td className="px-4 py-3">
+                    <Badge variant={r.status === "verified" ? "default" : "secondary"}>
+                      {r.status === "verified" ? "Verified" : "Pending"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{r.verified_at ? new Date(r.verified_at).toLocaleDateString() : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {referrals.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No referrals yet.</div>}
+        </div>
+      </div>
+    );
   }
 
   function renderRevenue() {

@@ -77,7 +77,7 @@ function adminPatch<T = any>(path: string, body: any) {
 
 export const api = {
   // Auth — each takes a single object payload (AuthContext calls api.login({ email, password }))
-  register: (data: { email: string; password: string; full_name?: string; app_url?: string; recaptcha_token?: string }) => post("/auth/register", data),
+  register: (data: { email: string; password: string; full_name?: string; app_url?: string; recaptcha_token?: string; referral_code?: string }) => post("/auth/register", data),
   login: (data: { email: string; password: string }) => post("/auth/login", data),
   verifyEmail: (token: string) => post("/auth/verify-email", { token }),
   resendVerification: (email: string, app_url?: string) => post("/auth/resend-verification", { email, app_url }),
@@ -240,6 +240,9 @@ export const api = {
   getPromotions: () => get("/billing/promotions"),
   redeemPromoCode: (code: string) => post("/billing/promotions/redeem", { code }),
 
+  // Referrals
+  getMyReferrals: () => get("/referrals/me"),
+
   // Notifications
   getNotifications: () => get("/notifications"),
   markNotificationsRead: (id?: string) => post("/notifications/read", id ? { id } : {}),
@@ -251,6 +254,7 @@ export const api = {
   createAdminUser: (data: { email: string; password: string; full_name?: string }) => adminPost("/admin/users", data),
   getAdminAgents: () => adminGet("/admin/agents"),
   getAdminPhoneNumbers: () => adminGet("/admin/phone-numbers"),
+  getAdminReferrals: () => adminGet("/admin/referrals"),
   getAdminPayments: () => adminGet("/admin/payments"),
   getAdminRevenue: () => adminGet("/admin/revenue"),
   getAdminAgentsReport: () => adminGet("/admin/agents-report"),

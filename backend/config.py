@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     vapi_sync_interval_seconds: int = 90
     vapi_sync_limit: int = 50
 
+    # Recurring phone-number billing: charge each Twilio number's monthly fee when its
+    # next_billing_at date arrives. Set interval to 0 to disable.
+    phone_billing_sweep_interval_seconds: int = 3600
+
     # Gemini
     gemini_api_key: str = ""
 

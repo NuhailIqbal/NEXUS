@@ -32,21 +32,18 @@ type Num = {
   provider: string;
   vapi_phone_id: string;
   created_at: string;
+  monthly_cost?: number;
+  next_billing_at?: string | null;
+  suspended_for_balance?: boolean;
 };
 
-// A number's paid month runs from its purchase date to one calendar month later.
-function numberExpiry(createdAt?: string) {
-  if (!createdAt) return null;
-  const d = new Date(createdAt);
+// Real recurring-billing renewal date (next_billing_at). NULL for free VAPI numbers.
+function numberExpiry(nextBillingAt?: string | null) {
+  if (!nextBillingAt) return null;
+  const d = new Date(nextBillingAt);
   if (isNaN(d.getTime())) return null;
-  const day = d.getDate();
-  const exp = new Date(d);
-  exp.setDate(1);
-  exp.setMonth(exp.getMonth() + 1);
-  const lastDay = new Date(exp.getFullYear(), exp.getMonth() + 1, 0).getDate();
-  exp.setDate(Math.min(day, lastDay));
-  const daysLeft = Math.floor((exp.getTime() - Date.now()) / 86400000);
-  return { date: exp, daysLeft };
+  const daysLeft = Math.floor((d.getTime() - Date.now()) / 86400000);
+  return { date: d, daysLeft };
 }
 
 const PhoneNumbers = () => {
@@ -201,7 +198,7 @@ const PhoneNumbers = () => {
                   </td>
                   <td className="px-4 py-3">
                     {(() => {
-                      const e = numberExpiry(n.created_at);
+                      const e = numberExpiry(n.next_billing_at);
                       if (!e) return <span className="text-muted-foreground">—</span>;
                       const expired = e.daysLeft < 0;
                       const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
@@ -336,6 +333,10 @@ function NumberStatus({ num }: { num: Num }) {
         Activating {m}:{String(s).padStart(2, "0")}
       </span>
     );
+  }
+
+  if (num.suspended_for_balance) {
+    return <Badge variant="destructive">Suspended — add funds</Badge>;
   }
 
   return <Badge variant={num.status === "Active" ? "default" : "secondary"}>{num.status}</Badge>;

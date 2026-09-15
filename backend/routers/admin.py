@@ -1,4 +1,3 @@
-import calendar
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_admin_user
@@ -416,23 +415,34 @@ async def list_all_agents(admin=Depends(get_admin_user)):
     return {"data": rows, "error": None}
 
 
-def _add_one_month(dt):
-    """Same calendar day next month, clamped to that month's last day."""
-    y = dt.year + (1 if dt.month == 12 else 0)
-    m = 1 if dt.month == 12 else dt.month + 1
-    last_day = calendar.monthrange(y, m)[1]
-    return dt.replace(year=y, month=m, day=min(dt.day, last_day))
+@router.get("/referrals")
+async def list_all_referrals(admin=Depends(get_admin_user)):
+    """Every referral relationship platform-wide, tracking-only (no credit/payout)."""
+    email_map = _admin_email_map()
+    rows = (
+        supabase.table("referrals")
+        .select("id, referrer_id, referee_id, referral_code, status, created_at, verified_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    data = [{
+        **r,
+        "referrer_email": email_map.get(r["referrer_id"], ""),
+        "referee_email": email_map.get(r["referee_id"], ""),
+    } for r in (rows.data or [])]
+    return {"data": data, "error": None}
 
 
 @router.get("/phone-numbers")
 async def list_all_phone_numbers(admin=Depends(get_admin_user)):
-    """Every phone number across all users, with owner, purchase date and monthly expiry.
+    """Every phone number across all users, with owner, purchase date and next billing date.
 
-    Expiry = purchase date + 1 month (the number's paid month runs out then).
+    next_billing_at is the real recurring-billing renewal date (NULL for free VAPI numbers).
     """
     nums = (
         supabase.table("phone_numbers")
-        .select("id, number, provider, status, agent_id, monthly_cost, created_at, user_id")
+        .select("id, number, provider, status, agent_id, monthly_cost, created_at, "
+                "user_id, next_billing_at, suspended_for_balance")
         .order("created_at", desc=True)
         .execute()
     )
@@ -456,9 +466,8 @@ async def list_all_phone_numbers(admin=Depends(get_admin_user)):
         n["owner_number_count"] = counts.get(uid, 0)
         # Effective monthly fee: Twilio is billed $3/mo; VAPI numbers are free.
         n["monthly_cost"] = PHONE_NUMBER_MONTHLY_COST if (n.get("provider") or "").lower() == "twilio" else 0.0
-        created = _parse_dt(n.get("created_at"))
-        if created:
-            expires = _add_one_month(created)
+        expires = _parse_dt(n.get("next_billing_at"))
+        if expires:
             n["expires_at"] = expires.isoformat()
             n["days_left"] = (expires - now).days
         else:
