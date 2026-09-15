@@ -9,6 +9,7 @@ from routers.billing import (
     DEFAULT_RATE_PER_MINUTE, DEFAULT_COST_MULTIPLIER, PHONE_NUMBER_MONTHLY_COST,
     credit_balance, debit_balance, get_balance,
 )
+from routers.auth import _hash_password, _provision_user_rows, _grant_signup_promo
 from services import vapi_client
 from config import settings
 
@@ -71,6 +72,46 @@ class UserUpdate(BaseModel):
     cost_multiplier: Optional[float] = None
     total_charges: Optional[float] = None
     balance: Optional[float] = None
+
+
+class AdminUserCreate(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+
+
+@router.post("/users")
+async def create_user(body: AdminUserCreate, admin=Depends(get_admin_user)):
+    """Admin-created account — pre-verified (no email-verification step, since an admin
+    is vouching for it directly) and granted the same welcome bonus a normal user gets on
+    verification. Reuses the exact hashing/provisioning helpers /auth/register uses, so
+    this account works identically to a self-registered one (can log in immediately, has
+    a billing row, etc.) rather than being a half-provisioned duplicate of that logic."""
+    email = body.email.strip().lower()
+    if not email or not body.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    existing = supabase.table("users").select("id").eq("email", email).maybe_single().execute()
+    if existing.data:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    row = {
+        "email": email,
+        "encrypted_password": _hash_password(body.password),
+        "raw_user_meta_data": {"full_name": body.full_name or ""},
+        "email_confirmed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = supabase.table("users").insert(row).execute()
+    user = result.data[0] if result.data else None
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to create user")
+
+    _provision_user_rows(user["id"], body.full_name)
+    _grant_signup_promo(user["id"])
+
+    return {"data": {"id": user["id"], "email": email}, "error": None}
 
 
 @router.get("/users")

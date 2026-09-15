@@ -248,6 +248,7 @@ export const api = {
   adminLogin: (username: string, password: string) => post("/admin/login", { username, password }),
   getAdminStats: () => adminGet("/admin/stats"),
   getAdminUsers: () => adminGet("/admin/users"),
+  createAdminUser: (data: { email: string; password: string; full_name?: string }) => adminPost("/admin/users", data),
   getAdminAgents: () => adminGet("/admin/agents"),
   getAdminPhoneNumbers: () => adminGet("/admin/phone-numbers"),
   getAdminPayments: () => adminGet("/admin/payments"),

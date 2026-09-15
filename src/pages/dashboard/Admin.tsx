@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { api, ADMIN_TOKEN_KEY } from "@/services/api";
@@ -163,6 +163,10 @@ const Admin = () => {
   const [editingRate, setEditingRate] = useState<string | null>(null);
   const [rateForm, setRateForm] = useState({ rate_per_minute: 0.35, cost_multiplier: 3.0, total_charges: 0 });
 
+  const [addUserOpen, setAddUserOpen] = useState(false);
+  const [addUserForm, setAddUserForm] = useState({ email: "", full_name: "", password: "" });
+  const [addUserSaving, setAddUserSaving] = useState(false);
+
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
@@ -280,6 +284,27 @@ const Admin = () => {
     (u.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
     (u.company_name || "").toLowerCase().includes(search.toLowerCase())
   );
+
+  const handleAddUser = async () => {
+    if (!addUserForm.email.trim() || !addUserForm.password.trim()) {
+      return toast.error("Email and password are required");
+    }
+    if (addUserForm.password.length < 6) {
+      return toast.error("Password must be at least 6 characters");
+    }
+    setAddUserSaving(true);
+    const { error } = await api.createAdminUser({
+      email: addUserForm.email.trim(),
+      password: addUserForm.password,
+      full_name: addUserForm.full_name.trim() || undefined,
+    });
+    setAddUserSaving(false);
+    if (error) return toast.error(error);
+    toast.success(`Account created for ${addUserForm.email.trim()}`);
+    setAddUserOpen(false);
+    setAddUserForm({ email: "", full_name: "", password: "" });
+    fetchData();
+  };
 
   const handleToggleAccess = async (userId: string) => {
     const { error } = await api.toggleAccess(userId);
@@ -1137,7 +1162,61 @@ const Admin = () => {
   function renderUsers() {
     return (
       <div>
-        <SectionHeader title="Users" subtitle="Manage users, balances and rates." />
+        <div className="mb-6 flex items-start justify-between">
+          <SectionHeader title="Users" subtitle="Manage users, balances and rates." />
+          <Button onClick={() => setAddUserOpen(true)}>
+            <Plus className="mr-1.5 h-4 w-4" /> Add User
+          </Button>
+        </div>
+
+        <Dialog open={addUserOpen} onOpenChange={(o) => { setAddUserOpen(o); if (!o) setAddUserForm({ email: "", full_name: "", password: "" }); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Add User</DialogTitle>
+              <DialogDescription>
+                Creates an account that can sign in immediately — no email verification step,
+                since you're vouching for it directly. Gets the same welcome credit a verified
+                sign-up would.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Email *</Label>
+                <Input
+                  type="email"
+                  value={addUserForm.email}
+                  onChange={(e) => setAddUserForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="user@company.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Full Name</Label>
+                <Input
+                  value={addUserForm.full_name}
+                  onChange={(e) => setAddUserForm((f) => ({ ...f, full_name: e.target.value }))}
+                  placeholder="Jane Doe"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Password *</Label>
+                <Input
+                  type="text"
+                  value={addUserForm.password}
+                  onChange={(e) => setAddUserForm((f) => ({ ...f, password: e.target.value }))}
+                  placeholder="At least 6 characters — share this with the user directly"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddUserOpen(false)}>Cancel</Button>
+              <Button onClick={handleAddUser} disabled={addUserSaving}>
+                {addUserSaving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                Create Account
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <div className="relative mb-4 max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
