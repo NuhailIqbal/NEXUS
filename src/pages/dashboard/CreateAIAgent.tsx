@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { VAPI_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 
@@ -412,11 +413,7 @@ function StepSetup({
               onChange={(e) => update("voice", e.target.value)}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
-              <option>Elliot</option><option>Savannah</option><option>Rohan</option>
-              <option>Emma</option><option>Clara</option><option>Nico</option>
-              <option>Kai</option><option>Sagar</option><option>Godfrey</option>
-              <option>Neil</option><option>Layla</option><option>Sid</option>
-              <option>Naina</option>
+              {VAPI_VOICE_NAMES.map((v) => (<option key={v}>{v}</option>))}
             </select>
           </Field>
         </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Settings, Copy, Trash2, PlayCircle } from "lucide-react";
 import { LiveVoiceModal } from "@/components/dashboard/LiveVoiceModal";
+import { VAPI_VOICE_NAMES } from "@/lib/voices";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { PageHeader } from "@/components/dashboard/PageHeader";
@@ -313,7 +314,7 @@ const AIAgents = () => {
                     <SelectValue placeholder="Select voice" />
                   </SelectTrigger>
                   <SelectContent>
-                    {["Aria", "Marco", "Nora", "Kai", "Eva", "Tom", "Lia", "Diego"].map((v) => (
+                    {VAPI_VOICE_NAMES.map((v) => (
                       <SelectItem key={v} value={v}>
                         {v}
                       </SelectItem>
