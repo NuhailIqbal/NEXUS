@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from dependencies import get_current_user
 from database import supabase
-from models.schemas import AgentCreate, AgentUpdate, AgentTest
+from models.schemas import AgentCreate, AgentUpdate, AgentTest, AgentAnalyzeWebsite
 from services import vapi_client
-from services.openai_client import chat_reply, OpenAIError
+from services.openai_client import chat_reply, analyze_website, OpenAIError
+from services.website_analyzer import fetch_website_text, WebsiteFetchError
 from services.agent_tools import provision_tools_for_agent
 from config import settings
 from routers.billing import get_or_create_billing
 from routers.team import resolve_owner_id
 
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 
@@ -122,6 +126,26 @@ async def test_agent(body: AgentTest, user=Depends(get_current_user)):
     return {"data": {"reply": reply}, "error": None}
 
 
+@router.post("/analyze-website")
+@limiter.limit("10/minute")
+async def analyze_agent_website(request: Request, body: AgentAnalyzeWebsite, user=Depends(get_current_user)):
+    """Fetch a business's website and suggest a Main Goal + Industry for the Create-agent
+    wizard's "Analyze" button."""
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="AI analysis is not configured — add OPENAI_API_KEY on the server.")
+    try:
+        title, text = await fetch_website_text(body.url)
+    except WebsiteFetchError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        result = await analyze_website(title, text)
+    except OpenAIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    if not result.get("main_goal"):
+        raise HTTPException(status_code=502, detail="Couldn't summarize this website — try a different page.")
+    return {"data": result, "error": None}
+
+
 @router.post("/{agent_id}/sync-vapi")
 async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
@@ -201,7 +225,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
 
     agent_res = (
         supabase.table("ai_agents")
-        .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, name, selected_tool_keys")
+        .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, name, selected_tool_keys, voice, language")
         .eq("id", agent_id)
         .eq("user_id", owner_id)
         .maybe_single()
@@ -241,15 +265,18 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
 
     if settings.vapi_api_key and agent.get("vapi_assistant_id"):
         try:
+            effective_language = updates.get("language", agent.get("language"))
             vapi_payload: dict = {}
             if "name" in updates:
                 vapi_payload["name"] = updates["name"]
             if "first_message" in updates:
                 vapi_payload["firstMessage"] = updates["first_message"]
-            # Rebuild the model block when the prompt OR the transfer number changes.
-            # The transfer is a standalone VAPI transferCall tool attached by id, so we
-            # recompute the full toolIds (preset tools + transfer tool) to avoid dropping them.
-            if "system_prompt" in updates or "transfer_number" in updates:
+            # Rebuild the model block when the prompt, the transfer number, OR the
+            # language changes (Urdu needs a script directive injected — see
+            # vapi_client.apply_language_directive). The transfer is a standalone VAPI
+            # transferCall tool attached by id, so we recompute the full toolIds (preset
+            # tools + transfer tool) to avoid dropping them.
+            if "system_prompt" in updates or "transfer_number" in updates or "language" in updates:
                 preset_ids = await provision_tools_for_agent(
                     owner_id,
                     updates.get("selected_tool_keys") or agent.get("selected_tool_keys") or [],
@@ -283,18 +310,17 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                 model_block: dict = {
                     "provider": "openai",
                     "model": "gpt-4o-mini",
-                    "messages": [{"role": "system", "content": effective_prompt}],
+                    "messages": [{"role": "system", "content": vapi_client.apply_language_directive(effective_prompt, effective_language)}],
                 }
                 if all_tool_ids:
                     model_block["toolIds"] = all_tool_ids
                 vapi_payload["model"] = model_block
-            if "voice" in updates:
-                vapi_payload["voice"] = vapi_client._resolve_voice(updates["voice"])
+            if "voice" in updates or "language" in updates:
+                vapi_payload["voice"] = vapi_client._resolve_voice(
+                    updates.get("voice", agent.get("voice")), effective_language
+                )
             if "language" in updates:
-                vapi_payload["transcriber"] = {
-                    "provider": "deepgram",
-                    "language": vapi_client._resolve_language(updates["language"]),
-                }
+                vapi_payload["transcriber"] = vapi_client._resolve_transcriber(updates["language"])
             if vapi_payload:
                 await vapi_client.update_assistant(agent["vapi_assistant_id"], vapi_payload)
         except Exception as e:

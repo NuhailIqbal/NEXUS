@@ -52,10 +52,12 @@ class ListUpdate(BaseModel):
 
 class TeamInvite(BaseModel):
     member_email: str
+    role: str = "member"  # "member" (can create/edit) | "viewer" (read-only)
     app_url: Optional[str] = None  # frontend origin, for building the invite-accept link
 
 
 class TeamMemberUpdate(BaseModel):
+    role: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -104,6 +106,10 @@ class AgentTest(BaseModel):
     message: str
     system_prompt: Optional[str] = None
     first_message: Optional[str] = None
+
+
+class AgentAnalyzeWebsite(BaseModel):
+    url: str
 
 
 class AgentUpdate(BaseModel):

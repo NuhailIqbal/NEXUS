@@ -5,17 +5,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, UserPlus, X, Shield, Trash2 } from "lucide-react";
 
 type TeamMember = {
   id: string;
   member_email: string;
+  role: string;
   status: string;
   created_at: string;
 };
 
 type MyRole = {
+  role: string;
   is_owner: boolean;
 };
 
@@ -31,6 +34,7 @@ const Profile = () => {
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
   const [inviting, setInviting] = useState(false);
 
   const fetchData = async () => {
@@ -73,6 +77,7 @@ const Profile = () => {
     setInviting(true);
     const { data, error } = await api.inviteTeamMember({
       member_email: inviteEmail,
+      role: inviteRole,
     });
     setInviting(false);
     if (error) return toast.error(error);
@@ -82,6 +87,7 @@ const Profile = () => {
         : `${inviteEmail} added, but the invite email couldn't be sent — share the accept-invite link with them manually.`
     );
     setInviteEmail("");
+    setInviteRole("member");
     setShowInvite(false);
     fetchData();
   };
@@ -91,6 +97,13 @@ const Profile = () => {
     const { error } = await api.removeTeamMember(id);
     if (error) return toast.error(error);
     toast.success("Member removed");
+    fetchData();
+  };
+
+  const handleRoleChange = async (id: string, role: string) => {
+    const { error } = await api.updateTeamMember(id, { role });
+    if (error) return toast.error(error);
+    toast.success("Role updated");
     fetchData();
   };
 
@@ -109,7 +122,7 @@ const Profile = () => {
           <Shield className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm text-muted-foreground">Your role:</span>
           <Badge variant={isOwner ? "default" : "secondary"} className="capitalize">
-            {isOwner ? "Account Owner" : "Team Member"}
+            {isOwner ? "Account Owner" : myRole.role === "viewer" ? "Viewer (read-only)" : "Member"}
           </Badge>
         </div>
       )}
@@ -163,14 +176,28 @@ const Profile = () => {
         {showInvite && isOwner && (
           <div className="mb-4 rounded-xl border border-border bg-card p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground">Invite a Collaborator</h3>
-            <div className="space-y-1.5">
-              <Label>Email</Label>
-              <Input
-                type="email"
-                placeholder="colleague@company.com"
-                value={inviteEmail}
-                onChange={e => setInviteEmail(e.target.value)}
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Email</Label>
+                <Input
+                  type="email"
+                  placeholder="colleague@company.com"
+                  value={inviteEmail}
+                  onChange={e => setInviteEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Role</Label>
+                <Select value={inviteRole} onValueChange={setInviteRole}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="member">Member (can create &amp; edit)</SelectItem>
+                    <SelectItem value="viewer">Viewer (read-only)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="flex justify-end">
               <Button onClick={handleInvite} disabled={inviting}>
@@ -187,6 +214,7 @@ const Profile = () => {
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Email</th>
+                <th className="px-4 py-3">Role</th>
                 <th className="px-4 py-3">Status</th>
                 {isOwner && <th className="px-4 py-3"></th>}
               </tr>
@@ -195,6 +223,21 @@ const Profile = () => {
               {team.map((m) => (
                 <tr key={m.id} className="border-t border-border bg-card/30">
                   <td className="px-4 py-3 font-medium text-foreground">{m.member_email}</td>
+                  <td className="px-4 py-3">
+                    {isOwner ? (
+                      <Select value={m.role} onValueChange={(v) => handleRoleChange(m.id, v)}>
+                        <SelectTrigger className="h-8 w-32 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="member">Member</SelectItem>
+                          <SelectItem value="viewer">Viewer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Badge variant="outline" className="capitalize">{m.role}</Badge>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <Badge variant={m.status === "Active" ? "default" : "secondary"}>{m.status}</Badge>
                   </td>
@@ -214,7 +257,7 @@ const Profile = () => {
               ))}
               {team.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={isOwner ? 3 : 2} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={isOwner ? 4 : 3} className="px-4 py-8 text-center text-muted-foreground">
                     No team members yet. {isOwner && "Click \"Add Collaborator\" to invite someone."}
                   </td>
                 </tr>
@@ -225,8 +268,9 @@ const Profile = () => {
 
         {!isOwner && (
           <p className="mt-3 text-xs text-muted-foreground">
-            You are a team member. Only account owners can invite or remove collaborators.
-            Sub-users cannot delete any resources.
+            You are a team member. Only account owners can invite, remove, or change the role
+            of collaborators. Sub-users cannot delete any resources
+            {myRole?.role === "viewer" && ", and as a Viewer you have read-only access — creating or editing anything is disabled"}.
           </p>
         )}
       </section>

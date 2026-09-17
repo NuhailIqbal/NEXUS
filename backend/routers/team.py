@@ -31,6 +31,8 @@ VALID_PERMISSIONS = [
 
 DEFAULT_MEMBER_PERMISSIONS = VALID_PERMISSIONS
 
+VALID_ROLES = ["member", "viewer"]
+
 
 def resolve_owner_id(user_id: str) -> str:
     """If user is a sub-user, return their parent's ID. Otherwise return their own."""
@@ -48,7 +50,7 @@ def resolve_owner_id(user_id: str) -> str:
 
 
 def get_user_role(user_id: str) -> str:
-    """Returns 'owner' if this is a parent account, 'member' if sub-user."""
+    """Returns 'owner' for a parent account, or the sub-user's stored role ('member'/'viewer')."""
     membership = (
         supabase.table("team_members")
         .select("role")
@@ -122,11 +124,11 @@ def _owner_display_name(owner_id: str) -> str:
     return (profile or {}).get("full_name") or "Someone"
 
 
-async def _send_invite_email(email: str, token: str, owner_name: str, app_url: str | None) -> bool:
+async def _send_invite_email(email: str, token: str, owner_name: str, role: str, app_url: str | None) -> bool:
     base = (app_url or settings.public_app_url or "http://localhost:8080").rstrip("/")
     url = f"{base}/accept-invite?token={token}"
     html = (
-        f"<p>{owner_name} has invited you to join their EDM Nexus team.</p>"
+        f"<p>{owner_name} has invited you to join their EDM Nexus team as a <b>{role}</b>.</p>"
         f'<p><a href="{url}">Accept invite &amp; set up your account</a></p>'
         f"<p>Or paste this link into your browser:<br>{url}</p>"
         f"<p>This link expires in {INVITE_TTL_HOURS // 24} days.</p>"
@@ -139,11 +141,11 @@ async def _send_invite_email(email: str, token: str, owner_name: str, app_url: s
         return False
 
 
-async def _send_added_to_team_email(email: str, owner_name: str, app_url: str | None) -> bool:
+async def _send_added_to_team_email(email: str, owner_name: str, role: str, app_url: str | None) -> bool:
     base = (app_url or settings.public_app_url or "http://localhost:8080").rstrip("/")
     url = f"{base}/login"
     html = (
-        f"<p>{owner_name} has added you to their EDM Nexus team.</p>"
+        f"<p>{owner_name} has added you to their EDM Nexus team as a <b>{role}</b>.</p>"
         f'<p><a href="{url}">Log in with your existing account</a></p>'
     )
     try:
@@ -160,6 +162,9 @@ async def invite_member(body: TeamInvite, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Only account owners can invite team members")
 
     member_email = body.member_email.strip().lower()
+    role = (body.role or "member").strip().lower()
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role — must be one of {VALID_ROLES}")
 
     existing = (
         supabase.table("team_members")
@@ -186,7 +191,7 @@ async def invite_member(body: TeamInvite, user=Depends(get_current_user)):
         "owner_id": user["user_id"],
         "member_email": member_email,
         "member_user_id": invited_user["id"] if invited_user else None,
-        "role": "member",
+        "role": role,
         "permissions": Json(VALID_PERMISSIONS),
         "status": "Active" if invited_user else "Pending",
         "invite_token": invite_token,
@@ -197,9 +202,9 @@ async def invite_member(body: TeamInvite, user=Depends(get_current_user)):
 
     owner_name = _owner_display_name(user["user_id"])
     if invited_user:
-        email_sent = await _send_added_to_team_email(member_email, owner_name, body.app_url)
+        email_sent = await _send_added_to_team_email(member_email, owner_name, role, body.app_url)
     else:
-        email_sent = await _send_invite_email(member_email, invite_token, owner_name, body.app_url)
+        email_sent = await _send_invite_email(member_email, invite_token, owner_name, role, body.app_url)
 
     data = result.data[0] if result.data else None
     if data:
@@ -220,6 +225,7 @@ async def get_invite(token: str):
     return {
         "data": {
             "email": row["member_email"],
+            "role": row["role"],
             "owner_name": _owner_display_name(row["owner_id"]),
         },
         "error": None,
@@ -286,6 +292,12 @@ async def update_member(member_id: str, body: TeamMemberUpdate, user=Depends(get
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+
+    if "role" in updates:
+        role = updates["role"].strip().lower()
+        if role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role — must be one of {VALID_ROLES}")
+        updates["role"] = role
 
     result = (
         supabase.table("team_members")

@@ -10,3 +10,9 @@ export const VAPI_VOICE_NAMES = [
   "Elliot", "Savannah", "Rohan", "Emma", "Clara", "Nico", "Kai",
   "Sagar", "Godfrey", "Neil", "Layla", "Sid", "Naina",
 ] as const;
+
+// ElevenLabs premade voices — Vapi's own built-in voices above are English-only, so an
+// agent set to Urdu uses one of these instead (see backend/services/vapi_client.py's
+// _resolve_voice). Same single-source-of-truth reasoning as VAPI_VOICE_NAMES: keep
+// this in sync with the backend's _URDU_VOICE_IDS.
+export const URDU_VOICE_NAMES = ["Zara", "Ali"] as const;

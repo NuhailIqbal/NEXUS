@@ -2,14 +2,15 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
-  ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Building2,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info,
+  ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { VAPI_VOICE_NAMES } from "@/lib/voices";
+import { VAPI_VOICE_NAMES, URDU_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 
@@ -30,7 +31,7 @@ const INDUSTRIES = [
   { id: "education", label: "Education", icon: GraduationCap, color: "bg-blue-500/15 text-blue-400" },
   { id: "travel", label: "Travel & Hospitality", icon: Plane, color: "bg-cyan-500/15 text-cyan-400" },
   { id: "saas", label: "SaaS & Technology", icon: Briefcase, color: "bg-violet-500/15 text-violet-400" },
-  { id: "other", label: "Other", icon: Building2, color: "bg-slate-500/15 text-slate-400" },
+  { id: "automotive", label: "Automotive Industry", icon: Car, color: "bg-red-500/15 text-red-400" },
 ];
 
 type FormState = {
@@ -290,6 +291,29 @@ export default CreateAIAgent;
 function StepSetup({
   form, update,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+  const isUrdu = form.language === "Urdu (PK)";
+  const voiceOptions: readonly string[] = isUrdu ? URDU_VOICE_NAMES : VAPI_VOICE_NAMES;
+  const [analyzing, setAnalyzing] = useState(false);
+
+  const updateLanguage = (language: string) => {
+    const nowUrdu = language === "Urdu (PK)";
+    update("language", language);
+    // Vapi's English voices can't speak Urdu (and vice versa) — swap to a sensible
+    // default in the newly-relevant list rather than leaving a mismatched voice selected.
+    if (nowUrdu !== isUrdu) update("voice", nowUrdu ? URDU_VOICE_NAMES[0] : VAPI_VOICE_NAMES[0]);
+  };
+
+  const analyzeWebsite = async () => {
+    if (!form.website.trim()) return toast.error("Enter a website URL first");
+    setAnalyzing(true);
+    const { data, error } = await api.analyzeAgentWebsite(form.website.trim());
+    setAnalyzing(false);
+    if (error) return toast.error(error);
+    if (data?.main_goal) update("mainGoal", data.main_goal);
+    if (data?.industry) update("industry", data.industry);
+    toast.success("Filled in Main Goal" + (data?.industry ? " and Industry" : "") + " from the website");
+  };
+
   return (
     <div className="space-y-8">
       <div className="text-center">
@@ -321,8 +345,16 @@ function StepSetup({
                 placeholder="example.com or https://example.com"
                 className="h-10 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
               />
-              <Button type="button" variant="outline" size="sm" className="text-primary border-primary/30">
-                <Sparkles className="mr-1 h-3.5 w-3.5" /> Analyze
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-primary border-primary/30"
+                onClick={analyzeWebsite}
+                disabled={analyzing}
+              >
+                {analyzing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
+                Analyze
               </Button>
             </div>
           </Field>
@@ -397,24 +429,32 @@ function StepSetup({
         <SectionTitle icon={<Sparkles className="h-4 w-4 text-primary" />}>Communication</SectionTitle>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Language">
-            <select
-              value={form.language}
-              onChange={(e) => update("language", e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option>English (US)</option><option>English (UK)</option>
-              <option>Spanish (ES)</option><option>French (FR)</option>
-              <option>German (DE)</option><option>Italian (IT)</option>
-            </select>
+            <Select value={form.language} onValueChange={updateLanguage}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="English (US)">English (US)</SelectItem>
+                <SelectItem value="English (UK)">English (UK)</SelectItem>
+                <SelectItem value="Spanish (ES)">Spanish (ES)</SelectItem>
+                <SelectItem value="French (FR)">French (FR)</SelectItem>
+                <SelectItem value="German (DE)">German (DE)</SelectItem>
+                <SelectItem value="Italian (IT)">Italian (IT)</SelectItem>
+                <SelectItem value="Urdu (PK)">Urdu (PK)</SelectItem>
+              </SelectContent>
+            </Select>
           </Field>
           <Field label="Voice">
-            <select
-              value={form.voice}
-              onChange={(e) => update("voice", e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              {VAPI_VOICE_NAMES.map((v) => (<option key={v}>{v}</option>))}
-            </select>
+            <Select value={form.voice} onValueChange={(v) => update("voice", v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {voiceOptions.map((v) => (
+                  <SelectItem key={v} value={v}>{v}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
         </div>
       </div>

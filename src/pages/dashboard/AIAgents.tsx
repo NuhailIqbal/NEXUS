@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Settings, Copy, Trash2, PlayCircle } from "lucide-react";
 import { LiveVoiceModal } from "@/components/dashboard/LiveVoiceModal";
-import { VAPI_VOICE_NAMES } from "@/lib/voices";
+import { VAPI_VOICE_NAMES, URDU_VOICE_NAMES } from "@/lib/voices";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { PageHeader } from "@/components/dashboard/PageHeader";
@@ -61,6 +61,7 @@ const AIAgents = () => {
     "French (FR)": "fr-FR",
     "Italian (IT)": "it-IT",
     "German (DE)": "de-DE",
+    "Urdu (PK)": "ur-PK",
   };
 
   const speak = (text: string, agent: Agent | null) => {
@@ -314,7 +315,7 @@ const AIAgents = () => {
                     <SelectValue placeholder="Select voice" />
                   </SelectTrigger>
                   <SelectContent>
-                    {VAPI_VOICE_NAMES.map((v) => (
+                    {(editForm.language === "Urdu (PK)" ? URDU_VOICE_NAMES : VAPI_VOICE_NAMES).map((v) => (
                       <SelectItem key={v} value={v}>
                         {v}
                       </SelectItem>
@@ -328,7 +329,16 @@ const AIAgents = () => {
               <Label>Language</Label>
               <Select
                 value={editForm.language ?? ""}
-                onValueChange={(v) => setEditForm((f) => ({ ...f, language: v }))}
+                onValueChange={(v) => {
+                  const nowUrdu = v === "Urdu (PK)";
+                  setEditForm((f) => {
+                    const wasUrdu = f.language === "Urdu (PK)";
+                    if (nowUrdu === wasUrdu) return { ...f, language: v };
+                    // Vapi's English voices can't speak Urdu (and vice versa) — swap to a
+                    // sensible default in the newly-relevant list.
+                    return { ...f, language: v, voice: nowUrdu ? URDU_VOICE_NAMES[0] : VAPI_VOICE_NAMES[0] };
+                  });
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select language" />
@@ -342,6 +352,7 @@ const AIAgents = () => {
                     "French (FR)",
                     "Italian (IT)",
                     "German (DE)",
+                    "Urdu (PK)",
                   ].map((l) => (
                     <SelectItem key={l} value={l}>
                       {l}

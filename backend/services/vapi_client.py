@@ -162,10 +162,30 @@ _VAPI_VOICE_IDS = [
 _VAPI_VOICE_CANONICAL = {v.lower(): v for v in _VAPI_VOICE_IDS}
 _DEFAULT_VAPI_VOICE = "Elliot"
 
+# ElevenLabs premade voices — used for Urdu via the eleven_multilingual_v2 model, since
+# that model speaks many languages through any of its voice ids (the voice itself isn't
+# language-locked; ElevenLabs' own catalog has no Urdu-specific voice). Both ids confirmed
+# live against Vapi's POST /assistant. Display names ("Zara"/"Ali") are ours, not
+# ElevenLabs' own voice names — matches the style of _VAPI_VOICE_IDS above.
+_URDU_VOICE_IDS = {
+    "zara": "21m00Tcm4TlvDq8ikWAM",  # female (ElevenLabs "Rachel")
+    "ali": "pNInz6obpgDQGcFmaJgB",   # male (ElevenLabs "Adam")
+}
+_DEFAULT_URDU_VOICE = _URDU_VOICE_IDS["zara"]
 
-def _resolve_voice(voice: str | None) -> dict:
+
+def _resolve_voice(voice: str | None, language: str | None = None) -> dict:
     """Return a VAPI-compatible voice block using Vapi's own built-in voices.
-    Defaults to 'Elliot' if input is unknown (e.g. a legacy/retired name)."""
+    Defaults to 'Elliot' if input is unknown (e.g. a legacy/retired name).
+
+    Vapi's built-in voices only speak English, so Urdu instead gets an ElevenLabs
+    multilingual voice (see _URDU_VOICE_IDS) — 'voice' is looked up there first
+    (Zara/Ali); anything else falls back to the default Urdu voice. Requires an
+    ElevenLabs provider key configured on the VAPI account/dashboard."""
+    if _resolve_language(language) == "ur":
+        raw = (voice or "").strip().lower()
+        voice_id = _URDU_VOICE_IDS.get(raw, _DEFAULT_URDU_VOICE)
+        return {"provider": "11labs", "voiceId": voice_id, "model": "eleven_multilingual_v2"}
     raw = (voice or "").strip().lower()
     voice_id = _VAPI_VOICE_CANONICAL.get(raw, _DEFAULT_VAPI_VOICE)
     return {"provider": "vapi", "voiceId": voice_id}
@@ -185,8 +205,42 @@ def _resolve_language(language: str | None) -> str:
         "french (fr)":  "fr",
         "italian (it)": "it",
         "german (de)":  "de",
+        "urdu": "ur",
+        "urdu (pk)": "ur",
     }
     return lookup.get(raw.lower(), raw if len(raw) <= 5 else "en")
+
+
+def _resolve_transcriber(language: str | None) -> dict:
+    """Deepgram transcriber block. Urdu (added Feb 2026) is only available on Nova-3,
+    so that language pins the model explicitly; other languages keep Vapi's default."""
+    lang_code = _resolve_language(language)
+    transcriber = {"provider": "deepgram", "language": lang_code}
+    if lang_code == "ur":
+        transcriber["model"] = "nova-3"
+    return transcriber
+
+
+# GPT tends to reply in native Nastaliq script even when the agent's own prompt is
+# written in Roman Urdu, unless told not to — and the TTS voice needs the reply in
+# whatever script the prompt uses, so an unwanted script switch reads oddly out loud.
+# This is prepended (never stored in the agent's own system_prompt) so the prompt shown
+# in the UI stays exactly what the user wrote.
+_URDU_SCRIPT_DIRECTIVE = (
+    "ZAROORI HUKAM — SCRIPT (MUST FOLLOW): Aap hamesha apne HAR jawab sirf ROMAN URDU "
+    "(Latin/English alphabet) mein likhein — jaise \"Aap kaisay hain\", \"Shukriya\". "
+    "Urdu script (Nastaliq/Arabic letters) KABHI istemal na karein, chahe user Urdu script "
+    "mein type/bole. Ye rule sab se zyada zaroori hai aur har jawab par apply hota hai.\n\n---\n\n"
+)
+
+
+def apply_language_directive(system_prompt: str | None, language: str | None) -> str:
+    """Prepend any language-specific behavioral instruction the model needs beyond what
+    the agent's own prompt says (currently only Urdu needs one — see _URDU_SCRIPT_DIRECTIVE)."""
+    prompt = system_prompt or ""
+    if _resolve_language(language) == "ur":
+        return _URDU_SCRIPT_DIRECTIVE + prompt
+    return prompt
 
 
 import re
@@ -243,11 +297,12 @@ def build_fallback_assistant_payload() -> dict:
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
                              system_prompt: str = None, first_message: str = None,
                              tool_ids: list[str] | None = None) -> dict:
+    content = system_prompt or f"You are {name}, a helpful AI assistant."
     model: dict = {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": system_prompt or f"You are {name}, a helpful AI assistant."}
+            {"role": "system", "content": apply_language_directive(content, language)}
         ],
     }
     if tool_ids:
@@ -255,12 +310,9 @@ def build_assistant_payload(name: str, voice: str = None, language: str = "en",
 
     payload: dict = {
         "name": name,
-        "transcriber": {
-            "provider": "deepgram",
-            "language": _resolve_language(language),
-        },
+        "transcriber": _resolve_transcriber(language),
         "model": model,
-        "voice": _resolve_voice(voice),
+        "voice": _resolve_voice(voice, language),
         # Record every call and keep the structured transcript so the dashboard can
         # play the recording and render a speaker-attributed transcript.
         "artifactPlan": {

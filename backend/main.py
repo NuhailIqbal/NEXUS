@@ -78,17 +78,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class SubUserDeleteGuard(BaseHTTPMiddleware):
-    """Block DELETE requests from sub-users (team members). Owners only."""
+class TeamRoleGuard(BaseHTTPMiddleware):
+    """Enforce team-member access rules for non-owner accounts:
+      - DELETE is blocked for every sub-user (Member and Viewer alike) — owners only.
+      - Every other mutating method (POST/PUT/PATCH) is blocked for Viewer-role
+        sub-users — Viewers are read-only. Members can still create/edit.
+    Safe no-ops (dry-run "/test" endpoints) and unauthenticated/machine routes are
+    exempt since they don't touch a shared resource."""
 
-    EXEMPT_PATHS = {"/webhooks/", "/admin/"}
+    EXEMPT_PATHS = {"/webhooks/", "/admin/", "/auth/", "/tools/internal/", "/team/accept-invite"}
+    SAFE_SUFFIXES = ("/test",)  # dry-run endpoints — never persist anything
 
     async def dispatch(self, request: Request, call_next):
-        if request.method != "DELETE":
+        method = request.method
+        if method in ("GET", "HEAD", "OPTIONS"):
             return await call_next(request)
 
         path = request.url.path
-        if any(path.startswith(p) for p in self.EXEMPT_PATHS):
+        if any(path.startswith(p) for p in self.EXEMPT_PATHS) or path.endswith(self.SAFE_SUFFIXES):
             return await call_next(request)
 
         auth_header = request.headers.get("authorization", "")
@@ -99,19 +106,26 @@ class SubUserDeleteGuard(BaseHTTPMiddleware):
                 payload = _decode_token(token)
                 user_id = payload.get("sub")
                 if user_id:
-                    from routers.team import is_owner
-                    if not is_owner(user_id):
-                        return JSONResponse(
-                            status_code=403,
-                            content={"detail": "Sub-users cannot delete resources. Contact your account owner."},
-                        )
+                    from routers.team import get_user_role
+                    role = get_user_role(user_id)
+                    if role != "owner":
+                        if method == "DELETE":
+                            return JSONResponse(
+                                status_code=403,
+                                content={"detail": "Sub-users cannot delete resources. Contact your account owner."},
+                            )
+                        if role == "viewer":
+                            return JSONResponse(
+                                status_code=403,
+                                content={"detail": "Viewers have read-only access. Contact your account owner to make changes."},
+                            )
             except Exception:
                 pass
 
         return await call_next(request)
 
 
-app.add_middleware(SubUserDeleteGuard)
+app.add_middleware(TeamRoleGuard)
 
 
 # Health

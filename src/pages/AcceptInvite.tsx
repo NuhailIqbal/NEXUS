@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { api, setStoredToken } from "@/services/api";
 import Logo from "@/components/Logo";
 
-type InviteInfo = { email: string; owner_name: string };
+type InviteInfo = { email: string; role: string; owner_name: string };
 
 const AcceptInvite = () => {
   const [params] = useSearchParams();
@@ -87,8 +87,8 @@ const AcceptInvite = () => {
                 <div className="text-center mb-6">
                   <h1 className="text-2xl font-black text-foreground mb-2">You're invited!</h1>
                   <p className="text-muted-foreground text-sm">
-                    <b>{invite.owner_name}</b> invited <b>{invite.email}</b> to join their team.
-                    Set a password to finish joining.
+                    <b>{invite.owner_name}</b> invited <b>{invite.email}</b> to join their team as a{" "}
+                    <span className="capitalize">{invite.role}</span>. Set a password to finish joining.
                   </p>
                 </div>
                 <form className="space-y-4" onSubmit={handleSubmit}>

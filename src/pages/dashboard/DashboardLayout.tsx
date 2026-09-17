@@ -7,10 +7,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { api } from "@/services/api";
 import { toast } from "sonner";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
 import LowBalanceBanner from "@/components/LowBalanceBanner";
+import ViewerBanner from "@/components/ViewerBanner";
 import Logo from "@/components/Logo";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
 import {
@@ -79,12 +81,21 @@ const DashboardLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
+  const [roleLabel, setRoleLabel] = useState("Account Owner");
 
   useEffect(() => {
     if (!loading && !user) {
       navigate("/login");
     }
   }, [user, loading, navigate]);
+
+  useEffect(() => {
+    if (!user) return;
+    api.getMyRole().then(({ data }) => {
+      if (!data) return;
+      setRoleLabel(data.is_owner ? "Account Owner" : data.role === "viewer" ? "Viewer" : "Member");
+    });
+  }, [user]);
 
   if (loading || !user) {
     return (
@@ -103,7 +114,7 @@ const DashboardLayout = () => {
     .slice(0, 2)
     .join("")
     .toUpperCase();
-  const profile = { name: displayName, email: user.email ?? "", avatar: initials, role: "Member" };
+  const profile = { name: displayName, email: user.email ?? "", avatar: initials, role: roleLabel };
 
   const handleSignOut = async () => {
     await signOut();
@@ -188,6 +199,7 @@ const DashboardLayout = () => {
         </header>
 
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <ViewerBanner />
           <LowBalanceBanner />
           <Outlet />
         </main>
