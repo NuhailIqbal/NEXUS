@@ -7,6 +7,7 @@ from config import settings
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone, timedelta
+from routers.team import resolve_owner_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -520,7 +521,7 @@ def record_call_cost(
 
 @router.get("/status")
 async def get_billing_status(user=Depends(get_current_user)):
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     return {
         "data": {
             "is_active": billing.get("is_active", True),
@@ -555,7 +556,8 @@ async def list_payment_methods(user=Depends(get_current_user)):
     """Saved cards for this customer. Returns [] for users who never paid (no customer yet)."""
     if not settings.stripe_secret_key:
         return {"data": [], "error": None}
-    billing = get_or_create_billing(user["user_id"])
+    owner_id = resolve_owner_id(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     customer_id = billing.get("stripe_customer_id")
     if not customer_id:
         return {"data": [], "error": None}
@@ -563,7 +565,7 @@ async def list_payment_methods(user=Depends(get_current_user)):
         # Orphaned by a Stripe mode switch (test -> live) or a deleted customer. There's
         # nothing to list under an id that no longer exists — clear it so the next "Add
         # payment method" creates a fresh, valid customer instead of retrying this one.
-        supabase.table("billing").update({"stripe_customer_id": None}).eq("user_id", user["user_id"]).execute()
+        supabase.table("billing").update({"stripe_customer_id": None}).eq("user_id", owner_id).execute()
         return {"data": [], "error": None}
     try:
         default_pm = get_default_payment_method(customer_id)
@@ -595,7 +597,7 @@ async def create_setup_intent(user=Depends(get_current_user)):
             customer=customer_id,
             usage="off_session",
             payment_method_types=["card"],
-            metadata={"user_id": user["user_id"]},
+            metadata={"user_id": resolve_owner_id(user["user_id"])},
         )
         return {"data": {"client_secret": intent.client_secret}, "error": None}
     except Exception as e:
@@ -617,7 +619,7 @@ def _assert_pm_belongs_to(customer_id: str, payment_method_id: str) -> None:
 @router.post("/payment-methods/{payment_method_id}/default")
 async def set_default_payment_method(payment_method_id: str, user=Depends(get_current_user)):
     _require_stripe()
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     customer_id = billing.get("stripe_customer_id")
     if not customer_id or _stripe_customer_is_stale(customer_id):
         raise HTTPException(status_code=400, detail="No saved payment methods yet")
@@ -635,7 +637,7 @@ async def set_default_payment_method(payment_method_id: str, user=Depends(get_cu
 @router.delete("/payment-methods/{payment_method_id}")
 async def delete_payment_method(payment_method_id: str, user=Depends(get_current_user)):
     _require_stripe()
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     customer_id = billing.get("stripe_customer_id")
     if not customer_id or _stripe_customer_is_stale(customer_id):
         raise HTTPException(status_code=404, detail="Payment method not found")
@@ -673,7 +675,8 @@ class AutoRechargeUpdate(BaseModel):
 
 @router.put("/auto-recharge")
 async def update_auto_recharge(body: AutoRechargeUpdate, user=Depends(get_current_user)):
-    billing = get_or_create_billing(user["user_id"])
+    owner_id = resolve_owner_id(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     updates: dict = {"auto_recharge_enabled": bool(body.enabled)}
 
     if body.threshold is not None:
@@ -700,8 +703,8 @@ async def update_auto_recharge(body: AutoRechargeUpdate, user=Depends(get_curren
             )
         updates["auto_recharge_pending_at"] = None  # clear any stale in-flight marker
 
-    supabase.table("billing").update(updates).eq("user_id", user["user_id"]).execute()
-    fresh = get_or_create_billing(user["user_id"])
+    supabase.table("billing").update(updates).eq("user_id", owner_id).execute()
+    fresh = get_or_create_billing(owner_id)
     return {
         "data": {
             "auto_recharge_enabled": bool(fresh.get("auto_recharge_enabled")),
@@ -720,11 +723,11 @@ class RedeemPromo(BaseModel):
 
 @router.get("/promotions")
 async def list_promotions(user=Depends(get_current_user)):
-    """This user's applied promotions, for the Promotions tab."""
+    """This account's applied promotions, for the Promotions tab."""
     rows = (
         supabase.table("promo_code_redemptions")
         .select("id, promo_code_id, amount, created_at")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute().data or []
     )
@@ -746,6 +749,7 @@ async def list_promotions(user=Depends(get_current_user)):
 
 @router.post("/promotions/redeem")
 async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     code = (body.code or "").strip().upper()
     if not code:
         raise HTTPException(status_code=400, detail="Enter a promotion code")
@@ -764,7 +768,7 @@ async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
 
     already = (
         supabase.table("promo_code_redemptions").select("id")
-        .eq("promo_code_id", promo["id"]).eq("user_id", user["user_id"])
+        .eq("promo_code_id", promo["id"]).eq("user_id", owner_id)
         .limit(1).execute().data
     )
     if already:
@@ -779,7 +783,7 @@ async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
     try:
         supabase.table("promo_code_redemptions").insert({
             "promo_code_id": promo["id"],
-            "user_id": user["user_id"],
+            "user_id": owner_id,
             "amount": amount,
         }).execute()
     except Exception:
@@ -797,7 +801,7 @@ async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
     # kind="promo_code" (NOT "promo") so _has_promo_credit() still gates only the
     # automatic signup welcome bonus. grant_type="promo" keeps it spent-first + expiring.
     new_balance = credit_balance(
-        user["user_id"], amount, "promo_code",
+        owner_id, amount, "promo_code",
         f"Promotion code {code}",
         ref_id=str(promo["id"]), grant_type="promo", expires_at=expires,
     )
@@ -812,7 +816,7 @@ async def get_invoices(user=Depends(get_current_user)):
     if not settings.stripe_secret_key:
         return {"data": [], "error": None}
 
-    billing_res = supabase.table("billing").select("stripe_customer_id").eq("user_id", user["user_id"]).execute()
+    billing_res = supabase.table("billing").select("stripe_customer_id").eq("user_id", resolve_owner_id(user["user_id"])).execute()
     billing_row = billing_res.data[0] if billing_res.data else None
     if not billing_row or not billing_row.get("stripe_customer_id"):
         return {"data": [], "error": None}
@@ -865,18 +869,22 @@ def _stripe_customer_is_stale(customer_id: str) -> bool:
 
 
 def _get_or_create_stripe_customer(user) -> str:
-    billing = get_or_create_billing(user["user_id"])
+    """Stripe customer for this user's ACCOUNT (owner, if `user` is a team member) —
+    the wallet/billing row is shared account-wide, so the Stripe customer must be too."""
+    owner_id = resolve_owner_id(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     customer_id = billing.get("stripe_customer_id")
     if customer_id and not _stripe_customer_is_stale(customer_id):
         return customer_id
-    customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": user["user_id"]})
-    supabase.table("billing").update({"stripe_customer_id": customer.id}).eq("user_id", user["user_id"]).execute()
+    customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": owner_id})
+    supabase.table("billing").update({"stripe_customer_id": customer.id}).eq("user_id", owner_id).execute()
     return customer.id
 
 
 @router.post("/topup/checkout")
 async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
     """Create a Stripe Checkout session to load funds into the wallet balance."""
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
     amount = round(float(body.amount or 0), 2)
@@ -909,7 +917,7 @@ async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
             # Retain the card on the customer so it shows up under Payment methods and
             # can be charged unattended by auto-recharge.
             payment_intent_data={"setup_future_usage": "off_session"},
-            metadata={"type": "wallet_topup", "user_id": user["user_id"], "amount": f"{amount:.2f}"},
+            metadata={"type": "wallet_topup", "user_id": owner_id, "amount": f"{amount:.2f}"},
         )
         return {"data": {"checkout_url": session.url, "session_id": session.id}, "error": None}
     except Exception as e:
@@ -923,6 +931,7 @@ class TopupConfirm(BaseModel):
 @router.post("/topup/confirm")
 async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
     """Called when the user returns from Stripe. Verify payment, then credit the wallet."""
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
     try:
@@ -932,22 +941,22 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
 
     # Stripe SDK objects: attribute access + .to_dict() (dict() / .get() don't work).
     meta = session.metadata.to_dict() if session.metadata is not None else {}
-    # Ownership: the session belongs to this user if its metadata user_id matches,
-    # OR the session's Stripe customer is this user's own customer (the checkout was
-    # created with customer=<their customer>). The customer match is the robust proof;
-    # metadata is a fallback. Credit only ever goes to the authenticated user, and is
+    # Ownership: the session belongs to this user's ACCOUNT if its metadata user_id matches
+    # the owner id, OR the session's Stripe customer is this account's own customer (the
+    # checkout was created with customer=<their customer>). The customer match is the robust
+    # proof; metadata is a fallback. Credit only ever goes to the account's own wallet, and is
     # idempotent per session_id, so this can't be abused to credit someone else.
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     session_customer = getattr(session, "customer", None)
     owns = (
-        meta.get("user_id") == user["user_id"]
+        meta.get("user_id") == owner_id
         or (session_customer and session_customer == billing.get("stripe_customer_id"))
     )
     if not owns:
         logger.warning(
-            "topup_confirm ownership mismatch: session=%s meta_user=%s current_user=%s "
+            "topup_confirm ownership mismatch: session=%s meta_user=%s current_owner=%s "
             "session_customer=%s billing_customer=%s",
-            body.session_id, meta.get("user_id"), user["user_id"],
+            body.session_id, meta.get("user_id"), owner_id,
             session_customer, billing.get("stripe_customer_id"),
         )
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
@@ -956,7 +965,7 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
 
     amount = float(meta.get("amount") or 0)
     new_balance = credit_balance(
-        user["user_id"], amount, "topup",
+        owner_id, amount, "topup",
         f"Added ${amount:.2f} to balance", stripe_session_id=body.session_id,
     )
     return {"data": {"balance": new_balance, "added": amount}, "error": None}
@@ -969,7 +978,7 @@ async def list_transactions(user=Depends(get_current_user), include_calls: bool 
     query = (
         supabase.table("wallet_transactions")
         .select("id, kind, amount, balance_after, description, created_at")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
     )
     if not include_calls:
         query = query.neq("kind", "call")
@@ -983,7 +992,7 @@ async def get_call_costs(user=Depends(get_current_user)):
         supabase.table("conversations")
         # NB: the conversations table timestamps calls in `call_time`, not `created_at`.
         .select("id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, call_time")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("call_time", desc=True)
         .limit(50)
         .execute()

@@ -6,6 +6,7 @@ from dependencies import get_current_user
 from database import supabase
 from models.schemas import VoiceWidgetCreate, VoiceWidgetUpdate
 from config import settings
+from routers.team import resolve_owner_id
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/voice-widgets", tags=["Voice Widgets"])
@@ -16,7 +17,7 @@ async def list_widgets(user=Depends(get_current_user)):
     result = (
         supabase.table("voice_widgets")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -26,7 +27,7 @@ async def list_widgets(user=Depends(get_current_user)):
 @router.post("")
 async def create_widget(body: VoiceWidgetCreate, user=Depends(get_current_user)):
     row = body.model_dump()
-    row["user_id"] = user["user_id"]
+    row["user_id"] = resolve_owner_id(user["user_id"])
     result = supabase.table("voice_widgets").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
 
@@ -37,7 +38,7 @@ async def get_widget(widget_id: str, user=Depends(get_current_user)):
         supabase.table("voice_widgets")
         .select("*")
         .eq("id", widget_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -53,7 +54,7 @@ async def update_widget(widget_id: str, body: VoiceWidgetUpdate, user=Depends(ge
         supabase.table("voice_widgets")
         .update(updates)
         .eq("id", widget_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -61,7 +62,7 @@ async def update_widget(widget_id: str, body: VoiceWidgetUpdate, user=Depends(ge
 
 @router.delete("/{widget_id}")
 async def delete_widget(widget_id: str, user=Depends(get_current_user)):
-    supabase.table("voice_widgets").delete().eq("id", widget_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("voice_widgets").delete().eq("id", widget_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 

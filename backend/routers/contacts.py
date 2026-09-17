@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Query
 from dependencies import get_current_user
 from database import supabase
 from models.schemas import ContactCreate, ContactUpdate
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/contacts", tags=["Contacts"])
 
@@ -14,7 +15,8 @@ async def list_contacts(
     list_id: str = Query(None),
     user=Depends(get_current_user),
 ):
-    q = supabase.table("contacts").select("*").eq("user_id", user["user_id"])
+    owner_id = resolve_owner_id(user["user_id"])
+    q = supabase.table("contacts").select("*").eq("user_id", owner_id)
     if status:
         q = q.eq("status", status)
     if list_id:
@@ -26,7 +28,7 @@ async def list_contacts(
 @router.post("")
 async def create_contact(body: ContactCreate, user=Depends(get_current_user)):
     row = body.model_dump()
-    row["user_id"] = user["user_id"]
+    row["user_id"] = resolve_owner_id(user["user_id"])
     result = supabase.table("contacts").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
 
@@ -37,7 +39,7 @@ async def get_contact(contact_id: str, user=Depends(get_current_user)):
         supabase.table("contacts")
         .select("*")
         .eq("id", contact_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -53,7 +55,7 @@ async def update_contact(contact_id: str, body: ContactUpdate, user=Depends(get_
         supabase.table("contacts")
         .update(updates)
         .eq("id", contact_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -61,7 +63,8 @@ async def update_contact(contact_id: str, body: ContactUpdate, user=Depends(get_
 
 @router.delete("/{contact_id}")
 async def delete_contact(contact_id: str, user=Depends(get_current_user)):
-    supabase.table("contacts").delete().eq("id", contact_id).eq("user_id", user["user_id"]).execute()
+    owner_id = resolve_owner_id(user["user_id"])
+    supabase.table("contacts").delete().eq("id", contact_id).eq("user_id", owner_id).execute()
     return {"data": None, "error": None}
 
 
@@ -71,6 +74,7 @@ async def import_contacts_csv(
     list_id: str = Query(None),
     user=Depends(get_current_user),
 ):
+    owner_id = resolve_owner_id(user["user_id"])
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
 
@@ -82,7 +86,7 @@ async def import_contacts_csv(
             errors.append({"row": i, "error": "Missing name"})
             continue
         rows.append({
-            "user_id": user["user_id"],
+            "user_id": owner_id,
             "name": name,
             "phone": row.get("phone", "").strip() or None,
             "email": row.get("email", "").strip() or None,

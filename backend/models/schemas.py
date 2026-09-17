@@ -52,14 +52,17 @@ class ListUpdate(BaseModel):
 
 class TeamInvite(BaseModel):
     member_email: str
-    role: str = "member"
-    permissions: Optional[list[str]] = None
+    app_url: Optional[str] = None  # frontend origin, for building the invite-accept link
 
 
 class TeamMemberUpdate(BaseModel):
-    role: Optional[str] = None
     status: Optional[str] = None
-    permissions: Optional[list[str]] = None
+
+
+class TeamInviteAccept(BaseModel):
+    token: str
+    password: str
+    full_name: Optional[str] = None
 
 
 # ── Integrations ──

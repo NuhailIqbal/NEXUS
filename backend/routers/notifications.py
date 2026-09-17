@@ -4,6 +4,7 @@ from typing import Optional
 
 from dependencies import get_current_user
 from database import supabase
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -13,7 +14,7 @@ async def list_notifications(user=Depends(get_current_user)):
     rows = (
         supabase.table("notifications")
         .select("id, kind, title, body, read, created_at")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .limit(30)
         .execute()
@@ -30,7 +31,7 @@ class MarkRead(BaseModel):
 
 @router.post("/read")
 async def mark_read(body: MarkRead, user=Depends(get_current_user)):
-    q = supabase.table("notifications").update({"read": True}).eq("user_id", user["user_id"])
+    q = supabase.table("notifications").update({"read": True}).eq("user_id", resolve_owner_id(user["user_id"]))
     if body.id:
         q = q.eq("id", body.id)
     q.execute()

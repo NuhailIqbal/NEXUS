@@ -11,26 +11,13 @@ import { Loader2, UserPlus, X, Shield, Trash2 } from "lucide-react";
 type TeamMember = {
   id: string;
   member_email: string;
-  role: string;
   status: string;
-  permissions: string[];
   created_at: string;
 };
 
 type MyRole = {
-  role: string;
-  permissions: string[];
   is_owner: boolean;
 };
-
-const ALL_PERMISSIONS = [
-  { key: "create_agents", label: "Create AI Agents" },
-  { key: "create_campaigns", label: "Create Campaigns" },
-  { key: "create_contacts", label: "Create Contacts" },
-  { key: "view_conversations", label: "View Conversations" },
-  { key: "view_analytics", label: "View Analytics" },
-  { key: "manage_integrations", label: "Manage Integrations" },
-];
 
 const Profile = () => {
   const { user } = useAuth();
@@ -44,10 +31,6 @@ const Profile = () => {
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("member");
-  const [invitePerms, setInvitePerms] = useState<string[]>([
-    "create_agents", "create_campaigns", "create_contacts", "view_conversations", "view_analytics",
-  ]);
   const [inviting, setInviting] = useState(false);
 
   const fetchData = async () => {
@@ -88,14 +71,16 @@ const Profile = () => {
   const handleInvite = async () => {
     if (!inviteEmail) return toast.error("Enter an email");
     setInviting(true);
-    const { error } = await api.inviteTeamMember({
+    const { data, error } = await api.inviteTeamMember({
       member_email: inviteEmail,
-      role: inviteRole,
-      permissions: invitePerms,
     });
     setInviting(false);
     if (error) return toast.error(error);
-    toast.success(`Invited ${inviteEmail}`);
+    toast.success(
+      data?.email_sent
+        ? `Invite email sent to ${inviteEmail}`
+        : `${inviteEmail} added, but the invite email couldn't be sent — share the accept-invite link with them manually.`
+    );
     setInviteEmail("");
     setShowInvite(false);
     fetchData();
@@ -107,12 +92,6 @@ const Profile = () => {
     if (error) return toast.error(error);
     toast.success("Member removed");
     fetchData();
-  };
-
-  const togglePerm = (perm: string) => {
-    setInvitePerms(prev =>
-      prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]
-    );
   };
 
   const isOwner = myRole?.is_owner ?? true;
@@ -184,46 +163,14 @@ const Profile = () => {
         {showInvite && isOwner && (
           <div className="mb-4 rounded-xl border border-border bg-card p-5 space-y-4">
             <h3 className="text-sm font-semibold text-foreground">Invite a Collaborator</h3>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Email</Label>
-                <Input
-                  type="email"
-                  placeholder="colleague@company.com"
-                  value={inviteEmail}
-                  onChange={e => setInviteEmail(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Role</Label>
-                <select
-                  value={inviteRole}
-                  onChange={e => setInviteRole(e.target.value)}
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="member">Member (can create, cannot delete)</option>
-                  <option value="viewer">Viewer (read-only)</option>
-                </select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Permissions</Label>
-              <div className="flex flex-wrap gap-2">
-                {ALL_PERMISSIONS.map(p => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => togglePerm(p.key)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium border transition ${
-                      invitePerms.includes(p.key)
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background text-muted-foreground border-border hover:border-primary/50"
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
+            <div className="space-y-1.5">
+              <Label>Email</Label>
+              <Input
+                type="email"
+                placeholder="colleague@company.com"
+                value={inviteEmail}
+                onChange={e => setInviteEmail(e.target.value)}
+              />
             </div>
             <div className="flex justify-end">
               <Button onClick={handleInvite} disabled={inviting}>
@@ -240,8 +187,6 @@ const Profile = () => {
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3">Permissions</th>
                 <th className="px-4 py-3">Status</th>
                 {isOwner && <th className="px-4 py-3"></th>}
               </tr>
@@ -250,18 +195,6 @@ const Profile = () => {
               {team.map((m) => (
                 <tr key={m.id} className="border-t border-border bg-card/30">
                   <td className="px-4 py-3 font-medium text-foreground">{m.member_email}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant="outline" className="capitalize">{m.role}</Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {(m.permissions || []).map(p => (
-                        <span key={p} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {p.replace(/_/g, " ")}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
                   <td className="px-4 py-3">
                     <Badge variant={m.status === "Active" ? "default" : "secondary"}>{m.status}</Badge>
                   </td>
@@ -281,7 +214,7 @@ const Profile = () => {
               ))}
               {team.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={isOwner ? 5 : 4} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={isOwner ? 3 : 2} className="px-4 py-8 text-center text-muted-foreground">
                     No team members yet. {isOwner && "Click \"Add Collaborator\" to invite someone."}
                   </td>
                 </tr>

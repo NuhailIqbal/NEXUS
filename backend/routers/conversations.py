@@ -5,6 +5,7 @@ from database import supabase
 from typing import Optional
 from services import vapi_client
 from routers.webhooks import import_vapi_call
+from routers.team import resolve_owner_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
@@ -24,7 +25,7 @@ async def list_conversations(
     query = (
         supabase.table("conversations")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
     )
     if status:
         query = query.eq("status", status)
@@ -46,7 +47,7 @@ async def conversation_stats(user=Depends(get_current_user)):
     all_convos = (
         supabase.table("conversations")
         .select("status, duration, direction, qualified")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     data = all_convos.data or []
@@ -76,10 +77,11 @@ async def conversation_stats(user=Depends(get_current_user)):
 async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100, le=200)):
     """Pull recent VAPI calls (recording + transcript) for this user's agents into
     the conversations table. Idempotent: existing rows are updated, new ones inserted."""
+    owner_id = resolve_owner_id(user["user_id"])
     agents = (
         supabase.table("ai_agents")
         .select("id, vapi_assistant_id")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
         .data
         or []
@@ -99,7 +101,7 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
         try:
             # fetch the full call so the artifact (messages/recording/transcript) is present
             full = await vapi_client.get_call(c["id"])
-            res = import_vapi_call(full, user["user_id"])
+            res = import_vapi_call(full, owner_id)
             if res == "imported":
                 imported += 1
             elif res == "updated":
@@ -120,7 +122,7 @@ async def get_conversation(conversation_id: str, user=Depends(get_current_user))
         supabase.table("conversations")
         .select("*")
         .eq("id", conversation_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -135,7 +137,7 @@ async def get_transcript(conversation_id: str, user=Depends(get_current_user)):
         supabase.table("conversations")
         .select("id, transcript, transcript_messages, recording_url, stereo_recording_url, ai_summary")
         .eq("id", conversation_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -153,7 +155,7 @@ async def get_recording_url(conversation_id: str, user=Depends(get_current_user)
         supabase.table("conversations")
         .select("vapi_call_id, recording_url, stereo_recording_url")
         .eq("id", conversation_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
         .data
@@ -177,5 +179,5 @@ async def get_recording_url(conversation_id: str, user=Depends(get_current_user)
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(conversation_id: str, user=Depends(get_current_user)):
-    supabase.table("conversations").delete().eq("id", conversation_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("conversations").delete().eq("id", conversation_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}

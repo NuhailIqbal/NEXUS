@@ -3,6 +3,7 @@ from dependencies import get_current_user
 from database import supabase
 from pydantic import BaseModel
 from typing import Optional
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
 
@@ -59,7 +60,7 @@ async def list_flows(user=Depends(get_current_user)):
     result = (
         supabase.table("automation_flows")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -69,7 +70,7 @@ async def list_flows(user=Depends(get_current_user)):
 @router.post("/flows")
 async def create_flow(body: FlowCreate, user=Depends(get_current_user)):
     row = body.model_dump()
-    row["user_id"] = user["user_id"]
+    row["user_id"] = resolve_owner_id(user["user_id"])
     result = supabase.table("automation_flows").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
 
@@ -80,7 +81,7 @@ async def get_flow(flow_id: str, user=Depends(get_current_user)):
         supabase.table("automation_flows")
         .select("*")
         .eq("id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -91,6 +92,7 @@ async def get_flow(flow_id: str, user=Depends(get_current_user)):
 
 @router.patch("/flows/{flow_id}")
 async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -100,18 +102,18 @@ async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_u
             supabase.table("automation_flows")
             .select("definition")
             .eq("id", flow_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
         if current.data and current.data.get("definition"):
-            _snapshot_flow_version(user["user_id"], flow_id, current.data["definition"])
+            _snapshot_flow_version(owner_id, flow_id, current.data["definition"])
 
     result = (
         supabase.table("automation_flows")
         .update(updates)
         .eq("id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -119,11 +121,12 @@ async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_u
 
 @router.get("/flows/{flow_id}/versions")
 async def list_flow_versions(flow_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     owner = (
         supabase.table("automation_flows")
         .select("id")
         .eq("id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     if not owner.data:
@@ -133,7 +136,7 @@ async def list_flow_versions(flow_id: str, user=Depends(get_current_user)):
         supabase.table("automation_flow_versions")
         .select("id, version_number, created_at")
         .eq("flow_id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .order("version_number", desc=True)
         .execute()
     )
@@ -147,7 +150,7 @@ async def get_flow_version(flow_id: str, version_id: str, user=Depends(get_curre
         .select("*")
         .eq("id", version_id)
         .eq("flow_id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -158,12 +161,13 @@ async def get_flow_version(flow_id: str, version_id: str, user=Depends(get_curre
 
 @router.post("/flows/{flow_id}/versions/{version_id}/restore")
 async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     version = (
         supabase.table("automation_flow_versions")
         .select("definition")
         .eq("id", version_id)
         .eq("flow_id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -174,18 +178,18 @@ async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_c
         supabase.table("automation_flows")
         .select("definition")
         .eq("id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
     if current.data and current.data.get("definition"):
-        _snapshot_flow_version(user["user_id"], flow_id, current.data["definition"])
+        _snapshot_flow_version(owner_id, flow_id, current.data["definition"])
 
     result = (
         supabase.table("automation_flows")
         .update({"definition": version.data["definition"]})
         .eq("id", flow_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -193,7 +197,7 @@ async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_c
 
 @router.delete("/flows/{flow_id}")
 async def delete_flow(flow_id: str, user=Depends(get_current_user)):
-    supabase.table("automation_flows").delete().eq("id", flow_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("automation_flows").delete().eq("id", flow_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
@@ -210,7 +214,7 @@ async def list_runs(
     query = (
         supabase.table("automation_runs")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
     )
     if flow_id:
         query = query.eq("flow_id", flow_id)
@@ -226,7 +230,7 @@ async def runs_stats(user=Depends(get_current_user)):
     all_runs = (
         supabase.table("automation_runs")
         .select("status")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     data = all_runs.data or []
@@ -248,7 +252,7 @@ async def get_run(run_id: str, user=Depends(get_current_user)):
         supabase.table("automation_runs")
         .select("*")
         .eq("id", run_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )

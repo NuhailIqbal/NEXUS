@@ -204,9 +204,11 @@ export const api = {
   // Team
   getTeam: () => get("/team"),
   getMyRole: () => get("/team/me"),
-  inviteTeamMember: (data: any) => post("/team/invite", data),
+  inviteTeamMember: (data: any) => post("/team/invite", { ...data, app_url: window.location.origin }),
   updateTeamMember: (id: string, data: any) => patch(`/team/${id}`, data),
   removeTeamMember: (id: string) => del(`/team/${id}`),
+  getInvite: (token: string) => get(`/team/invite/${token}`),
+  acceptInvite: (data: { token: string; password: string; full_name?: string }) => post("/team/accept-invite", data),
 
   // Profile
   getProfile: () => get("/profile"),

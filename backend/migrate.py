@@ -435,6 +435,27 @@ def _ensure_columns(conn) -> None:
             verified_at timestamptz
         )''',
         'CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON public.referrals (referrer_id, created_at DESC)',
+        # team_members.role/status were constrained to a stale Admin/Manager/Editor/Viewer
+        # and Invited/Active/Removed set that the app never actually wrote — the invite API
+        # only ever sends lowercase 'member'/'viewer' and 'Active'/'Pending', so every invite
+        # hit these check constraints. Normalize any legacy rows and swap the constraints to
+        # match what the app writes.
+        "UPDATE public.team_members SET role = lower(role) WHERE role != lower(role)",
+        "ALTER TABLE public.team_members DROP CONSTRAINT IF EXISTS team_members_role_check",
+        "ALTER TABLE public.team_members ADD CONSTRAINT team_members_role_check "
+        "CHECK (role = ANY (ARRAY['member'::text, 'viewer'::text]))",
+        "ALTER TABLE public.team_members ALTER COLUMN role SET DEFAULT 'member'",
+        "UPDATE public.team_members SET status = 'Pending' WHERE status = 'Invited'",
+        "ALTER TABLE public.team_members DROP CONSTRAINT IF EXISTS team_members_status_check",
+        "ALTER TABLE public.team_members ADD CONSTRAINT team_members_status_check "
+        "CHECK (status = ANY (ARRAY['Pending'::text, 'Active'::text, 'Removed'::text]))",
+        "ALTER TABLE public.team_members ALTER COLUMN status SET DEFAULT 'Pending'",
+        # Invite-acceptance flow: a Pending invite (no matching account yet) carries a
+        # one-time token emailed to the invitee, which they redeem to set a password.
+        'ALTER TABLE public.team_members ADD COLUMN IF NOT EXISTS invite_token text',
+        'ALTER TABLE public.team_members ADD COLUMN IF NOT EXISTS invite_token_expires_at timestamptz',
+        'CREATE UNIQUE INDEX IF NOT EXISTS team_members_invite_token_idx '
+        'ON public.team_members (invite_token) WHERE invite_token IS NOT NULL',
     ]
     for stmt in statements:
         try:

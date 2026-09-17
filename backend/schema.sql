@@ -723,13 +723,15 @@ CREATE TABLE IF NOT EXISTS public.team_members (
     owner_id uuid NOT NULL,
     member_email text NOT NULL,
     member_user_id uuid,
-    role text DEFAULT 'Viewer'::text NOT NULL,
-    status text DEFAULT 'Invited'::text NOT NULL,
+    role text DEFAULT 'member'::text NOT NULL,
+    status text DEFAULT 'Pending'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     permissions jsonb DEFAULT '["create_agents", "create_campaigns", "create_contacts", "view_conversations", "view_analytics"]'::jsonb,
-    CONSTRAINT team_members_role_check CHECK ((role = ANY (ARRAY['Admin'::text, 'Manager'::text, 'Editor'::text, 'Viewer'::text]))),
-    CONSTRAINT team_members_status_check CHECK ((status = ANY (ARRAY['Invited'::text, 'Active'::text, 'Removed'::text])))
+    invite_token text,
+    invite_token_expires_at timestamp with time zone,
+    CONSTRAINT team_members_role_check CHECK ((role = ANY (ARRAY['member'::text, 'viewer'::text]))),
+    CONSTRAINT team_members_status_check CHECK ((status = ANY (ARRAY['Pending'::text, 'Active'::text, 'Removed'::text])))
 );
 
 
@@ -1295,6 +1297,13 @@ CREATE INDEX IF NOT EXISTS idx_team_members_member ON public.team_members USING 
 --
 
 CREATE INDEX IF NOT EXISTS idx_team_members_owner ON public.team_members USING btree (owner_id);
+
+
+--
+-- Name: team_members_invite_token_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS team_members_invite_token_idx ON public.team_members (invite_token) WHERE invite_token IS NOT NULL;
 
 
 --

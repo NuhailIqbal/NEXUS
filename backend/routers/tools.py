@@ -6,6 +6,7 @@ from database import supabase
 from models.schemas import ToolCreate, ToolUpdate
 from services import vapi_client
 from config import settings
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/tools", tags=["Tools"])
 
@@ -55,7 +56,7 @@ async def list_tools(user=Depends(get_current_user)):
     result = (
         supabase.table("tools")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -65,7 +66,7 @@ async def list_tools(user=Depends(get_current_user)):
 @router.post("")
 async def create_tool(body: ToolCreate, user=Depends(get_current_user)):
     row = {
-        "user_id": user["user_id"],
+        "user_id": resolve_owner_id(user["user_id"]),
         "name": body.name,
         "description": body.description,
         "status": "Active",
@@ -100,7 +101,7 @@ async def get_tool(tool_id: str, user=Depends(get_current_user)):
         supabase.table("tools")
         .select("*")
         .eq("id", tool_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -117,7 +118,7 @@ async def update_tool(tool_id: str, body: ToolUpdate, user=Depends(get_current_u
         supabase.table("tools")
         .select("vapi_tool_id, url, method, headers, parameters")
         .eq("id", tool_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -149,7 +150,7 @@ async def update_tool(tool_id: str, body: ToolUpdate, user=Depends(get_current_u
         supabase.table("tools")
         .update(db_updates)
         .eq("id", tool_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -161,7 +162,7 @@ async def delete_tool(tool_id: str, user=Depends(get_current_user)):
         supabase.table("tools")
         .select("vapi_tool_id")
         .eq("id", tool_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -172,7 +173,7 @@ async def delete_tool(tool_id: str, user=Depends(get_current_user)):
         except Exception:
             pass
 
-    supabase.table("tools").delete().eq("id", tool_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("tools").delete().eq("id", tool_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
@@ -182,7 +183,7 @@ async def test_tool(tool_id: str, user=Depends(get_current_user)):
         supabase.table("tools")
         .select("name, url, method, headers, parameters")
         .eq("id", tool_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )

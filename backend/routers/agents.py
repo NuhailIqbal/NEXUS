@@ -7,6 +7,7 @@ from services.openai_client import chat_reply, OpenAIError
 from services.agent_tools import provision_tools_for_agent
 from config import settings
 from routers.billing import get_or_create_billing
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -16,7 +17,7 @@ async def list_agents(user=Depends(get_current_user)):
     result = (
         supabase.table("ai_agents")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -38,14 +39,15 @@ def _compose_system_prompt(name: str, base_prompt: str | None, main_goal: str | 
 
 @router.post("")
 async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
-    billing = get_or_create_billing(user["user_id"])
+    owner_id = resolve_owner_id(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
 
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
 
     row = {
-        "user_id": user["user_id"],
+        "user_id": owner_id,
         "name": body.name,
         "voice": body.voice,
         "language": body.language,
@@ -60,7 +62,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     }
 
     if settings.vapi_api_key:
-        tool_ids = await provision_tools_for_agent(user["user_id"], body.selected_tool_keys or [])
+        tool_ids = await provision_tools_for_agent(owner_id, body.selected_tool_keys or [])
         # Standalone transferCall tool (shows up in VAPI's Tools library, attached by id)
         if body.transfer_number and body.transfer_number.strip():
             try:
@@ -93,7 +95,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     if agent and body.knowledge_text and body.knowledge_text.strip():
         try:
             supabase.table("agent_knowledge").insert({
-                "user_id": user["user_id"],
+                "user_id": owner_id,
                 "agent_id": agent["id"],
                 "type": "text",
                 "text_content": body.knowledge_text.strip(),
@@ -122,6 +124,7 @@ async def test_agent(body: AgentTest, user=Depends(get_current_user)):
 
 @router.post("/{agent_id}/sync-vapi")
 async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=400, detail="VAPI is not configured on this server.")
 
@@ -129,7 +132,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
         supabase.table("ai_agents")
         .select("*")
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -140,7 +143,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
     if agent.get("vapi_assistant_id"):
         return {"data": agent, "error": None}
 
-    tool_ids = await provision_tools_for_agent(user["user_id"], agent.get("selected_tool_keys") or [])
+    tool_ids = await provision_tools_for_agent(owner_id, agent.get("selected_tool_keys") or [])
     transfer_tool_id = agent.get("transfer_tool_id")
     if agent.get("transfer_number") and str(agent["transfer_number"]).strip() and not transfer_tool_id:
         try:
@@ -170,7 +173,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
         supabase.table("ai_agents")
         .update({"vapi_assistant_id": vapi_assistant_id, "transfer_tool_id": transfer_tool_id})
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -182,7 +185,7 @@ async def get_agent(agent_id: str, user=Depends(get_current_user)):
         supabase.table("ai_agents")
         .select("*")
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -191,6 +194,7 @@ async def get_agent(agent_id: str, user=Depends(get_current_user)):
 
 @router.patch("/{agent_id}")
 async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -199,7 +203,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         supabase.table("ai_agents")
         .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, name, selected_tool_keys")
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -221,7 +225,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
             supabase.table("ai_agents")
             .select("system_prompt, main_goal, name")
             .eq("id", agent_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
@@ -247,7 +251,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
             # recompute the full toolIds (preset tools + transfer tool) to avoid dropping them.
             if "system_prompt" in updates or "transfer_number" in updates:
                 preset_ids = await provision_tools_for_agent(
-                    user["user_id"],
+                    owner_id,
                     updates.get("selected_tool_keys") or agent.get("selected_tool_keys") or [],
                 )
                 transfer_tool_id = agent.get("transfer_tool_id")
@@ -300,7 +304,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         supabase.table("ai_agents")
         .update(db_updates)
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -312,7 +316,7 @@ async def delete_agent(agent_id: str, user=Depends(get_current_user)):
         supabase.table("ai_agents")
         .select("vapi_assistant_id, transfer_tool_id")
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -329,17 +333,18 @@ async def delete_agent(agent_id: str, user=Depends(get_current_user)):
         except Exception:
             pass
 
-    supabase.table("ai_agents").delete().eq("id", agent_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("ai_agents").delete().eq("id", agent_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
 @router.post("/{agent_id}/knowledge")
 async def upload_knowledge(agent_id: str, file: UploadFile = File(...), user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     agent_res = (
         supabase.table("ai_agents")
         .select("id, vapi_assistant_id")
         .eq("id", agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -348,7 +353,7 @@ async def upload_knowledge(agent_id: str, file: UploadFile = File(...), user=Dep
 
     content = await file.read()
 
-    storage_path = f"{user['user_id']}/agents/{agent_id}/{file.filename}"
+    storage_path = f"{owner_id}/agents/{agent_id}/{file.filename}"
     supabase.storage.from_("knowledge").upload(storage_path, content, {"content-type": file.content_type or "application/pdf"})
 
     vapi_file_id = None
@@ -360,7 +365,7 @@ async def upload_knowledge(agent_id: str, file: UploadFile = File(...), user=Dep
             raise HTTPException(status_code=502, detail=f"VAPI file upload error: {str(e)}")
 
     doc_row = {
-        "user_id": user["user_id"],
+        "user_id": owner_id,
         "agent_id": agent_id,
         "type": "document",
         "file_name": file.filename,

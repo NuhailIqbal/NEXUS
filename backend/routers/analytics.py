@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from dependencies import get_current_user
 from database import supabase
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -52,7 +53,7 @@ async def timeseries(
     convos = (
         supabase.table("conversations")
         .select("status, duration, call_time")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .gte("call_time", start.isoformat())
         .execute()
     )
@@ -93,7 +94,7 @@ async def channel_analytics(user=Depends(get_current_user)):
     convos = (
         supabase.table("conversations")
         .select("channel, status, duration")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     data = convos.data or []
@@ -113,10 +114,11 @@ async def channel_analytics(user=Depends(get_current_user)):
 
 @router.get("/campaign")
 async def campaign_analytics(user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     campaigns = (
         supabase.table("outbound_campaigns")
         .select("id, name, status, contacts_count, completed_count")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     rows = campaigns.data or []
@@ -125,7 +127,7 @@ async def campaign_analytics(user=Depends(get_current_user)):
     convos = (
         supabase.table("conversations")
         .select("campaign_id, qualified")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     qualified_by_campaign: dict[str, int] = {}
@@ -141,10 +143,11 @@ async def campaign_analytics(user=Depends(get_current_user)):
 
 @router.get("/agent")
 async def agent_analytics(user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     agents = (
         supabase.table("ai_agents")
         .select("id, name, status")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     agent_list = agents.data or []
@@ -154,7 +157,7 @@ async def agent_analytics(user=Depends(get_current_user)):
         convos = (
             supabase.table("conversations")
             .select("status, qualified")
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .eq("agent_id", agent["id"])
             .execute()
         )
@@ -174,17 +177,18 @@ async def agent_analytics(user=Depends(get_current_user)):
 
 @router.get("/overview")
 async def overview_analytics(user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     convos = (
         supabase.table("conversations")
         .select("status, direction, duration, call_time, qualified")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     data = convos.data or []
 
-    agents = supabase.table("ai_agents").select("id", count="exact").eq("user_id", user["user_id"]).execute()
-    campaigns = supabase.table("outbound_campaigns").select("id", count="exact").eq("user_id", user["user_id"]).execute()
-    contacts = supabase.table("contacts").select("id", count="exact").eq("user_id", user["user_id"]).execute()
+    agents = supabase.table("ai_agents").select("id", count="exact").eq("user_id", owner_id).execute()
+    campaigns = supabase.table("outbound_campaigns").select("id", count="exact").eq("user_id", owner_id).execute()
+    contacts = supabase.table("contacts").select("id", count="exact").eq("user_id", owner_id).execute()
 
     total = len(data)
     qualified = sum(1 for c in data if c.get("qualified"))

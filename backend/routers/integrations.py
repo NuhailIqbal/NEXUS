@@ -5,6 +5,7 @@ from models.schemas import IntegrationCreate, IntegrationUpdate
 from services.encryption import encrypt_config, decrypt_config, mask_config
 from services.integration_test import run_test
 from services import whitelist_service
+from routers.team import resolve_owner_id
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -14,7 +15,7 @@ async def list_integrations(user=Depends(get_current_user)):
     result = (
         supabase.table("integrations")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -31,7 +32,7 @@ async def list_integrations(user=Depends(get_current_user)):
 @router.post("")
 async def create_integration(body: IntegrationCreate, user=Depends(get_current_user)):
     row = {
-        "user_id": user["user_id"],
+        "user_id": resolve_owner_id(user["user_id"]),
         "name": body.name,
         "description": body.description,
         "status": body.status,
@@ -54,7 +55,7 @@ async def dnc_status(user=Depends(get_current_user)):
     Visibility only here — dial-time enforcement independently re-checks via
     whitelist_service.check_number on every call, so this endpoint can never itself be the
     thing that lets an unsuppressed number through."""
-    integration = await whitelist_service.find_whitelist_integration(user["user_id"])
+    integration = await whitelist_service.find_whitelist_integration(resolve_owner_id(user["user_id"]))
     return {
         "data": {
             "enabled": bool(integration and integration["status"] == "Active"),
@@ -70,7 +71,7 @@ async def get_integration(integration_id: str, user=Depends(get_current_user)):
         supabase.table("integrations")
         .select("*")
         .eq("id", integration_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -103,7 +104,7 @@ async def update_integration(integration_id: str, body: IntegrationUpdate, user=
         supabase.table("integrations")
         .update(updates)
         .eq("id", integration_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     updated = result.data[0] if result.data else None
@@ -118,7 +119,7 @@ async def update_integration(integration_id: str, body: IntegrationUpdate, user=
 
 @router.delete("/{integration_id}")
 async def delete_integration(integration_id: str, user=Depends(get_current_user)):
-    supabase.table("integrations").delete().eq("id", integration_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("integrations").delete().eq("id", integration_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
@@ -128,7 +129,7 @@ async def test_integration(integration_id: str, user=Depends(get_current_user)):
         supabase.table("integrations")
         .select("name, config_encrypted, status, category")
         .eq("id", integration_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )

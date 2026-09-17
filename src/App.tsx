@@ -17,6 +17,7 @@ import About from "./pages/About.tsx";
 import Login from "./pages/Login.tsx";
 import Register from "./pages/Register.tsx";
 import VerifyEmail from "./pages/VerifyEmail.tsx";
+import AcceptInvite from "./pages/AcceptInvite.tsx";
 import ResetPassword from "./pages/ResetPassword.tsx";
 import RequestAccess from "./pages/RequestAccess.tsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
@@ -84,6 +85,7 @@ const App = () => {
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/verify-email" element={<VerifyEmail />} />
+                <Route path="/accept-invite" element={<AcceptInvite />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/request-access" element={<RequestAccess />} />
                 <Route path="/privacy" element={<PrivacyPolicy />} />

@@ -21,6 +21,7 @@ from routers.billing import (
     debit_balance,
     PHONE_NUMBER_MONTHLY_COST,
 )
+from routers.team import resolve_owner_id
 
 CAMPAIGN_BATCH_SIZE = 20
 
@@ -141,7 +142,7 @@ async def list_phone_numbers(user=Depends(get_current_user)):
     result = (
         supabase.table("phone_numbers")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -231,13 +232,14 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
 
 def _phone_checkout_session(user, body) -> dict:
     """Create a Stripe Checkout session to pay for a Twilio number (low-balance fallback)."""
+    owner_id = resolve_owner_id(user["user_id"])
     stripe.api_key = settings.stripe_secret_key
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     customer_id = billing.get("stripe_customer_id")
     if not customer_id:
-        customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": user["user_id"]})
+        customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": owner_id})
         customer_id = customer.id
-        supabase.table("billing").update({"stripe_customer_id": customer_id}).eq("user_id", user["user_id"]).execute()
+        supabase.table("billing").update({"stripe_customer_id": customer_id}).eq("user_id", owner_id).execute()
 
     app_base = (settings.public_app_url or "http://localhost:8080").rstrip("/")
     base = getattr(body, "success_url", None) or f"{app_base}/dashboard/telephony/phone-numbers"
@@ -257,7 +259,7 @@ def _phone_checkout_session(user, body) -> dict:
         cancel_url=f"{base}?purchase=canceled",
         metadata={
             "type": "phone_number",
-            "user_id": user["user_id"],
+            "user_id": owner_id,
             "provider": "twilio",
             "area_code": body.area_code or "",
             "agent_id": body.agent_id or "",
@@ -269,20 +271,21 @@ def _phone_checkout_session(user, body) -> dict:
 
 @router.post("/phone-numbers")
 async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     provider = (body.provider or "vapi").lower()
 
     if provider == "twilio":
         # Enough balance → pay from the wallet and provision immediately.
-        if has_balance(user["user_id"], PHONE_NUMBER_MONTHLY_COST):
+        if has_balance(owner_id, PHONE_NUMBER_MONTHLY_COST):
             row = await _provision_phone_number(
-                user_id=user["user_id"],
+                user_id=owner_id,
                 provider="twilio",
                 agent_id=body.agent_id,
                 status=body.status or "Active",
                 monthly_cost=PHONE_NUMBER_MONTHLY_COST,
             )
             debit_balance(
-                user["user_id"], PHONE_NUMBER_MONTHLY_COST, "phone",
+                owner_id, PHONE_NUMBER_MONTHLY_COST, "phone",
                 f"Phone number {row.get('number')}", ref_id=row.get("id"),
             )
             return {"data": row, "error": None}
@@ -296,7 +299,7 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
 
     # VAPI numbers are free to provision.
     row = await _provision_phone_number(
-        user_id=user["user_id"],
+        user_id=owner_id,
         provider=provider,
         number=body.number,
         area_code=body.area_code,
@@ -316,6 +319,7 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
 
     No wallet debit here — the number was paid for directly via Stripe.
     """
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
     stripe.api_key = settings.stripe_secret_key
@@ -325,7 +329,7 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
         supabase.table("phone_numbers")
         .select("*")
         .eq("stripe_session_id", body.session_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     if existing.data:
@@ -340,17 +344,17 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
     meta = session.metadata.to_dict() if session.metadata is not None else {}
     # Ownership: metadata user_id match OR the session's Stripe customer is this user's
     # own customer (robust proof; metadata is the fallback).
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     session_customer = getattr(session, "customer", None)
     owns = (
-        meta.get("user_id") == user["user_id"]
+        meta.get("user_id") == owner_id
         or (session_customer and session_customer == billing.get("stripe_customer_id"))
     )
     if not owns:
         logger.warning(
-            "confirm_phone_checkout ownership mismatch: session=%s meta_user=%s current_user=%s "
+            "confirm_phone_checkout ownership mismatch: session=%s meta_user=%s current_owner=%s "
             "session_customer=%s billing_customer=%s",
-            body.session_id, meta.get("user_id"), user["user_id"],
+            body.session_id, meta.get("user_id"), owner_id,
             session_customer, billing.get("stripe_customer_id"),
         )
         raise HTTPException(status_code=403, detail="This checkout session does not belong to you")
@@ -358,7 +362,7 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
         raise HTTPException(status_code=402, detail="Payment not completed")
 
     row = await _provision_phone_number(
-        user_id=user["user_id"],
+        user_id=owner_id,
         provider="twilio",
         area_code=meta.get("area_code") or None,
         agent_id=meta.get("agent_id") or None,
@@ -371,6 +375,7 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
 
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -380,7 +385,7 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
             supabase.table("phone_numbers")
             .select("vapi_phone_id")
             .eq("id", number_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
@@ -392,7 +397,7 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
                     supabase.table("ai_agents")
                     .select("vapi_assistant_id")
                     .eq("id", updates["agent_id"])
-                    .eq("user_id", user["user_id"])
+                    .eq("user_id", owner_id)
                     .maybe_single()
                     .execute()
                 )
@@ -409,7 +414,7 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
         supabase.table("phone_numbers")
         .update(updates)
         .eq("id", number_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -417,11 +422,12 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
 
 @router.delete("/phone-numbers/{number_id}")
 async def release_phone_number(number_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     existing = (
         supabase.table("phone_numbers")
         .select("vapi_phone_id")
         .eq("id", number_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -430,7 +436,7 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
             await vapi_client.delete_phone_number(existing.data["vapi_phone_id"])
         except Exception:
             pass
-    supabase.table("phone_numbers").delete().eq("id", number_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("phone_numbers").delete().eq("id", number_id).eq("user_id", owner_id).execute()
     return {"data": None, "error": None}
 
 
@@ -438,19 +444,20 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
 
 @router.post("/call")
 async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="VAPI not configured")
 
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
-    if not check_call_quota(user["user_id"], "outbound"):
+    if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
     # DNC/litigation screening. No-op unless the user has an Active WhitelistData
     # integration; when they do, an unavailable check blocks the call rather than
     # risking a call to a suppressed number.
-    screen = await whitelist_service.check_number(user["user_id"], body.phone_number)
+    screen = await whitelist_service.check_number(owner_id, body.phone_number)
     if not screen["allowed"]:
         raise HTTPException(status_code=403, detail=screen["reason"] or "This number is suppressed.")
 
@@ -458,7 +465,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
         supabase.table("ai_agents")
         .select("vapi_assistant_id")
         .eq("id", body.agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -475,7 +482,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
             supabase.table("phone_numbers")
             .select("vapi_phone_id")
             .eq("id", body.phone_number_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
@@ -537,28 +544,30 @@ def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
 
 @router.get("/campaigns")
 async def list_campaigns(user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     result = (
         supabase.table("outbound_campaigns")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .order("created_at", desc=True)
         .execute()
     )
     campaigns = result.data or []
-    _enrich_campaign_progress(user["user_id"], campaigns)
+    _enrich_campaign_progress(owner_id, campaigns)
     return {"data": campaigns, "error": None}
 
 
 @router.post("/campaigns")
 async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     row = body.model_dump()
-    row["user_id"] = user["user_id"]
+    row["user_id"] = owner_id
 
     if body.list_id:
         contacts = (
             supabase.table("contacts")
             .select("id", count="exact")
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .eq("list_id", body.list_id)
             .execute()
         )
@@ -570,18 +579,19 @@ async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
 
 @router.get("/campaigns/{campaign_id}")
 async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     result = (
         supabase.table("outbound_campaigns")
         .select("*")
         .eq("id", campaign_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
     camp = result.data
-    _enrich_campaign_progress(user["user_id"], [camp])
+    _enrich_campaign_progress(owner_id, [camp])
     return {"data": camp, "error": None}
 
 
@@ -594,7 +604,7 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         supabase.table("outbound_campaigns")
         .update(updates)
         .eq("id", campaign_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -602,17 +612,18 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
 
 @router.delete("/campaigns/{campaign_id}")
 async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
-    supabase.table("outbound_campaigns").delete().eq("id", campaign_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("outbound_campaigns").delete().eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
 @router.post("/campaigns/{campaign_id}/start")
 async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     campaign = (
         supabase.table("outbound_campaigns")
         .select("*")
         .eq("id", campaign_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -635,10 +646,10 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not vapi_assistant_id:
         raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
 
-    billing = get_or_create_billing(user["user_id"])
+    billing = get_or_create_billing(owner_id)
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
-    if not check_call_quota(user["user_id"], "outbound"):
+    if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
     if not camp.get("list_id"):
@@ -650,7 +661,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     contacts = (
         supabase.table("contacts")
         .select("name, phone")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .eq("list_id", camp["list_id"])
         .not_.is_("phone", "null")
         .execute()
@@ -681,7 +692,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         # already handled, rather than aborting the whole campaign.
         if campaign_dnc_enabled:
             screen = await whitelist_service.check_number(
-                user["user_id"], contact["phone"], cached=cached_verdict
+                owner_id, contact["phone"], cached=cached_verdict
             )
             if not screen["allowed"]:
                 return {
@@ -713,7 +724,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         # Skipped entirely when this campaign has opted out of DNC screening.
         if campaign_dnc_enabled:
             keys = [whitelist_service.normalize_phone(c["phone"]) for c in batch]
-            cached = whitelist_service.cache_get_many(user["user_id"], [k for k in keys if k])
+            cached = whitelist_service.cache_get_many(owner_id, [k for k in keys if k])
         else:
             keys = [None] * len(batch)
             cached = {}
@@ -734,7 +745,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     }).eq("id", campaign_id).execute()
 
     if suppressed:
-        _notify_suppressed(user["user_id"], campaign_id, camp.get("name") or "Campaign", len(suppressed))
+        _notify_suppressed(owner_id, campaign_id, camp.get("name") or "Campaign", len(suppressed))
 
     return {
         "data": {
@@ -750,13 +761,13 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
 
 @router.post("/campaigns/{campaign_id}/pause")
 async def pause_campaign(campaign_id: str, user=Depends(get_current_user)):
-    supabase.table("outbound_campaigns").update({"status": "Paused"}).eq("id", campaign_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("outbound_campaigns").update({"status": "Paused"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": {"status": "Paused"}, "error": None}
 
 
 @router.post("/campaigns/{campaign_id}/resume")
 async def resume_campaign(campaign_id: str, user=Depends(get_current_user)):
-    supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": {"status": "Active"}, "error": None}
 
 
@@ -767,7 +778,7 @@ async def list_inbound_queues(user=Depends(get_current_user)):
     result = (
         supabase.table("inbound_queues")
         .select("*")
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("created_at", desc=True)
         .execute()
     )
@@ -776,6 +787,7 @@ async def list_inbound_queues(user=Depends(get_current_user)):
 
 @router.post("/inbound")
 async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="VAPI not configured")
     if not body.agent_id:
@@ -785,7 +797,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
         supabase.table("ai_agents")
         .select("vapi_assistant_id")
         .eq("id", body.agent_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .maybe_single()
         .execute()
     )
@@ -800,7 +812,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             supabase.table("phone_numbers")
             .select("vapi_phone_id")
             .eq("id", phone_number_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
@@ -810,7 +822,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"VAPI error assigning agent: {str(e)}")
-        supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", user["user_id"]).execute()
+        supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
     else:
         vapi_payload: dict = {"provider": "vapi", "assistantId": vapi_assistant_id}
         if body.area_code:
@@ -821,7 +833,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             raise HTTPException(status_code=502, detail=f"VAPI error provisioning number: {str(e)}")
 
         pn_row = {
-            "user_id": user["user_id"],
+            "user_id": owner_id,
             "number": vapi_result.get("number", ""),
             "vapi_phone_id": vapi_result.get("id"),
             "agent_id": body.agent_id,
@@ -833,7 +845,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             phone_number_id = pn_result.data[0]["id"]
 
     row = body.model_dump(exclude={"area_code"})
-    row["user_id"] = user["user_id"]
+    row["user_id"] = owner_id
     row["phone_number_id"] = phone_number_id
 
     result = supabase.table("inbound_queues").insert(row).execute()
@@ -846,7 +858,7 @@ async def get_inbound_queue(queue_id: str, user=Depends(get_current_user)):
         supabase.table("inbound_queues")
         .select("*")
         .eq("id", queue_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
@@ -857,6 +869,7 @@ async def get_inbound_queue(queue_id: str, user=Depends(get_current_user)):
 
 @router.patch("/inbound/{queue_id}")
 async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -866,15 +879,15 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
             supabase.table("inbound_queues")
             .select("agent_id, phone_number_id")
             .eq("id", queue_id)
-            .eq("user_id", user["user_id"])
+            .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         )
         agent_id = updates.get("agent_id") or (existing.data.get("agent_id") if existing.data else None)
         pn_id = updates.get("phone_number_id") or (existing.data.get("phone_number_id") if existing.data else None)
         if agent_id and pn_id:
-            phone = supabase.table("phone_numbers").select("vapi_phone_id").eq("id", pn_id).eq("user_id", user["user_id"]).maybe_single().execute()
-            agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", user["user_id"]).maybe_single().execute()
+            phone = supabase.table("phone_numbers").select("vapi_phone_id").eq("id", pn_id).eq("user_id", owner_id).maybe_single().execute()
+            agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", owner_id).maybe_single().execute()
             vapi_phone_id = phone.data.get("vapi_phone_id") if phone.data else None
             vapi_assistant_id = agent.data.get("vapi_assistant_id") if agent.data else None
             if vapi_phone_id and vapi_assistant_id:
@@ -882,13 +895,13 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
                     await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": vapi_assistant_id})
                 except Exception as e:
                     raise HTTPException(status_code=502, detail=f"VAPI sync error: {str(e)}")
-            supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", user["user_id"]).execute()
+            supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", owner_id).execute()
 
     result = (
         supabase.table("inbound_queues")
         .update(updates)
         .eq("id", queue_id)
-        .eq("user_id", user["user_id"])
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -896,5 +909,5 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
 
 @router.delete("/inbound/{queue_id}")
 async def delete_inbound_queue(queue_id: str, user=Depends(get_current_user)):
-    supabase.table("inbound_queues").delete().eq("id", queue_id).eq("user_id", user["user_id"]).execute()
+    supabase.table("inbound_queues").delete().eq("id", queue_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
