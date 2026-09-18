@@ -162,33 +162,46 @@ _VAPI_VOICE_IDS = [
 _VAPI_VOICE_CANONICAL = {v.lower(): v for v in _VAPI_VOICE_IDS}
 _DEFAULT_VAPI_VOICE = "Elliot"
 
-# ElevenLabs premade voices — used for Urdu via the eleven_multilingual_v2 model, since
-# that model speaks many languages through any of its voice ids (the voice itself isn't
-# language-locked; ElevenLabs' own catalog has no Urdu-specific voice). Both ids confirmed
-# live against Vapi's POST /assistant. Display names ("Zara"/"Ali") are ours, not
-# ElevenLabs' own voice names — matches the style of _VAPI_VOICE_IDS above.
+# ElevenLabs premade voices — used for Urdu (and any other non-English language) via
+# the eleven_multilingual_v2 model, since that model speaks many languages through any
+# of its voice ids (the voice itself isn't language-locked; ElevenLabs' own catalog has
+# no Urdu-specific voice). Both ids confirmed live against Vapi's POST /assistant.
+# Display names ("Zara"/"Ali") are ours, not ElevenLabs' own voice names — matches the
+# style of _VAPI_VOICE_IDS above. This is also the same catalog the AI Voices browsing
+# page (src/pages/dashboard/AIVoices.tsx) offers, so both stay in sync.
 _URDU_VOICE_IDS = {
     "zara": "21m00Tcm4TlvDq8ikWAM",  # female (ElevenLabs "Rachel")
     "ali": "pNInz6obpgDQGcFmaJgB",   # male (ElevenLabs "Adam")
 }
 _DEFAULT_URDU_VOICE = _URDU_VOICE_IDS["zara"]
 
+# Every voice name the app recognizes, regardless of which language an agent is set
+# to — lets an agent's voice be picked independently from the full catalog (matching
+# the AI Voices page) rather than only from whichever short list matched its language.
+_VOICE_REGISTRY: dict[str, dict] = {
+    name.lower(): {"provider": "vapi", "voiceId": name} for name in _VAPI_VOICE_IDS
+}
+_VOICE_REGISTRY.update({
+    name: {"provider": "11labs", "voiceId": voice_id, "model": "eleven_multilingual_v2"}
+    for name, voice_id in _URDU_VOICE_IDS.items()
+})
+
 
 def _resolve_voice(voice: str | None, language: str | None = None) -> dict:
-    """Return a VAPI-compatible voice block using Vapi's own built-in voices.
-    Defaults to 'Elliot' if input is unknown (e.g. a legacy/retired name).
+    """Return a VAPI-compatible voice block by looking up 'voice' in the full catalog
+    (Vapi's own English voices + the ElevenLabs multilingual ones) — independent of
+    'language', so any voice can be paired with any language the UI offers.
 
-    Vapi's built-in voices only speak English, so Urdu instead gets an ElevenLabs
-    multilingual voice (see _URDU_VOICE_IDS) — 'voice' is looked up there first
-    (Zara/Ali); anything else falls back to the default Urdu voice. Requires an
-    ElevenLabs provider key configured on the VAPI account/dashboard."""
-    if _resolve_language(language) == "ur":
-        raw = (voice or "").strip().lower()
-        voice_id = _URDU_VOICE_IDS.get(raw, _DEFAULT_URDU_VOICE)
-        return {"provider": "11labs", "voiceId": voice_id, "model": "eleven_multilingual_v2"}
+    If 'voice' is blank/unrecognized, fall back to a sensible default for the
+    language: Vapi's 'Elliot' for English, the ElevenLabs 'Zara' for anything else
+    (Vapi's own voices can't speak non-English languages). Requires an ElevenLabs
+    provider key configured on the VAPI account/dashboard for the ElevenLabs voices."""
     raw = (voice or "").strip().lower()
-    voice_id = _VAPI_VOICE_CANONICAL.get(raw, _DEFAULT_VAPI_VOICE)
-    return {"provider": "vapi", "voiceId": voice_id}
+    if raw in _VOICE_REGISTRY:
+        return dict(_VOICE_REGISTRY[raw])
+    if _resolve_language(language) in ("en", "en-US", "en-GB"):
+        return {"provider": "vapi", "voiceId": _DEFAULT_VAPI_VOICE}
+    return {"provider": "11labs", "voiceId": _DEFAULT_URDU_VOICE, "model": "eleven_multilingual_v2"}
 
 
 def _resolve_language(language: str | None) -> str:
@@ -198,6 +211,8 @@ def _resolve_language(language: str | None) -> str:
     raw = language.strip()
     # 'English (US)' -> 'en-US' (Deepgram accepts en, en-US, etc.)
     lookup = {
+        "english": "en",
+        # Kept for agents saved before the language list was simplified to just "English".
         "english (us)": "en-US",
         "english (uk)": "en-GB",
         "spanish (es)": "es",
@@ -207,16 +222,20 @@ def _resolve_language(language: str | None) -> str:
         "german (de)":  "de",
         "urdu": "ur",
         "urdu (pk)": "ur",
+        "multilingual": "multi",
     }
     return lookup.get(raw.lower(), raw if len(raw) <= 5 else "en")
 
 
 def _resolve_transcriber(language: str | None) -> dict:
     """Deepgram transcriber block. Urdu (added Feb 2026) is only available on Nova-3,
-    so that language pins the model explicitly; other languages keep Vapi's default."""
+    so that language pins the model explicitly; other languages keep Vapi's default.
+    "multi" (Multilingual — auto-detects/code-switches between languages within a call)
+    is also pinned to Nova-3 for its broader per-language coverage — confirmed live
+    against Vapi's POST /assistant that "multi" is accepted on both Nova-2 and Nova-3."""
     lang_code = _resolve_language(language)
     transcriber = {"provider": "deepgram", "language": lang_code}
-    if lang_code == "ur":
+    if lang_code in ("ur", "multi"):
         transcriber["model"] = "nova-3"
     return transcriber
 
@@ -234,12 +253,27 @@ _URDU_SCRIPT_DIRECTIVE = (
 )
 
 
+# Multilingual agents must follow the caller's language rather than a single fixed
+# one — without this, GPT tends to default to English regardless of what the caller
+# actually speaks.
+_MULTILINGUAL_DIRECTIVE = (
+    "IMPORTANT — LANGUAGE (MUST FOLLOW): Detect the language the caller is speaking "
+    "and always reply in that same language and script — do not switch languages on "
+    "your own. If the caller's language isn't clear yet, default to English until "
+    "they make it clear, then continue in their language for the rest of the call.\n\n---\n\n"
+)
+
+
 def apply_language_directive(system_prompt: str | None, language: str | None) -> str:
     """Prepend any language-specific behavioral instruction the model needs beyond what
-    the agent's own prompt says (currently only Urdu needs one — see _URDU_SCRIPT_DIRECTIVE)."""
+    the agent's own prompt says (Urdu needs a script directive; Multilingual needs a
+    caller-language-matching directive)."""
     prompt = system_prompt or ""
-    if _resolve_language(language) == "ur":
+    lang_code = _resolve_language(language)
+    if lang_code == "ur":
         return _URDU_SCRIPT_DIRECTIVE + prompt
+    if lang_code == "multi":
+        return _MULTILINGUAL_DIRECTIVE + prompt
     return prompt
 
 

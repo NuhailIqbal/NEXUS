@@ -2,38 +2,78 @@ import { useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-const STATUS_DEFAULT = "All statuses";
-const CATEGORY_DEFAULT = "All categories";
-const DATE_DEFAULT = "Last 30 days";
+export const STATUS_DEFAULT = "All statuses";
+export const CATEGORY_DEFAULT = "All categories";
+export const DATE_DEFAULT = "All time";
+export const DATE_RANGE_OPTIONS = ["All time", "Last 7 days", "Last 30 days", "This year"];
 
 export function SmartFilters({
   placeholder = "Search…",
   value,
   onChange,
   extra,
+  status,
+  onStatusChange,
+  statusOptions = ["Active", "Inactive", "Paused"],
+  category,
+  onCategoryChange,
+  categoryOptions,
+  dateRange,
+  onDateRangeChange,
+  dateRangeOptions = DATE_RANGE_OPTIONS,
 }: {
   placeholder?: string;
   value?: string;
   onChange?: (v: string) => void;
   extra?: React.ReactNode;
+  status?: string;
+  onStatusChange?: (v: string) => void;
+  statusOptions?: string[];
+  category?: string;
+  onCategoryChange?: (v: string) => void;
+  categoryOptions?: string[];
+  dateRange?: string;
+  onDateRangeChange?: (v: string) => void;
+  dateRangeOptions?: string[];
 }) {
   const [advanced, setAdvanced] = useState(false);
-  const [status, setStatus] = useState(STATUS_DEFAULT);
-  const [category, setCategory] = useState(CATEGORY_DEFAULT);
-  const [dateRange, setDateRange] = useState(DATE_DEFAULT);
+  // Uncontrolled fallback so pages that don't wire status/category/dateRange
+  // (e.g. Automation, which has no category) keep working unchanged.
+  const [localStatus, setLocalStatus] = useState(STATUS_DEFAULT);
+  const [localCategory, setLocalCategory] = useState(CATEGORY_DEFAULT);
+  const [localDateRange, setLocalDateRange] = useState(DATE_DEFAULT);
+
+  const effectiveStatus = status ?? localStatus;
+  const effectiveCategory = category ?? localCategory;
+  const effectiveDateRange = dateRange ?? localDateRange;
+  const showCategory = categoryOptions !== undefined;
+
+  const setStatus = (v: string) => {
+    setLocalStatus(v);
+    onStatusChange?.(v);
+  };
+  const setCategory = (v: string) => {
+    setLocalCategory(v);
+    onCategoryChange?.(v);
+  };
+  const setDateRange = (v: string) => {
+    setLocalDateRange(v);
+    onDateRangeChange?.(v);
+  };
 
   const hasFilters =
     (value ?? "").length > 0 ||
-    status !== STATUS_DEFAULT ||
-    category !== CATEGORY_DEFAULT ||
-    dateRange !== DATE_DEFAULT;
+    effectiveStatus !== STATUS_DEFAULT ||
+    effectiveCategory !== CATEGORY_DEFAULT ||
+    effectiveDateRange !== DATE_DEFAULT;
 
   const clearAll = () => {
     onChange?.("");
     setStatus(STATUS_DEFAULT);
-    setCategory(CATEGORY_DEFAULT);
+    if (showCategory) setCategory(CATEGORY_DEFAULT);
     setDateRange(DATE_DEFAULT);
   };
 
@@ -72,36 +112,41 @@ export function SmartFilters({
         {extra}
       </div>
       {advanced && (
-        <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-3">
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option>{STATUS_DEFAULT}</option>
-            <option>Active</option>
-            <option>Inactive</option>
-            <option>Paused</option>
-          </select>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option>{CATEGORY_DEFAULT}</option>
-            <option>Lead Qualifying</option>
-            <option>Lead Verification</option>
-            <option>Customer Support</option>
-          </select>
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option>{DATE_DEFAULT}</option>
-            <option>Last 7 days</option>
-            <option>This year</option>
-          </select>
+        <div className={cn("mt-3 grid gap-2 border-t border-border pt-3", showCategory ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+          <Select value={effectiveStatus} onValueChange={setStatus}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={STATUS_DEFAULT}>{STATUS_DEFAULT}</SelectItem>
+              {statusOptions.map((s) => (
+                <SelectItem key={s} value={s}>{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {showCategory && (
+            <Select value={effectiveCategory} onValueChange={setCategory}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={CATEGORY_DEFAULT}>{CATEGORY_DEFAULT}</SelectItem>
+                {(categoryOptions ?? []).map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Select value={effectiveDateRange} onValueChange={setDateRange}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {dateRangeOptions.map((d) => (
+                <SelectItem key={d} value={d}>{d}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
     </div>

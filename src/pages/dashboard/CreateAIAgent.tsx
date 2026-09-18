@@ -9,8 +9,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
-import { VAPI_VOICE_NAMES, URDU_VOICE_NAMES } from "@/lib/voices";
+import { cn, isE164 } from "@/lib/utils";
+import { ALL_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 
@@ -62,7 +62,7 @@ const CreateAIAgent = () => {
     setup: false, knowledge: false, prompt: false, testing: false,
   });
   const [form, setForm] = useState<FormState>({
-    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English (US)", voice: "Elliot",
+    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English", voice: "Elliot",
     knowledgeText: "",
     knowledgeFiles: [],
     systemPrompt: "", greeting: "",
@@ -83,6 +83,7 @@ const CreateAIAgent = () => {
       if (!form.agentName.trim()) { toast.error("Agent name is required"); return false; }
       if (!form.mainGoal.trim()) { toast.error("Main goal is required"); return false; }
       if (form.transferEnabled && !form.transferNumber.trim()) { toast.error("Enter a transfer number or turn off call transfer"); return false; }
+      if (form.transferEnabled && !isE164(form.transferNumber)) { toast.error("Transfer number must be in international format, e.g. +15551234567"); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
     if (currentStep.key === "knowledge") {
@@ -291,17 +292,8 @@ export default CreateAIAgent;
 function StepSetup({
   form, update,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
-  const isUrdu = form.language === "Urdu (PK)";
-  const voiceOptions: readonly string[] = isUrdu ? URDU_VOICE_NAMES : VAPI_VOICE_NAMES;
+  const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
-
-  const updateLanguage = (language: string) => {
-    const nowUrdu = language === "Urdu (PK)";
-    update("language", language);
-    // Vapi's English voices can't speak Urdu (and vice versa) — swap to a sensible
-    // default in the newly-relevant list rather than leaving a mismatched voice selected.
-    if (nowUrdu !== isUrdu) update("voice", nowUrdu ? URDU_VOICE_NAMES[0] : VAPI_VOICE_NAMES[0]);
-  };
 
   const analyzeWebsite = async () => {
     if (!form.website.trim()) return toast.error("Enter a website URL first");
@@ -429,18 +421,14 @@ function StepSetup({
         <SectionTitle icon={<Sparkles className="h-4 w-4 text-primary" />}>Communication</SectionTitle>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Language">
-            <Select value={form.language} onValueChange={updateLanguage}>
+            <Select value={form.language} onValueChange={(v) => update("language", v)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="English (US)">English (US)</SelectItem>
-                <SelectItem value="English (UK)">English (UK)</SelectItem>
-                <SelectItem value="Spanish (ES)">Spanish (ES)</SelectItem>
-                <SelectItem value="French (FR)">French (FR)</SelectItem>
-                <SelectItem value="German (DE)">German (DE)</SelectItem>
-                <SelectItem value="Italian (IT)">Italian (IT)</SelectItem>
-                <SelectItem value="Urdu (PK)">Urdu (PK)</SelectItem>
+                <SelectItem value="English">English</SelectItem>
+                <SelectItem value="Urdu">Urdu</SelectItem>
+                <SelectItem value="Multilingual">Multilingual (auto-detect)</SelectItem>
               </SelectContent>
             </Select>
           </Field>

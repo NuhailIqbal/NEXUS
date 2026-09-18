@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -14,6 +15,18 @@ from routers.team import resolve_owner_id
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/agents", tags=["Agents"])
+
+_E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def _validate_transfer_number(number: str | None) -> None:
+    """VAPI's transferCall tool 400s on anything that isn't E.164 — catch it here
+    with a clear message instead of surfacing a raw VAPI error after the fact."""
+    if number and number.strip() and not _E164_RE.match(number.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Transfer number must be in international format, e.g. +15551234567",
+        )
 
 
 @router.get("")
@@ -47,6 +60,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     billing = get_or_create_billing(owner_id)
     if not billing.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    _validate_transfer_number(body.transfer_number)
 
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
 
@@ -222,6 +236,8 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+    if "transfer_number" in updates:
+        _validate_transfer_number(updates["transfer_number"])
 
     agent_res = (
         supabase.table("ai_agents")

@@ -49,7 +49,6 @@ import {
   AnalyticsChannel,
   AnalyticsCampaign,
   AnalyticsScenario,
-  AnalyticsFlow,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
 
 
@@ -111,7 +110,6 @@ const App = () => {
                   <Route path="analytics/channel" element={<AnalyticsChannel />} />
                   <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
                   <Route path="analytics/scenario" element={<AnalyticsScenario />} />
-                  <Route path="analytics/flow" element={<AnalyticsFlow />} />
                   <Route path="billing" element={<BillingLayout />}>
                     <Route index element={<BillingOverview />} />
                     <Route path="payment-methods" element={<PaymentMethods />} />

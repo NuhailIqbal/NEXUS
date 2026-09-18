@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
   LayoutDashboard, Bot, Mic, Database,
@@ -67,7 +67,6 @@ const NAV: NavItem[] = [
       { label: "Channel", to: "/dashboard/analytics/channel" },
       { label: "Campaign", to: "/dashboard/analytics/campaign" },
       { label: "Scenario", to: "/dashboard/analytics/scenario" },
-      { label: "Flow Statistics", to: "/dashboard/analytics/flow" },
     ],
   },
   { label: "Integrations", to: "/dashboard/integrations", icon: Plug },
@@ -89,13 +88,31 @@ const DashboardLayout = () => {
     }
   }, [user, loading, navigate]);
 
+  // True once this session has observed itself as a sub-user (Member/Viewer).
+  // If a later poll suddenly resolves as owner, that's not a legitimate role change —
+  // it means the account owner removed this collaborator, so force them out.
+  const wasSubUserRef = useRef(false);
+
   useEffect(() => {
     if (!user) return;
-    api.getMyRole().then(({ data }) => {
-      if (!data) return;
-      setRoleLabel(data.is_owner ? "Account Owner" : data.role === "viewer" ? "Viewer" : "Member");
-    });
-  }, [user]);
+
+    const pollRole = () => {
+      api.getMyRole().then(({ data }) => {
+        if (!data) return;
+        setRoleLabel(data.is_owner ? "Account Owner" : data.role === "viewer" ? "Viewer" : "Member");
+        if (!data.is_owner) {
+          wasSubUserRef.current = true;
+        } else if (wasSubUserRef.current) {
+          toast.error("You've been removed from this team by the account owner.");
+          signOut().then(() => navigate("/login"));
+        }
+      });
+    };
+
+    pollRole();
+    const interval = setInterval(pollRole, 20000);
+    return () => clearInterval(interval);
+  }, [user, signOut, navigate]);
 
   if (loading || !user) {
     return (

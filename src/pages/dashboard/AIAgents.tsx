@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Settings, Copy, Trash2, PlayCircle } from "lucide-react";
 import { LiveVoiceModal } from "@/components/dashboard/LiveVoiceModal";
-import { VAPI_VOICE_NAMES, URDU_VOICE_NAMES } from "@/lib/voices";
+import { ALL_VOICE_NAMES } from "@/lib/voices";
+import { isE164 } from "@/lib/utils";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { PageHeader } from "@/components/dashboard/PageHeader";
-import { SmartFilters } from "@/components/dashboard/SmartFilters";
+import { SmartFilters, STATUS_DEFAULT, CATEGORY_DEFAULT, DATE_DEFAULT } from "@/components/dashboard/SmartFilters";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +18,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,14 +57,22 @@ type Agent = {
 const AIAgents = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState(STATUS_DEFAULT);
+  const [categoryFilter, setCategoryFilter] = useState(CATEGORY_DEFAULT);
+  const [dateRangeFilter, setDateRangeFilter] = useState(DATE_DEFAULT);
   const [agents, setAgents] = useState<Agent[]>([]);
 
   // Modal state
   const [testAgent, setTestAgent] = useState<Agent | null>(null);
   const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null);
   const [editForm, setEditForm] = useState<Partial<Agent>>({});
+  const [pendingDelete, setPendingDelete] = useState<Agent | null>(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState<Agent | null>(null);
 
   const LANG_MAP: Record<string, string> = {
+    "English": "en-US",
+    "Urdu": "ur-PK",
+    // Kept for agents saved before the language list was simplified.
     "English (US)": "en-US",
     "English (UK)": "en-GB",
     "Spanish (ES)": "es-ES",
@@ -101,14 +120,18 @@ const AIAgents = () => {
     load();
   }, []);
 
-  const remove = async (a: Agent) => {
-    const { error } = await api.deleteAgent(a.id);
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { error } = await api.deleteAgent(pendingDelete.id);
+    setPendingDelete(null);
     if (error) return toast.error(error);
     toast.success("Agent deleted");
     load();
   };
 
-  const duplicate = async (a: Agent) => {
+  const confirmDuplicate = async () => {
+    if (!pendingDuplicate) return;
+    const a = pendingDuplicate;
     const { error } = await api.createAgent({
       name: `${a.name} (Copy)`,
       voice: a.voice,
@@ -118,6 +141,7 @@ const AIAgents = () => {
       system_prompt: a.system_prompt,
       first_message: a.first_message,
     });
+    setPendingDuplicate(null);
     if (error) return toast.error(error);
     toast.success("Agent duplicated");
     load();
@@ -143,6 +167,10 @@ const AIAgents = () => {
 
   const saveSettings = async () => {
     if (!settingsAgent) return;
+    const transferNumber = (editForm.transfer_number ?? "").trim();
+    if (transferNumber && !isE164(transferNumber)) {
+      return toast.error("Transfer number must be in international format, e.g. +15551234567");
+    }
     const { error } = await api.updateAgent(settingsAgent.id, {
       name: editForm.name,
       status: editForm.status,
@@ -159,9 +187,26 @@ const AIAgents = () => {
     load();
   };
 
-  const filtered = agents.filter((a) =>
-    a.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const categoryOptions = Array.from(
+    new Set(agents.map((a) => a.category).filter((c): c is string => !!c)),
+  ).sort();
+
+  const dateRangeCutoff = (range: string): Date | null => {
+    const now = new Date();
+    if (range === "Last 7 days") return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    if (range === "Last 30 days") return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    if (range === "This year") return new Date(now.getFullYear(), 0, 1);
+    return null;
+  };
+
+  const filtered = agents.filter((a) => {
+    if (!a.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if (statusFilter !== STATUS_DEFAULT && a.status !== statusFilter) return false;
+    if (categoryFilter !== CATEGORY_DEFAULT && a.category !== categoryFilter) return false;
+    const cutoff = dateRangeCutoff(dateRangeFilter);
+    if (cutoff && new Date(a.created_at) < cutoff) return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6">
@@ -178,7 +223,18 @@ const AIAgents = () => {
         }
       />
 
-      <SmartFilters value={search} onChange={setSearch} placeholder="Search agents…" />
+      <SmartFilters
+        value={search}
+        onChange={setSearch}
+        placeholder="Search agents…"
+        status={statusFilter}
+        onStatusChange={setStatusFilter}
+        category={categoryFilter}
+        onCategoryChange={setCategoryFilter}
+        categoryOptions={categoryOptions}
+        dateRange={dateRangeFilter}
+        onDateRangeChange={setDateRangeFilter}
+      />
 
       {filtered.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-12 text-center text-sm text-muted-foreground">
@@ -226,14 +282,14 @@ const AIAgents = () => {
                   </button>
                   <button
                     title="Duplicate"
-                    onClick={() => duplicate(a)}
+                    onClick={() => setPendingDuplicate(a)}
                     className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
                   >
                     <Copy className="h-4 w-4" />
                   </button>
                   <button
                     title="Delete"
-                    onClick={() => remove(a)}
+                    onClick={() => setPendingDelete(a)}
                     className="rounded-md p-1.5 text-destructive hover:bg-destructive/10"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -244,6 +300,42 @@ const AIAgents = () => {
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader className="text-center sm:text-center">
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete && `"${pendingDelete.name}" will be permanently deleted. `}
+              This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="sm:justify-center">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!pendingDuplicate} onOpenChange={(o) => { if (!o) setPendingDuplicate(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader className="text-center sm:text-center">
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDuplicate && `A copy of "${pendingDuplicate.name}" will be created.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="sm:justify-center">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDuplicate}>Duplicate</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Live Voice Call Modal */}
       <LiveVoiceModal
@@ -315,7 +407,7 @@ const AIAgents = () => {
                     <SelectValue placeholder="Select voice" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(editForm.language === "Urdu (PK)" ? URDU_VOICE_NAMES : VAPI_VOICE_NAMES).map((v) => (
+                    {ALL_VOICE_NAMES.map((v) => (
                       <SelectItem key={v} value={v}>
                         {v}
                       </SelectItem>
@@ -329,30 +421,16 @@ const AIAgents = () => {
               <Label>Language</Label>
               <Select
                 value={editForm.language ?? ""}
-                onValueChange={(v) => {
-                  const nowUrdu = v === "Urdu (PK)";
-                  setEditForm((f) => {
-                    const wasUrdu = f.language === "Urdu (PK)";
-                    if (nowUrdu === wasUrdu) return { ...f, language: v };
-                    // Vapi's English voices can't speak Urdu (and vice versa) — swap to a
-                    // sensible default in the newly-relevant list.
-                    return { ...f, language: v, voice: nowUrdu ? URDU_VOICE_NAMES[0] : VAPI_VOICE_NAMES[0] };
-                  });
-                }}
+                onValueChange={(v) => setEditForm((f) => ({ ...f, language: v }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select language" />
                 </SelectTrigger>
                 <SelectContent>
                   {[
-                    "English (US)",
-                    "English (UK)",
-                    "Spanish (ES)",
-                    "Spanish (MX)",
-                    "French (FR)",
-                    "Italian (IT)",
-                    "German (DE)",
-                    "Urdu (PK)",
+                    "English",
+                    "Urdu",
+                    "Multilingual",
                   ].map((l) => (
                     <SelectItem key={l} value={l}>
                       {l}

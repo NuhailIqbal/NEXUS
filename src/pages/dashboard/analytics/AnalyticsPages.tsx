@@ -27,7 +27,7 @@ type AgentRow = { id: string; name: string; total_calls: number; completed: numb
 type CampaignRow = { id: string; name: string; contacts_count: number; completed_count: number; qualified_count: number; status: string };
 type ChannelMap = Record<string, { total: number; completed: number; failed: number }>;
 
-type Variant = "channel" | "campaign" | "scenario" | "flow";
+type Variant = "channel" | "campaign" | "scenario";
 
 type Props = { title: string; subtitle: string; variant: Variant };
 
@@ -46,8 +46,8 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
         api.getAnalyticsTimeseries(14),
       ];
       if (variant === "campaign") calls.push(api.getAnalyticsCampaign());
-      if (variant === "channel" || variant === "scenario" || variant === "flow") calls.push(api.getAnalyticsChannel());
-      if (variant === "scenario" || variant === "flow") calls.push(api.getAnalyticsAgent());
+      if (variant === "channel" || variant === "scenario") calls.push(api.getAnalyticsChannel());
+      if (variant === "scenario") calls.push(api.getAnalyticsAgent());
 
       const results = await Promise.all(calls);
       if (results[0]?.data) setStats(results[0].data);
@@ -58,11 +58,11 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
         if (Array.isArray(results[idx]?.data)) setCampaigns(results[idx].data);
         idx++;
       }
-      if (variant === "channel" || variant === "scenario" || variant === "flow") {
+      if (variant === "channel" || variant === "scenario") {
         if (results[idx]?.data && typeof results[idx].data === "object") setChannels(results[idx].data);
         idx++;
       }
-      if (variant === "scenario" || variant === "flow") {
+      if (variant === "scenario") {
         if (Array.isArray(results[idx]?.data)) setAgents(results[idx].data);
       }
       setLoading(false);
@@ -149,7 +149,7 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
 
       {variant === "channel" && <ChannelBreakdown channels={channels} />}
       {variant === "campaign" && <CampaignBreakdown campaigns={campaigns} />}
-      {(variant === "scenario" || variant === "flow") && <AgentBreakdown agents={agents} />}
+      {variant === "scenario" && <AgentBreakdown agents={agents} />}
     </div>
   );
 };
@@ -242,4 +242,3 @@ function AgentBreakdown({ agents }: { agents: AgentRow[] }) {
 export const AnalyticsChannel  = () => <AnalyticsChart variant="channel"  title="Channel Analytics"  subtitle="Performance per voice / SMS / WhatsApp / Web." />;
 export const AnalyticsCampaign = () => <AnalyticsChart variant="campaign" title="Campaign Analytics" subtitle="Compare campaigns side by side." />;
 export const AnalyticsScenario = () => <AnalyticsChart variant="scenario" title="Scenario Analytics" subtitle="Outcomes by agent and scenario." />;
-export const AnalyticsFlow     = () => <AnalyticsChart variant="flow"     title="Flow Statistics"    subtitle="Drop-off and conversion per agent." />;

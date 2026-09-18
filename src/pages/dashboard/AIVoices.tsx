@@ -18,6 +18,11 @@ const VOICES_CATALOG = [
   { id: 11, name: "Layla", language: "English", accent: "American", gender: "Female", description: "Realistic, warm, bright, cheerful", favorite: false },
   { id: 12, name: "Sid", language: "English", accent: "American", gender: "Male", description: "Realistic, laid-back, smooth, deep-toned", favorite: false },
   { id: 13, name: "Naina", language: "English", accent: "Indian American", gender: "Female", description: "Realistic, calm, collected, professional", favorite: false },
+  // Urdu (PK) voices — Vapi's own built-in voices above are English-only, so these use
+  // ElevenLabs' multilingual model instead (see backend/services/vapi_client.py's
+  // _resolve_voice / _URDU_VOICE_IDS). "Zara"/"Ali" are our own display names.
+  { id: 14, name: "Zara", language: "Urdu", accent: "Pakistani", gender: "Female", description: "Realistic, warm, professional", favorite: false },
+  { id: 15, name: "Ali", language: "Urdu", accent: "Pakistani", gender: "Male", description: "Realistic, steady, professional", favorite: false },
 ];
 import { Button } from "@/components/ui/button";
 import {
@@ -43,27 +48,55 @@ type Voice = {
   favorite?: boolean;
 };
 
-// Mirrors backend/services/vapi_client.py's _VAPI_VOICE_IDS — keep these two in sync.
+// Mirrors backend/services/vapi_client.py's _resolve_voice — keep these two in sync.
 // Bare names confirmed valid directly against Vapi's live API; do not add a " New"
 // suffix or a "version" field on the strength of Vapi's docs site alone (it does not
 // reliably match the live API — verify any future change with a real API call).
-const VAPI_VOICE_IDS: Record<string, { voiceId: string }> = {
-  elliot: { voiceId: "Elliot" },
-  savannah: { voiceId: "Savannah" },
-  rohan: { voiceId: "Rohan" },
-  emma: { voiceId: "Emma" },
-  clara: { voiceId: "Clara" },
-  nico: { voiceId: "Nico" },
-  kai: { voiceId: "Kai" },
-  sagar: { voiceId: "Sagar" },
-  godfrey: { voiceId: "Godfrey" },
-  neil: { voiceId: "Neil" },
-  layla: { voiceId: "Layla" },
-  sid: { voiceId: "Sid" },
-  naina: { voiceId: "Naina" },
+const EN_TRANSCRIBER = { provider: "deepgram", language: "en" };
+// Urdu needs Nova-3 explicitly — Vapi's default transcriber model (Nova-2) rejects "ur"
+// with a 400 (confirmed live: "assistant.transcriber.language must be one of ... " for
+// the default nova-2 model). Must mirror backend/services/vapi_client.py's
+// _resolve_transcriber, or this preview 400s instead of playing.
+const UR_TRANSCRIBER = { provider: "deepgram", language: "ur", model: "nova-3" };
+
+const VOICE_BLOCKS: Record<string, { voice: Record<string, unknown>; transcriber: Record<string, unknown> }> = {
+  elliot: { voice: { provider: "vapi", voiceId: "Elliot" }, transcriber: EN_TRANSCRIBER },
+  savannah: { voice: { provider: "vapi", voiceId: "Savannah" }, transcriber: EN_TRANSCRIBER },
+  rohan: { voice: { provider: "vapi", voiceId: "Rohan" }, transcriber: EN_TRANSCRIBER },
+  emma: { voice: { provider: "vapi", voiceId: "Emma" }, transcriber: EN_TRANSCRIBER },
+  clara: { voice: { provider: "vapi", voiceId: "Clara" }, transcriber: EN_TRANSCRIBER },
+  nico: { voice: { provider: "vapi", voiceId: "Nico" }, transcriber: EN_TRANSCRIBER },
+  kai: { voice: { provider: "vapi", voiceId: "Kai" }, transcriber: EN_TRANSCRIBER },
+  sagar: { voice: { provider: "vapi", voiceId: "Sagar" }, transcriber: EN_TRANSCRIBER },
+  godfrey: { voice: { provider: "vapi", voiceId: "Godfrey" }, transcriber: EN_TRANSCRIBER },
+  neil: { voice: { provider: "vapi", voiceId: "Neil" }, transcriber: EN_TRANSCRIBER },
+  layla: { voice: { provider: "vapi", voiceId: "Layla" }, transcriber: EN_TRANSCRIBER },
+  sid: { voice: { provider: "vapi", voiceId: "Sid" }, transcriber: EN_TRANSCRIBER },
+  naina: { voice: { provider: "vapi", voiceId: "Naina" }, transcriber: EN_TRANSCRIBER },
+  // Urdu (PK) — ElevenLabs multilingual voices (see backend's _URDU_VOICE_IDS).
+  zara: { voice: { provider: "11labs", voiceId: "21m00Tcm4TlvDq8ikWAM", model: "eleven_multilingual_v2" }, transcriber: UR_TRANSCRIBER },
+  ali: { voice: { provider: "11labs", voiceId: "pNInz6obpgDQGcFmaJgB", model: "eleven_multilingual_v2" }, transcriber: UR_TRANSCRIBER },
 };
 
 const VAPI_PUBLIC_KEY = ((import.meta as any).env?.VITE_VAPI_PUBLIC_KEY ?? "").trim();
+
+// Vapi error shapes vary — sometimes a string, sometimes a nested
+// { message: string[] | string, error, statusCode } object — so never call
+// string methods on the raw value without normalizing it first.
+function extractVapiErrorMessage(e: any): string {
+  const raw = e?.error?.message ?? e?.message ?? e?.error ?? "Voice preview failed";
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object") {
+    if (Array.isArray(raw.message)) return raw.message.join(" ");
+    if (typeof raw.message === "string") return raw.message;
+    if (typeof raw.error === "string") return raw.error;
+  }
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "Voice preview failed";
+  }
+}
 
 const AIVoices = () => {
   const [favoriteMockIds, setFavoriteMockIds] = useState<string[]>(() => {
@@ -138,7 +171,11 @@ const AIVoices = () => {
   const openPreview = (v: Voice) => {
     setPreviewVoice(v);
     setPreviewText(
-      `Hi, I'm ${v.name}. I speak ${v.language}${v.accent ? ` with ${article(v.accent)} ${v.accent} accent` : ""}. I'd love to be the voice of your next AI agent.`,
+      v.language === "Urdu"
+        // Roman Urdu, not English — this voice needs Roman-Urdu text to actually
+        // demonstrate its Urdu pronunciation (English text would just come out English).
+        ? `Assalam-o-alaikum, mera naam ${v.name} hai. Main aapke AI agent ki awaaz ban ${v.gender === "Female" ? "sakti" : "sakta"} hoon.`
+        : `Hi, I'm ${v.name}. I speak ${v.language}${v.accent ? ` with ${article(v.accent)} ${v.accent} accent` : ""}. I'd love to be the voice of your next AI agent.`,
     );
     setSpeaking(false);
     setPreviewError(null);
@@ -155,8 +192,8 @@ const AIVoices = () => {
       setPreviewError("VAPI public key is not configured. Set VITE_VAPI_PUBLIC_KEY in your .env file.");
       return;
     }
-    const voiceEntry = VAPI_VOICE_IDS[previewVoice.name.toLowerCase()];
-    if (!voiceEntry) {
+    const entry = VOICE_BLOCKS[previewVoice.name.toLowerCase()];
+    if (!entry) {
       setPreviewError(`No Vapi voice mapping found for "${previewVoice.name}".`);
       return;
     }
@@ -180,7 +217,7 @@ const AIVoices = () => {
         // here races with that teardown and can crash React — close the dialog and toast
         // instead, matching how the pre-flight (no public key) case is handled differently
         // because it never touches Daily at all.
-        const message = e?.error?.message ?? e?.message ?? "Voice preview failed";
+        const message = extractVapiErrorMessage(e);
         toast.error(message.includes("Permission denied") || message.toLowerCase().includes("ejection")
           ? "Voice preview needs microphone access to connect the call (you won't need to speak)."
           : message);
@@ -191,13 +228,13 @@ const AIVoices = () => {
 
       await vapi.start({
         name: `Preview: ${previewVoice.name}`,
-        transcriber: { provider: "deepgram", language: "en" },
+        transcriber: entry.transcriber,
         model: {
           provider: "openai",
           model: "gpt-4o-mini",
           messages: [{ role: "system", content: "Stay silent until told to speak." }],
         },
-        voice: { provider: "vapi", ...voiceEntry },
+        voice: entry.voice,
         maxDurationSeconds: 20,
       } as any);
     } catch (e: any) {

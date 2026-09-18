@@ -3,18 +3,26 @@ from fastapi import APIRouter, Depends, Query
 from dependencies import get_current_user
 from database import supabase
 from routers.team import resolve_owner_id
+from routers.telephony import _enrich_campaign_progress
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
 def _parse_dt(value) -> datetime | None:
+    """Always returns a UTC-normalized datetime. The DB session's timezone isn't
+    guaranteed to be UTC (it's Asia/Karachi here), so a timestamptz value comes back
+    from psycopg already localized to that offset — bucketing by its raw calendar
+    date (as timeseries() does) would put late-day rows on the wrong UTC day, and
+    since the bucket keys below are all UTC-anchored, those rows would match no
+    bucket and vanish from the response entirely."""
     if not value:
         return None
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
     try:
         s = str(value).replace("Z", "+00:00")
-        return datetime.fromisoformat(s)
+        return datetime.fromisoformat(s).astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -117,11 +125,16 @@ async def campaign_analytics(user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     campaigns = (
         supabase.table("outbound_campaigns")
-        .select("id, name, status, contacts_count, completed_count")
+        .select("id, name, status, list_id, contacts_count, completed_count")
         .eq("user_id", owner_id)
         .execute()
     )
     rows = campaigns.data or []
+
+    # contacts_count/completed_count on the row itself are stale — completed_count is
+    # never written back to the DB anywhere (see telephony.py's docstring); this
+    # recomputes both live from conversations, same as the real Campaigns page does.
+    _enrich_campaign_progress(owner_id, rows)
 
     # Qualified (transferred) count per campaign, aggregated from conversations.
     convos = (
@@ -186,7 +199,13 @@ async def overview_analytics(user=Depends(get_current_user)):
     )
     data = convos.data or []
 
-    agents = supabase.table("ai_agents").select("id", count="exact").eq("user_id", owner_id).execute()
+    agents = (
+        supabase.table("ai_agents")
+        .select("id", count="exact")
+        .eq("user_id", owner_id)
+        .eq("status", "Active")
+        .execute()
+    )
     campaigns = supabase.table("outbound_campaigns").select("id", count="exact").eq("user_id", owner_id).execute()
     contacts = supabase.table("contacts").select("id", count="exact").eq("user_id", owner_id).execute()
 
