@@ -148,7 +148,7 @@ const InboundLogs = () => {
                 <th className="px-4 py-3">Duration</th>
                 <th className="px-4 py-3">Time</th>
                 <th className="px-4 py-3">Summary</th>
-                <th className="px-4 py-3 w-20"></th>
+                <th className="px-4 py-3 w-20">Actions</th>
               </tr>
             </thead>
             <tbody>

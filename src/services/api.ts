@@ -87,6 +87,9 @@ export const api = {
   getAgents: () => get("/agents"),
   createAgent: (data: any) => post("/agents", data),
   testAgent: (data: { message: string; system_prompt?: string | null; first_message?: string | null }) => post("/agents/test", data),
+  startVoiceTest: (data: { name: string; voice?: string | null; language?: string | null; system_prompt?: string | null; first_message?: string | null }) =>
+    post("/agents/test-voice/start", data),
+  endVoiceTest: (assistantId: string) => del(`/agents/test-voice/${assistantId}`),
   analyzeAgentWebsite: (url: string) => post("/agents/analyze-website", { url }),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
   deleteAgent: (id: string) => del(`/agents/${id}`),

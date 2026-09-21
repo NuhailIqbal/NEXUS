@@ -3,6 +3,7 @@ import { Mic, MicOff, PhoneOff, Bot, User, Loader2, AlertTriangle, PhoneCall, Re
 import Vapi from "@vapi-ai/web";
 import { toast } from "sonner";
 import { api } from "@/services/api";
+import { fixMultilingualScript } from "@/lib/devanagariToUrdu";
 import {
   Dialog,
   DialogContent,
@@ -83,7 +84,7 @@ export function LiveVoiceModal({
       vapi.on("message", (m: any) => {
         if (m?.type === "transcript" && m?.transcriptType === "final") {
           const role: "user" | "assistant" = m.role === "user" ? "user" : "assistant";
-          const content: string = m.transcript ?? "";
+          const content: string = fixMultilingualScript(m.transcript ?? "");
           if (content.trim()) {
             setMessages((prev) => [...prev, { role, content }]);
           }

@@ -255,12 +255,33 @@ _URDU_SCRIPT_DIRECTIVE = (
 
 # Multilingual agents must follow the caller's language rather than a single fixed
 # one — without this, GPT tends to default to English regardless of what the caller
-# actually speaks.
+# actually speaks. For Urdu specifically, this must match _URDU_SCRIPT_DIRECTIVE's
+# proven convention (Roman Urdu, never Nastaliq) — a caller shouldn't get different
+# script behavior depending on whether the agent's language is set to "Urdu" or
+# "Multilingual".
+#
+# Deepgram's "multi" transcriber (see _resolve_transcriber) has no dedicated Urdu
+# detector — spoken Urdu and spoken Hindi are phonetically identical (Hindustani), so
+# it transcribes Urdu speech using Hindi's Devanagari script. Without the second
+# paragraph below, GPT reads that mislabeled Devanagari input and, per "reply in the
+# same script," replies in Devanagari too — which the voice engine then actually
+# speaks aloud as Hindi. This platform has no Hindi language option anywhere, so any
+# Devanagari input is always this exact transcription mismatch, never a real Hindi
+# caller.
 _MULTILINGUAL_DIRECTIVE = (
     "IMPORTANT — LANGUAGE (MUST FOLLOW): Detect the language the caller is speaking "
-    "and always reply in that same language and script — do not switch languages on "
-    "your own. If the caller's language isn't clear yet, default to English until "
-    "they make it clear, then continue in their language for the rest of the call.\n\n---\n\n"
+    "and always reply in that same language — do not switch languages on your own. "
+    "If the caller's language isn't clear yet, default to English until they make it "
+    "clear, then continue in their language for the rest of the call.\n\n"
+    "SPECIAL CASE — DEVANAGARI/HINDI SCRIPT INPUT: If the caller's transcribed text "
+    "appears in Devanagari (Hindi) script, this is a transcription limitation, not a "
+    "real Hindi speaker — always treat it as Urdu, never Hindi.\n\n"
+    "SCRIPT RULE FOR URDU (MUST FOLLOW): Whenever you reply in Urdu — whether the "
+    "caller's speech came through as Urdu directly or as the Devanagari mislabeling "
+    "above — always write your reply in ROMAN URDU (Latin/English alphabet), e.g. "
+    "\"Aap kaisay hain\", \"Shukriya\". NEVER use Urdu script (Nastaliq/Arabic letters) "
+    "or Devanagari (Hindi) script, no matter what script the caller's own speech came "
+    "through as.\n\n---\n\n"
 )
 
 

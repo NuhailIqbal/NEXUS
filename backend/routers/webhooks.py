@@ -7,7 +7,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from config import settings
 from database import supabase
-from services.gemini import summarize_transcript, analyze_sentiment
+from services.gemini import summarize_transcript
 from services.automation_engine import run_post_call_automations
 from routers.billing import record_call_cost
 
@@ -463,15 +463,10 @@ async def _post_call_ai(vapi_call_id: str, transcript: str, conv_id: str):
         user_id = conversation.get("user_id")
 
         if transcript:
-            summary, sentiment = await asyncio.gather(
-                summarize_transcript(transcript, conversation.get("contact_name")),
-                analyze_sentiment(transcript),
-            )
+            summary = await summarize_transcript(transcript, conversation.get("contact_name"))
             ai_updates = {}
             if summary:
                 ai_updates["ai_summary"] = summary
-            if sentiment:
-                ai_updates["conversion"] = sentiment
             if ai_updates:
                 supabase.table("conversations").update(ai_updates).eq("id", conv_id).execute()
                 logger.info(f"AI summary written for {vapi_call_id}")

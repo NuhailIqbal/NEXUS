@@ -108,6 +108,14 @@ class AgentTest(BaseModel):
     first_message: Optional[str] = None
 
 
+class AgentVoiceTestStart(BaseModel):
+    name: str
+    voice: Optional[str] = None
+    language: Optional[str] = None
+    system_prompt: Optional[str] = None
+    first_message: Optional[str] = None
+
+
 class AgentAnalyzeWebsite(BaseModel):
     url: str
 

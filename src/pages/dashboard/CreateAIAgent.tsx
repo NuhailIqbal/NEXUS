@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { cn, isE164 } from "@/lib/utils";
 import { ALL_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
+import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
 
 type StepKey = "setup" | "knowledge" | "prompt" | "testing";
 
@@ -624,6 +625,8 @@ function StepTesting({
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
   const [reply, setReply] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [voiceTestAgent, setVoiceTestAgent] = useState<VoiceAgentInfo | null>(null);
+  const [voiceTestStarting, setVoiceTestStarting] = useState(false);
 
   const runTest = async () => {
     if (!form.testMessage.trim()) {
@@ -645,6 +648,41 @@ function StepTesting({
     setReply(data?.reply ?? "");
   };
 
+  const startVoiceCall = async () => {
+    if (!form.agentName.trim()) {
+      toast.error("Give your agent a name first");
+      return;
+    }
+    setVoiceTestStarting(true);
+    const { data, error } = await api.startVoiceTest({
+      name: form.agentName,
+      voice: form.voice || null,
+      language: form.language || null,
+      system_prompt: form.systemPrompt || null,
+      first_message: form.greeting || null,
+    });
+    setVoiceTestStarting(false);
+    if (error || !data?.vapi_assistant_id) {
+      toast.error(error || "Could not start the voice test");
+      return;
+    }
+    // A throwaway VAPI assistant, never saved as a real agent — cleaned up when the call ends.
+    setVoiceTestAgent({
+      id: "voice-test",
+      name: form.agentName,
+      voice: form.voice,
+      language: form.language,
+      vapi_assistant_id: data.vapi_assistant_id,
+    });
+  };
+
+  const endVoiceCall = (open: boolean) => {
+    if (open) return;
+    const assistantId = voiceTestAgent?.vapi_assistant_id;
+    setVoiceTestAgent(null);
+    if (assistantId) api.endVoiceTest(assistantId);
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -653,9 +691,26 @@ function StepTesting({
         </div>
         <h3 className="mt-3 text-lg font-bold">Test Your Agent</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Send a sample message to preview how your agent replies (optional, you can skip this step).
+          Try your agent before going live (optional, you can skip this step).
         </p>
       </div>
+
+      <div className="rounded-lg border border-border bg-muted/20 p-4 text-center">
+        <h4 className="text-sm font-semibold text-foreground">Talk to your agent</h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Start a real live voice call with your agent, using its actual voice, prompt and language. No phone number needed.
+        </p>
+        <Button type="button" variant="outline" className="mt-3 gap-2" onClick={startVoiceCall} disabled={voiceTestStarting}>
+          {voiceTestStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Phone className="h-4 w-4" />}
+          {voiceTestStarting ? "Starting…" : "Test with voice call"}
+        </Button>
+      </div>
+
+      <div className="relative text-center text-xs text-muted-foreground">
+        <span className="relative z-10 bg-background px-2">or test with a text message</span>
+        <div className="absolute left-0 right-0 top-1/2 -z-0 border-t border-border" />
+      </div>
+
       <Field label="Test Message">
         <textarea
           value={form.testMessage}
@@ -681,6 +736,8 @@ function StepTesting({
           <span className="text-muted-foreground">The agent's response will appear here after you run a test.</span>
         )}
       </div>
+
+      <LiveVoiceModal agent={voiceTestAgent} open={!!voiceTestAgent} onOpenChange={endVoiceCall} />
     </div>
   );
 }

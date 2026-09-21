@@ -168,7 +168,7 @@ const PhoneNumbers = () => {
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Purchased</th>
               <th className="px-4 py-3">Expires</th>
-              <th className="px-4 py-3 w-32"></th>
+              <th className="px-4 py-3 w-32">Actions</th>
             </tr>
           </thead>
           <tbody>

@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, Eye, Loader2, Search, X } from "lucide-react";
+import { format, isSameDay } from "date-fns";
 import { api } from "@/services/api";
-import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -28,7 +32,6 @@ type Conversation = {
   phone: string;
   duration: string;
   status: string;
-  conversion: string;
   qualified: boolean;
   transferred_to: string | null;
   call_time: string;
@@ -42,6 +45,30 @@ type Conversation = {
 
 type StatItem = { label: string; count: number };
 
+type ColumnKey = "channel" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
+
+const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
+  { key: "channel", label: "Channel" },
+  { key: "contact_name", label: "Contact" },
+  { key: "phone", label: "Phone" },
+  { key: "duration", label: "Duration", width: "w-36" },
+  { key: "status", label: "Status", width: "w-36" },
+  { key: "qualified", label: "Qualified", width: "w-36" },
+  { key: "call_time", label: "Time" },
+];
+
+function textFor(c: Conversation, key: ColumnKey): string {
+  if (key === "qualified") return c.qualified ? "Qualified" : "—";
+  return (c[key] as string) || "";
+}
+
+function formatCallTime(value: string): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return format(d, "MMM d, yyyy, h:mm a");
+}
+
 const Conversations = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatItem[]>([]);
@@ -52,6 +79,53 @@ const Conversations = () => {
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const playerRef = useRef<CallAudioPlayerHandle | null>(null);
   const openIdRef = useRef<string | null>(null);
+  const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({
+    channel: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
+  });
+  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
+
+  // Clicking a header cycles: ascending -> descending -> reset (no sort) -> ascending...
+  const toggleSort = (key: ColumnKey) => {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortKey(null); // was descending -> reset
+  };
+
+  const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
+
+  const visibleConversations = useMemo(() => {
+    const filtered = conversations.filter((c) =>
+      COLUMNS.every(({ key }) => {
+        if (key === "call_time") {
+          if (!dateFilter) return true;
+          const t = c.call_time ? new Date(c.call_time) : null;
+          return !!t && !isNaN(t.getTime()) && isSameDay(t, dateFilter);
+        }
+        if (key === "qualified") {
+          if (!filters.qualified) return true;
+          return filters.qualified === "yes" ? c.qualified : !c.qualified;
+        }
+        const q = filters[key].trim().toLowerCase();
+        return !q || textFor(c, key).toLowerCase().includes(q);
+      })
+    );
+    if (!sortKey) return filtered;
+    const sorted = [...filtered].sort((a, b) => {
+      const av = textFor(a, sortKey).toLowerCase();
+      const bv = textFor(b, sortKey).toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [conversations, filters, dateFilter, sortKey, sortDir]);
+
+  const statusOptions = useMemo(() => {
+    const set = new Set(conversations.map((c) => c.status).filter(Boolean));
+    return Array.from(set).sort();
+  }, [conversations]);
 
   const openDetail = async (c: Conversation) => {
     setViewing(c);
@@ -137,50 +211,140 @@ const Conversations = () => {
 
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Channel</th>
-              <th className="px-4 py-3">Contact</th>
-              <th className="px-4 py-3">Phone</th>
-              <th className="px-4 py-3">Duration</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Conversion</th>
-              <th className="px-4 py-3">Qualified</th>
-              <th className="px-4 py-3">Time</th>
-              <th className="px-4 py-3 w-12"></th>
+          <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            <tr className="divide-x divide-border">
+              {COLUMNS.map(({ key, label, width }) => (
+                <th key={key} className={`px-4 py-3 ${width ?? ""}`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleSort(key)}
+                    className="flex w-full items-center justify-between gap-1 hover:text-foreground"
+                  >
+                    <span>{label}</span>
+                    {sortKey === key ? (
+                      sortDir === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 shrink-0 opacity-50" />
+                    )}
+                  </button>
+                </th>
+              ))}
+              <th className="px-4 py-3 w-20">Actions</th>
+            </tr>
+            <tr className="divide-x divide-border border-t border-border">
+              {COLUMNS.map(({ key, label, width }) =>
+                key === "call_time" ? (
+                  <th key={key} className={`px-4 py-3 font-normal normal-case ${width ?? ""}`}>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex h-8 w-full items-center gap-1.5 rounded-md border border-input bg-background px-2 text-left text-xs text-muted-foreground hover:bg-muted"
+                        >
+                          <CalendarIcon className="h-3 w-3 shrink-0" />
+                          <span className="flex-1 truncate">{dateFilter ? format(dateFilter, "MMM d, yyyy") : "Date"}</span>
+                          {dateFilter && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => { e.stopPropagation(); setDateFilter(undefined); }}
+                              className="rounded p-0.5 hover:bg-muted-foreground/20"
+                            >
+                              <X className="h-3 w-3" />
+                            </span>
+                          )}
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={dateFilter}
+                          onSelect={setDateFilter}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </th>
+                ) : key === "status" ? (
+                  <th key={key} className={`px-4 py-3 font-normal normal-case ${width ?? ""}`}>
+                    <Select
+                      value={filters.status || "__all__"}
+                      onValueChange={(v) => setFilter("status", v === "__all__" ? "" : v)}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All</SelectItem>
+                        {statusOptions.map((s) => (
+                          <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </th>
+                ) : key === "qualified" ? (
+                  <th key={key} className={`px-4 py-3 font-normal normal-case ${width ?? ""}`}>
+                    <Select
+                      value={filters.qualified || "__all__"}
+                      onValueChange={(v) => setFilter("qualified", v === "__all__" ? "" : v)}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Qualified" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All</SelectItem>
+                        <SelectItem value="yes">Qualified</SelectItem>
+                        <SelectItem value="no">Not qualified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </th>
+                ) : (
+                  <th key={key} className={`px-4 py-3 font-normal normal-case ${width ?? ""}`}>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={filters[key]}
+                        onChange={(e) => setFilter(key, e.target.value)}
+                        placeholder={label}
+                        className="h-8 pl-7 text-xs"
+                      />
+                    </div>
+                  </th>
+                )
+              )}
+              <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
-            ) : conversations.length === 0 ? (
+            ) : visibleConversations.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No conversations found.</td>
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                  {conversations.length === 0 ? "No conversations found." : "No conversations match your filters."}
+                </td>
               </tr>
             ) : (
-              conversations.map((c) => (
-                <tr key={c.id} className="border-t border-border bg-card/30">
-                  <td className="px-4 py-3">{c.channel}</td>
-                  <td className="px-4 py-3 font-medium text-foreground">{c.contact_name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{c.phone}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{c.duration}</td>
-                  <td className="px-4 py-3">
+              visibleConversations.map((c) => (
+                <tr key={c.id} className="divide-x divide-border border-t border-border bg-card/30">
+                  <td className="px-4 py-3 text-center">{c.channel}</td>
+                  <td className="px-4 py-3 text-center font-medium text-foreground">{c.contact_name}</td>
+                  <td className="px-4 py-3 text-center text-muted-foreground">{c.phone}</td>
+                  <td className="px-4 py-3 text-center font-mono text-xs">{c.duration}</td>
+                  <td className="px-4 py-3 text-center">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
                   </td>
-                  <td className="px-4 py-3">
-                    <Badge variant={c.conversion === "Yes" ? "default" : "outline"}>{c.conversion}</Badge>
-                  </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     {c.qualified ? (
                       <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Qualified</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{c.call_time}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap text-center text-muted-foreground">{formatCallTime(c.call_time)}</td>
+                  <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => openDetail(c)}
                       className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -201,7 +365,7 @@ const Conversations = () => {
         <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Conversation · {viewing?.contact_name}</DialogTitle>
-            <DialogDescription>{viewing?.channel} · {viewing?.call_time}</DialogDescription>
+            <DialogDescription>{viewing?.channel} · {viewing ? formatCallTime(viewing.call_time) : ""}</DialogDescription>
           </DialogHeader>
           {viewing && (
             <div className="space-y-4">
@@ -224,7 +388,6 @@ const Conversations = () => {
                 <div><div className="text-xs text-muted-foreground">Duration</div><div className="font-mono">{viewing.duration || "—"}</div></div>
                 <div><div className="text-xs text-muted-foreground">Direction</div><div className="capitalize">{viewing.direction}</div></div>
                 <div><div className="text-xs text-muted-foreground">Status</div><div>{viewing.status}</div></div>
-                <div><div className="text-xs text-muted-foreground">Conversion</div><div>{viewing.conversion}</div></div>
                 <div><div className="text-xs text-muted-foreground">Qualified</div><div>{viewing.qualified ? "Yes" : "No"}</div></div>
                 {viewing.transferred_to && (
                   <div className="col-span-2 sm:col-span-3"><div className="text-xs text-muted-foreground">Transferred to</div><div className="font-mono">{viewing.transferred_to}</div></div>

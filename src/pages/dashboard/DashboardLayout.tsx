@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Search, Menu, X, MessageSquare, CreditCard, Plug, Share2,
+  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,6 +15,7 @@ import LowBalanceBanner from "@/components/LowBalanceBanner";
 import ViewerBanner from "@/components/ViewerBanner";
 import Logo from "@/components/Logo";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
+import GlobalSearch from "@/components/dashboard/GlobalSearch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,6 +70,7 @@ const NAV: NavItem[] = [
       { label: "Scenario", to: "/dashboard/analytics/scenario" },
     ],
   },
+  { label: "Automation", to: "/dashboard/automation", icon: Workflow },
   { label: "Integrations", to: "/dashboard/integrations", icon: Plug },
   { label: "Billing", to: "/dashboard/billing", icon: CreditCard },
   { label: "Referrals", to: "/dashboard/referrals", icon: Share2 },
@@ -165,13 +167,7 @@ const DashboardLayout = () => {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <div className="relative hidden flex-1 max-w-md md:block">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              placeholder="Search…"
-              className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
+          <GlobalSearch />
           <div className="flex flex-1 items-center justify-end gap-3">
             <ThemeToggle />
             <NotificationBell />

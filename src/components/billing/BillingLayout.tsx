@@ -4,6 +4,8 @@ import { NavLink, Outlet } from "react-router-dom";
 // string when it cleans up ?topup=success, which would silently drop a tab param.
 const TABS = [
   { to: "/dashboard/billing", label: "Overview", end: true },
+  { to: "/dashboard/billing/transactions", label: "Transactions", end: false },
+  { to: "/dashboard/billing/call-costs", label: "Call Costs", end: false },
   { to: "/dashboard/billing/payment-methods", label: "Payment methods", end: false },
   { to: "/dashboard/billing/promotions", label: "Promotions", end: false },
 ];

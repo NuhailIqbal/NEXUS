@@ -216,7 +216,7 @@ const Profile = () => {
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Role</th>
                 <th className="px-4 py-3">Status</th>
-                {isOwner && <th className="px-4 py-3"></th>}
+                {isOwner && <th className="px-4 py-3">Actions</th>}
               </tr>
             </thead>
             <tbody>

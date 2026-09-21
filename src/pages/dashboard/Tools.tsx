@@ -231,7 +231,7 @@ const Tools = () => {
                 <th className="px-4 py-3">Params</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Modified</th>
-                <th className="px-4 py-3 w-44"></th>
+                <th className="px-4 py-3 w-44">Actions</th>
               </tr>
             </thead>
             <tbody>

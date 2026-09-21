@@ -239,7 +239,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
               <th className="px-4 py-3">List</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Created</th>
-              <th className="px-4 py-3 w-32"></th>
+              <th className="px-4 py-3 w-32">Actions</th>
             </tr>
           </thead>
           <tbody>

@@ -4,7 +4,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from dependencies import get_current_user
 from database import supabase
-from models.schemas import AgentCreate, AgentUpdate, AgentTest, AgentAnalyzeWebsite
+from models.schemas import AgentCreate, AgentUpdate, AgentTest, AgentVoiceTestStart, AgentAnalyzeWebsite
 from services import vapi_client
 from services.openai_client import chat_reply, analyze_website, OpenAIError
 from services.website_analyzer import fetch_website_text, WebsiteFetchError
@@ -138,6 +138,43 @@ async def test_agent(body: AgentTest, user=Depends(get_current_user)):
     if not reply:
         raise HTTPException(status_code=502, detail="The AI returned an empty response — please try again.")
     return {"data": {"reply": reply}, "error": None}
+
+
+@router.post("/test-voice/start")
+async def start_voice_test(body: AgentVoiceTestStart, user=Depends(get_current_user)):
+    """Create a throwaway VAPI assistant from the in-progress Create-agent wizard form
+    so the user can do a real live voice call before the agent is actually saved —
+    mirrors the existing "Talk to <agent>" flow (LiveVoiceModal), but against a
+    temporary assistant instead of a persisted one. Never touches ai_agents; the caller
+    is expected to call DELETE /test-voice/{assistant_id} once the test call ends."""
+    if not settings.vapi_api_key:
+        raise HTTPException(status_code=503, detail="Voice testing is not configured — VAPI is not set up on the server.")
+    composed_prompt = _compose_system_prompt(body.name, body.system_prompt, None, None)
+    payload = vapi_client.build_assistant_payload(
+        name=f"[test] {body.name}",
+        voice=body.voice,
+        language=body.language,
+        system_prompt=composed_prompt,
+        first_message=body.first_message,
+    )
+    try:
+        vapi_agent = await vapi_client.create_assistant(payload)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+    assistant_id = vapi_agent.get("id")
+    if not assistant_id:
+        raise HTTPException(status_code=502, detail="VAPI did not return an assistant id.")
+    return {"data": {"vapi_assistant_id": assistant_id}, "error": None}
+
+
+@router.delete("/test-voice/{assistant_id}")
+async def end_voice_test(assistant_id: str, user=Depends(get_current_user)):
+    """Best-effort cleanup of a throwaway assistant created by /test-voice/start."""
+    try:
+        await vapi_client.delete_assistant(assistant_id)
+    except Exception:
+        pass
+    return {"data": None, "error": None}
 
 
 @router.post("/analyze-website")

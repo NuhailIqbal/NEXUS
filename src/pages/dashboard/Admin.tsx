@@ -737,7 +737,7 @@ const Admin = () => {
                   <th className="px-4 py-3">Redeemed</th>
                   <th className="px-4 py-3">Credit expiry</th>
                   <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1136,7 +1136,7 @@ const Admin = () => {
                   <th className="px-4 py-3 text-center">Numbers</th>
                   <th className="px-4 py-3">Total Monthly</th>
                   <th className="px-4 py-3">Soonest Expiry</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1306,7 +1306,7 @@ const Admin = () => {
                 <th className="px-4 py-3">Rate</th>
                 <th className="px-4 py-3">Numbers</th>
                 <th className="px-4 py-3">Calls</th>
-                <th className="px-4 py-3"></th>
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Mic, Star, Play, Pause, Trash2, AlertTriangle } from "lucide-react";
+import { Mic, Star, Play, Pause, AlertTriangle } from "lucide-react";
 import Vapi from "@vapi-ai/web";
 // Vapi's own built-in voice provider (provider="vapi") — the exact voices available
 // on the Vapi platform, verified live against Vapi's API. No third-party voice
@@ -107,7 +107,9 @@ const AIVoices = () => {
       return [];
     }
   });
-  const [hiddenMockIds, setHiddenMockIds] = useState<string[]>(() => {
+  // Respects any voices a user hid before the delete option was removed — nothing
+  // writes to this key anymore, it's read-only now.
+  const [hiddenMockIds] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try {
       return JSON.parse(window.localStorage.getItem("hidden:voices") ?? "[]");
@@ -126,13 +128,6 @@ const AIVoices = () => {
     setFavoriteMockIds(next);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("favorite:voices", JSON.stringify(next));
-    }
-  };
-
-  const persistHidden = (next: string[]) => {
-    setHiddenMockIds(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("hidden:voices", JSON.stringify(next));
     }
   };
 
@@ -159,11 +154,6 @@ const AIVoices = () => {
       ? favoriteMockIds.filter((x) => x !== v.id)
       : [...favoriteMockIds, v.id];
     persistFavorites(next);
-  };
-
-  const handleDelete = (v: Voice) => {
-    persistHidden([...hiddenMockIds, v.id]);
-    toast.success("Voice removed");
   };
 
   const article = (word: string) => (/^[aeiou]/i.test(word) ? "an" : "a");
@@ -289,14 +279,6 @@ const AIVoices = () => {
                 className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
               >
                 <Play className="h-3 w-3" /> Preview
-              </button>
-              <button
-                onClick={() => handleDelete(v)}
-                className="ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                aria-label="Delete"
-                title="Delete"
-              >
-                <Trash2 className="h-4 w-4" />
               </button>
             </div>
           </div>

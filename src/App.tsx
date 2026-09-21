@@ -42,6 +42,8 @@ import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
 import PhoneNumbers from "./pages/dashboard/telephony/PhoneNumbers.tsx";
 import BillingLayout from "./components/billing/BillingLayout.tsx";
 import BillingOverview from "./components/billing/BillingOverview.tsx";
+import Transactions from "./components/billing/Transactions.tsx";
+import CallCosts from "./components/billing/CallCosts.tsx";
 import PaymentMethods from "./components/billing/PaymentMethods.tsx";
 import Promotions from "./components/billing/Promotions.tsx";
 import Admin from "./pages/dashboard/Admin.tsx";
@@ -50,6 +52,8 @@ import {
   AnalyticsCampaign,
   AnalyticsScenario,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
+import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
+import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
 
 
 const queryClient = new QueryClient();
@@ -110,8 +114,12 @@ const App = () => {
                   <Route path="analytics/channel" element={<AnalyticsChannel />} />
                   <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
                   <Route path="analytics/scenario" element={<AnalyticsScenario />} />
+                  <Route path="automation" element={<AutomationList />} />
+                  <Route path="automation/:flowId" element={<AutomationFlowEditor />} />
                   <Route path="billing" element={<BillingLayout />}>
                     <Route index element={<BillingOverview />} />
+                    <Route path="transactions" element={<Transactions />} />
+                    <Route path="call-costs" element={<CallCosts />} />
                     <Route path="payment-methods" element={<PaymentMethods />} />
                     <Route path="promotions" element={<Promotions />} />
                   </Route>
