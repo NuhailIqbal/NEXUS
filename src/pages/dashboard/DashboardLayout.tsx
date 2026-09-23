@@ -49,7 +49,8 @@ const NAV: NavItem[] = [
     icon: PhoneOutgoing,
     children: [
       { label: "Campaigns", to: "/dashboard/telephony/campaigns" },
-      { label: "Phone Numbers", to: "/dashboard/telephony/phone-numbers" },
+      { label: "Outbound Numbers", to: "/dashboard/telephony/phone-numbers" },
+      { label: "Call Logs", to: "/dashboard/telephony/outbound-logs" },
     ],
   },
   {
@@ -57,6 +58,7 @@ const NAV: NavItem[] = [
     icon: PhoneIncoming,
     children: [
       { label: "AI Receptionist", to: "/dashboard/telephony/inbound" },
+      { label: "Inbound Numbers", to: "/dashboard/telephony/inbound-numbers" },
       { label: "Call Logs", to: "/dashboard/telephony/inbound-logs" },
     ],
   },

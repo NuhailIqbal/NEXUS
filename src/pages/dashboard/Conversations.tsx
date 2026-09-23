@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, Eye, Loader2, Search, X } from "lucide-react";
-import { format, isSameDay } from "date-fns";
+import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, RefreshCw, Search, X } from "lucide-react";
+import { format } from "date-fns";
 import { api } from "@/services/api";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
@@ -45,7 +45,7 @@ type Conversation = {
 
 type StatItem = { label: string; count: number };
 
-type ColumnKey = "channel" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
+type ColumnKey = "channel" | "direction" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
 
 const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "channel", label: "Channel" },
@@ -53,12 +53,14 @@ const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "phone", label: "Phone" },
   { key: "duration", label: "Duration", width: "w-36" },
   { key: "status", label: "Status", width: "w-36" },
+  { key: "direction", label: "Direction", width: "w-36" },
   { key: "qualified", label: "Qualified", width: "w-36" },
   { key: "call_time", label: "Time" },
 ];
 
 function textFor(c: Conversation, key: ColumnKey): string {
   if (key === "qualified") return c.qualified ? "Qualified" : "—";
+  if (key === "direction") return c.direction ? c.direction.charAt(0).toUpperCase() + c.direction.slice(1) : "—";
   return (c[key] as string) || "";
 }
 
@@ -68,6 +70,8 @@ function formatCallTime(value: string): string {
   if (isNaN(d.getTime())) return value;
   return format(d, "MMM d, yyyy, h:mm a");
 }
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const Conversations = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -82,7 +86,7 @@ const Conversations = () => {
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({
-    channel: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
+    channel: "", direction: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
   });
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
 
@@ -95,24 +99,11 @@ const Conversations = () => {
 
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
+  // Filters are now applied server-side (across the whole account, not just the
+  // currently-loaded page) — see `load()` below. This only sorts what's on the page.
   const visibleConversations = useMemo(() => {
-    const filtered = conversations.filter((c) =>
-      COLUMNS.every(({ key }) => {
-        if (key === "call_time") {
-          if (!dateFilter) return true;
-          const t = c.call_time ? new Date(c.call_time) : null;
-          return !!t && !isNaN(t.getTime()) && isSameDay(t, dateFilter);
-        }
-        if (key === "qualified") {
-          if (!filters.qualified) return true;
-          return filters.qualified === "yes" ? c.qualified : !c.qualified;
-        }
-        const q = filters[key].trim().toLowerCase();
-        return !q || textFor(c, key).toLowerCase().includes(q);
-      })
-    );
-    if (!sortKey) return filtered;
-    const sorted = [...filtered].sort((a, b) => {
+    if (!sortKey) return conversations;
+    const sorted = [...conversations].sort((a, b) => {
       const av = textFor(a, sortKey).toLowerCase();
       const bv = textFor(b, sortKey).toLowerCase();
       if (av < bv) return sortDir === "asc" ? -1 : 1;
@@ -120,12 +111,9 @@ const Conversations = () => {
       return 0;
     });
     return sorted;
-  }, [conversations, filters, dateFilter, sortKey, sortDir]);
+  }, [conversations, sortKey, sortDir]);
 
-  const statusOptions = useMemo(() => {
-    const set = new Set(conversations.map((c) => c.status).filter(Boolean));
-    return Array.from(set).sort();
-  }, [conversations]);
+  const STATUS_OPTIONS = ["Initiated", "Ringing", "In Progress", "Completed", "Failed", "Unsuccessful"];
 
   const openDetail = async (c: Conversation) => {
     setViewing(c);
@@ -162,14 +150,47 @@ const Conversations = () => {
     }
   };
 
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  // Debounce free-text filters so we don't hit the API on every keystroke — the
+  // actual query only fires 400ms after the user stops typing.
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilters(filters), 400);
+    return () => clearTimeout(t);
+  }, [filters]);
+
+  const buildFilterParams = useCallback(() => {
+    const p = new URLSearchParams();
+    if (debouncedFilters.channel.trim()) p.set("channel", debouncedFilters.channel.trim());
+    if (debouncedFilters.direction) p.set("direction", debouncedFilters.direction);
+    if (debouncedFilters.contact_name.trim()) p.set("contact_name", debouncedFilters.contact_name.trim());
+    if (debouncedFilters.phone.trim()) p.set("phone", debouncedFilters.phone.trim());
+    if (debouncedFilters.duration.trim()) p.set("duration", debouncedFilters.duration.trim());
+    if (debouncedFilters.status) p.set("status", debouncedFilters.status);
+    if (debouncedFilters.qualified) p.set("qualified", debouncedFilters.qualified);
+    if (dateFilter) p.set("call_date", format(dateFilter, "yyyy-MM-dd"));
+    return p;
+  }, [debouncedFilters, dateFilter]);
+
+  // Real page-based pagination — fetches exactly one page at a time, so the page
+  // works correctly no matter how many conversations an account accumulates.
+  // Filters are sent as query params so they apply across the whole account, not
+  // just the rows currently loaded on this page.
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
+    const params = buildFilterParams();
+    params.set("limit", String(pageSize));
+    params.set("offset", String((page - 1) * pageSize));
     const [convRes, statsRes] = await Promise.all([
-      api.getConversations(),
+      api.getConversations(params.toString()),
       api.getConversationStats(),
     ]);
     if (convRes.data) {
       setConversations(Array.isArray(convRes.data) ? convRes.data : []);
+      setTotalCount((convRes as any).meta?.count ?? 0);
     }
     if (statsRes.data) {
       const s = statsRes.data as any;
@@ -184,14 +205,29 @@ const Conversations = () => {
       ]);
     }
     if (!silent) setLoading(false);
-  }, []);
+  }, [page, pageSize, buildFilterParams]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   useEffect(() => {
     load();
-    // Silently refresh so calls synced in the background appear without a manual reload.
+    // Silently refresh the current page so calls synced in the background appear
+    // without a manual reload, without disturbing the user's current page/scroll.
     const t = setInterval(() => load(true), 30000);
     return () => clearInterval(t);
   }, [load]);
+
+  // Page size or filters changed — jump back to page 1 so the offset math stays
+  // consistent (and so a filter doesn't leave the user stranded on an empty page).
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize, debouncedFilters, dateFilter]);
+
+  // If the total shrinks (e.g. a filter-free refresh finds fewer rows) and the
+  // current page is now out of range, clamp back to the last valid page.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <div className="space-y-6">
@@ -209,7 +245,8 @@ const Conversations = () => {
         ))}
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border">
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             <tr className="divide-x divide-border">
@@ -276,7 +313,7 @@ const Conversations = () => {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All</SelectItem>
-                        {statusOptions.map((s) => (
+                        {STATUS_OPTIONS.map((s) => (
                           <SelectItem key={s} value={s}>{s}</SelectItem>
                         ))}
                       </SelectContent>
@@ -295,6 +332,22 @@ const Conversations = () => {
                         <SelectItem value="__all__">All</SelectItem>
                         <SelectItem value="yes">Qualified</SelectItem>
                         <SelectItem value="no">Not qualified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </th>
+                ) : key === "direction" ? (
+                  <th key={key} className={`px-4 py-3 font-normal normal-case ${width ?? ""}`}>
+                    <Select
+                      value={filters.direction || "__all__"}
+                      onValueChange={(v) => setFilter("direction", v === "__all__" ? "" : v)}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Direction" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All</SelectItem>
+                        <SelectItem value="inbound">Inbound</SelectItem>
+                        <SelectItem value="outbound">Outbound</SelectItem>
                       </SelectContent>
                     </Select>
                   </th>
@@ -318,11 +371,11 @@ const Conversations = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
             ) : visibleConversations.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                   {conversations.length === 0 ? "No conversations found." : "No conversations match your filters."}
                 </td>
               </tr>
@@ -335,6 +388,13 @@ const Conversations = () => {
                   <td className="px-4 py-3 text-center font-mono text-xs">{c.duration}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {c.direction && (
+                      <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
+                        {textFor(c, "direction")}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {c.qualified ? (
@@ -359,6 +419,42 @@ const Conversations = () => {
             )}
           </tbody>
         </table>
+      </div>
+
+        {!loading && totalCount > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/30 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Items per page</span>
+              <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                <SelectTrigger className="h-8 w-[72px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <PageNumbers page={page} totalPages={totalPages} onChange={setPage} />
+
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span>
+                {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, totalCount)} of {totalCount} items
+              </span>
+              <button
+                type="button"
+                onClick={() => load()}
+                className="rounded-md p-1.5 hover:bg-muted hover:text-foreground"
+                aria-label="Refresh"
+                title="Refresh"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
@@ -429,5 +525,61 @@ const Conversations = () => {
     </div>
   );
 };
+
+function pageWindow(page: number, totalPages: number): (number | "ellipsis")[] {
+  const items: (number | "ellipsis")[] = [];
+  const add = (n: number) => items.push(n);
+  const siblings = 1;
+  const start = Math.max(2, page - siblings);
+  const end = Math.min(totalPages - 1, page + siblings);
+
+  add(1);
+  if (start > 2) items.push("ellipsis");
+  for (let n = start; n <= end; n++) add(n);
+  if (end < totalPages - 1) items.push("ellipsis");
+  if (totalPages > 1) add(totalPages);
+  return items;
+}
+
+function PageNumbers({
+  page, totalPages, onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (p: number) => void;
+}) {
+  const items = pageWindow(page, totalPages);
+  const btn = (active: boolean) =>
+    `flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm transition ${
+      active ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+    }`;
+  const iconBtn = "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+  return (
+    <div className="flex items-center gap-1">
+      <button type="button" className={iconBtn} disabled={page <= 1} onClick={() => onChange(1)} aria-label="First page" title="First page">
+        <ChevronFirst className="h-4 w-4" />
+      </button>
+      <button type="button" className={iconBtn} disabled={page <= 1} onClick={() => onChange(page - 1)} aria-label="Previous page" title="Previous page">
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+      {items.map((it, i) =>
+        it === "ellipsis" ? (
+          <span key={`e${i}`} className="px-1.5 text-sm text-muted-foreground">…</span>
+        ) : (
+          <button key={it} type="button" className={btn(it === page)} onClick={() => onChange(it)}>
+            {it}
+          </button>
+        )
+      )}
+      <button type="button" className={iconBtn} disabled={page >= totalPages} onClick={() => onChange(page + 1)} aria-label="Next page" title="Next page">
+        <ChevronRight className="h-4 w-4" />
+      </button>
+      <button type="button" className={iconBtn} disabled={page >= totalPages} onClick={() => onChange(totalPages)} aria-label="Last page" title="Last page">
+        <ChevronLast className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
 
 export default Conversations;

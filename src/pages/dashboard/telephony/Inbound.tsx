@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   PhoneIncoming, Plus, Phone, Bot, Loader2, Trash2,
   CheckCircle2, XCircle, Clock, PhoneCall, Settings as SettingsIcon,
@@ -69,7 +69,7 @@ const Inbound = () => {
   const [loading, setLoading] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: "", agent_id: "", area_code: "" });
+  const [createForm, setCreateForm] = useState({ name: "", agent_id: "" });
   const [creating, setCreating] = useState(false);
 
   const [settingsTarget, setSettingsTarget] = useState<Receptionist | null>(null);
@@ -94,6 +94,34 @@ const Inbound = () => {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // Handle the return from Stripe checkout (low-balance receptionist purchase).
+  const confirming = useRef(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const purchase = params.get("purchase");
+    if (!purchase) return;
+    const cleanUrl = () => window.history.replaceState({}, "", window.location.pathname);
+
+    if (purchase === "canceled") {
+      toast.info("Purchase canceled. No receptionist was created.");
+      cleanUrl();
+      return;
+    }
+    if (purchase === "success") {
+      const sessionId = params.get("session_id");
+      if (!sessionId || confirming.current) { cleanUrl(); return; }
+      confirming.current = true;
+      const t = toast.loading("Payment received. Setting up your receptionist…");
+      api.confirmPhonePurchase(sessionId).then(({ data, error }) => {
+        toast.dismiss(t);
+        if (error || !data) toast.error(error || "Could not finish setting up the receptionist after payment.");
+        else toast.success(`Number ${data.number || ""} purchased and receptionist created.`);
+        cleanUrl();
+        fetchAll();
+      });
+    }
+  }, []);
+
   const totalCalls = callLogs.length;
   const completedCalls = callLogs.filter((c) => c.status === "Completed").length;
   const avgDuration = callLogs.filter((c) => c.duration).length > 0
@@ -105,14 +133,23 @@ const Inbound = () => {
     if (!createForm.name.trim()) return toast.error("Name is required");
     if (!createForm.agent_id) return toast.error("Select an AI agent");
     setCreating(true);
-    const payload: any = { name: createForm.name, agent_id: createForm.agent_id, status: "Active" };
-    if (createForm.area_code.trim()) payload.area_code = createForm.area_code.trim();
-    const { error } = await api.createInboundQueue(payload);
+    // Twilio number: if the wallet has enough it's deducted from balance; otherwise
+    // the backend returns a Stripe checkout URL to pay for this number directly.
+    const { data, error } = await api.createInboundQueue({
+      name: createForm.name,
+      agent_id: createForm.agent_id,
+      status: "Active",
+      success_url: `${window.location.origin}/dashboard/telephony/inbound`,
+    });
     setCreating(false);
     if (error) return toast.error(error);
-    toast.success("AI Receptionist created phone number provisioned!");
+    if (data?.checkout_url) {
+      window.location.href = data.checkout_url;
+      return;
+    }
+    toast.success("AI Receptionist created — phone number provisioned!");
     setCreateOpen(false);
-    setCreateForm({ name: "", agent_id: "", area_code: "" });
+    setCreateForm({ name: "", agent_id: "" });
     fetchAll();
   };
 
@@ -351,7 +388,7 @@ const Inbound = () => {
               New AI Receptionist
             </DialogTitle>
             <DialogDescription>
-              Pick an AI agent we'll provision a VAPI phone number automatically. Incoming calls to that number go straight to your agent.
+              Pick an AI agent and we'll set up a phone number for it ($3/month, deducted from your wallet or paid by card if your balance is low). Incoming calls to that number go straight to your agent.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -375,17 +412,6 @@ const Inbound = () => {
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Only VAPI-synced agents are shown.</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Area Code <span className="font-normal text-muted-foreground">(optional)</span></Label>
-              <Input
-                placeholder="e.g. 360, 505, 435"
-                value={createForm.area_code}
-                onChange={(e) => setCreateForm((f) => ({ ...f, area_code: e.target.value }))}
-                maxLength={5}
-              />
-              <p className="text-xs text-muted-foreground">Leave blank for any available US number.</p>
             </div>
           </div>
           <DialogFooter>

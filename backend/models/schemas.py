@@ -183,6 +183,7 @@ class InboundQueueCreate(BaseModel):
     area_code: Optional[str] = None
     max_wait_seconds: int = 120
     overflow_action: str = "voicemail"
+    success_url: Optional[str] = None  # frontend app base for Stripe redirect (low-balance path)
 
 
 class InboundQueueUpdate(BaseModel):

@@ -206,6 +206,7 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Twilio purchase failed: {str(e)}")
         row["number"] = purchased["number"]
+        row["twilio_sid"] = purchased.get("sid")
 
         if settings.vapi_api_key:
             try:
@@ -243,6 +244,21 @@ def _phone_checkout_session(user, body) -> dict:
 
     app_base = (settings.public_app_url or "http://localhost:8080").rstrip("/")
     base = getattr(body, "success_url", None) or f"{app_base}/dashboard/telephony/phone-numbers"
+    metadata = {
+        "type": "phone_number",
+        "user_id": owner_id,
+        "provider": "twilio",
+        "area_code": body.area_code or "",
+        "agent_id": body.agent_id or "",
+        "status": getattr(body, "status", None) or "Active",
+    }
+    # AI Receptionist checkouts (InboundQueueCreate has `name`, PhoneNumberCreate doesn't)
+    # also need their inbound_queues row recreated once payment completes.
+    receptionist_name = getattr(body, "name", None)
+    if receptionist_name:
+        metadata["inbound_name"] = receptionist_name
+        metadata["inbound_max_wait_seconds"] = str(getattr(body, "max_wait_seconds", None) or 120)
+        metadata["inbound_overflow_action"] = getattr(body, "overflow_action", None) or "voicemail"
     session = stripe.checkout.Session.create(
         customer=customer_id,
         payment_method_types=["card"],
@@ -257,14 +273,7 @@ def _phone_checkout_session(user, body) -> dict:
         }],
         success_url=f"{base}?purchase=success&session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{base}?purchase=canceled",
-        metadata={
-            "type": "phone_number",
-            "user_id": owner_id,
-            "provider": "twilio",
-            "area_code": body.area_code or "",
-            "agent_id": body.agent_id or "",
-            "status": body.status or "Active",
-        },
+        metadata=metadata,
     )
     return {"checkout_url": session.url, "session_id": session.id}
 
@@ -370,13 +379,32 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
         monthly_cost=PHONE_NUMBER_MONTHLY_COST,
         stripe_session_id=body.session_id,
     )
+    # AI Receptionist checkout (low-balance path) — recreate the receptionist row now
+    # that the number is actually provisioned; see _phone_checkout_session.
+    if meta.get("inbound_name"):
+        supabase.table("inbound_queues").insert({
+            "user_id": owner_id,
+            "name": meta["inbound_name"],
+            "agent_id": meta.get("agent_id") or None,
+            "phone_number_id": row.get("id"),
+            "max_wait_seconds": int(meta.get("inbound_max_wait_seconds") or 120),
+            "overflow_action": meta.get("inbound_overflow_action") or "voicemail",
+            "status": "Active",
+        }).execute()
     return {"data": row, "error": None}
 
 
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
+    agent_cleared = "agent_id" in body.model_fields_set and not body.agent_id
     updates = body.model_dump(exclude_none=True)
+    if agent_cleared:
+        # Unassigning an agent (clearing inbound routing) is a legitimate update, but
+        # exclude_none=True above would otherwise drop it entirely — and agent_id is a
+        # uuid column, so it must become a real NULL here, never "" (Postgres rejects
+        # an empty string for uuid).
+        updates["agent_id"] = None
     if not updates:
         return {"data": None, "error": "No fields to update"}
 
@@ -425,7 +453,7 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     existing = (
         supabase.table("phone_numbers")
-        .select("vapi_phone_id")
+        .select("provider, number, twilio_sid, vapi_phone_id")
         .eq("id", number_id)
         .eq("user_id", owner_id)
         .maybe_single()
@@ -436,6 +464,33 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
             await vapi_client.delete_phone_number(existing.data["vapi_phone_id"])
         except Exception:
             pass
+    if existing.data and (existing.data.get("provider") or "").lower() == "twilio":
+        # Deleting our record must not silently leave a real Twilio number live —
+        # Twilio bills it monthly forever otherwise, regardless of whether it's used
+        # for inbound or outbound. twilio_sid may be missing on numbers purchased
+        # before this was tracked, so fall back to a lookup by the number itself.
+        sid = existing.data.get("twilio_sid")
+        if not sid and existing.data.get("number"):
+            try:
+                sid = await twilio_service.find_sid_by_number(existing.data["number"])
+            except Exception:
+                logger.exception(
+                    "Twilio sid lookup failed for number %s (%s) on delete — release skipped, "
+                    "it will keep billing on Twilio until released manually",
+                    number_id, existing.data["number"],
+                )
+                sid = None
+            if not sid:
+                logger.warning(
+                    "No Twilio sid found for number %s (%s) on delete — release skipped, "
+                    "it will keep billing on Twilio until released manually",
+                    number_id, existing.data["number"],
+                )
+        if sid:
+            try:
+                await twilio_service.release_number(sid)
+            except Exception:
+                logger.exception("Failed to release Twilio number %s (sid=%s) on delete", number_id, sid)
     supabase.table("phone_numbers").delete().eq("id", number_id).eq("user_id", owner_id).execute()
     return {"data": None, "error": None}
 
@@ -824,27 +879,30 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             raise HTTPException(status_code=502, detail=f"VAPI error assigning agent: {str(e)}")
         supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
     else:
-        vapi_payload: dict = {"provider": "vapi", "assistantId": vapi_assistant_id}
-        if body.area_code:
-            vapi_payload["numberDesiredAreaCode"] = body.area_code
-        try:
-            vapi_result = await vapi_client.create_phone_number(vapi_payload)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"VAPI error provisioning number: {str(e)}")
+        # A brand-new receptionist number is always a paid Twilio number — matches the
+        # platform's outbound convention (Twilio, never a free VAPI-native number).
+        if not settings.twilio_account_sid or not settings.twilio_auth_token:
+            raise HTTPException(status_code=400, detail="Twilio account is not configured on the server.")
+        if has_balance(owner_id, PHONE_NUMBER_MONTHLY_COST):
+            pn_row = await _provision_phone_number(
+                user_id=owner_id, provider="twilio", agent_id=body.agent_id,
+                status="Active", monthly_cost=PHONE_NUMBER_MONTHLY_COST,
+            )
+            debit_balance(
+                owner_id, PHONE_NUMBER_MONTHLY_COST, "phone",
+                f"Phone number {pn_row.get('number')}", ref_id=pn_row.get("id"),
+            )
+            phone_number_id = pn_row["id"]
+        else:
+            # Low balance → send the user to Stripe checkout, same as the Phone Numbers
+            # page. The receptionist row itself is created after payment confirms
+            # (see confirm_phone_checkout), since there's no number yet to attach it to.
+            if not settings.stripe_secret_key:
+                raise HTTPException(status_code=402, detail="Insufficient balance and Stripe is not configured.")
+            checkout = _phone_checkout_session(user, body)
+            return {"data": {"needs_payment": True, **checkout}, "error": None}
 
-        pn_row = {
-            "user_id": owner_id,
-            "number": vapi_result.get("number", ""),
-            "vapi_phone_id": vapi_result.get("id"),
-            "agent_id": body.agent_id,
-            "provider": "vapi",
-            "status": "Active",
-        }
-        pn_result = supabase.table("phone_numbers").insert(pn_row).execute()
-        if pn_result.data:
-            phone_number_id = pn_result.data[0]["id"]
-
-    row = body.model_dump(exclude={"area_code"})
+    row = body.model_dump(exclude={"area_code", "success_url"})
     row["user_id"] = owner_id
     row["phone_number_id"] = phone_number_id
 

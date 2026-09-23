@@ -19,27 +19,43 @@ async def list_conversations(
     agent_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
     direction: Optional[str] = None,
-    limit: int = Query(50, le=200),
+    contact_name: Optional[str] = None,
+    phone: Optional[str] = None,
+    duration: Optional[str] = None,
+    qualified: Optional[str] = None,
+    call_date: Optional[str] = None,
+    limit: int = Query(50, le=1000),
     offset: int = 0,
 ):
+    owner_id = resolve_owner_id(user["user_id"])
     query = (
         supabase.table("conversations")
-        .select("*")
-        .eq("user_id", resolve_owner_id(user["user_id"]))
+        .select("*", count="exact")
+        .eq("user_id", owner_id)
     )
     if status:
         query = query.eq("status", status)
     if channel:
-        query = query.eq("channel", channel)
+        query = query.ilike("channel", f"%{channel}%")
     if agent_id:
         query = query.eq("agent_id", agent_id)
     if campaign_id:
         query = query.eq("campaign_id", campaign_id)
     if direction:
         query = query.eq("direction", direction)
+    if contact_name:
+        query = query.ilike("contact_name", f"%{contact_name}%")
+    if phone:
+        query = query.ilike("phone", f"%{phone}%")
+    if duration:
+        query = query.ilike("duration", f"%{duration}%")
+    if qualified in ("yes", "no"):
+        query = query.eq("qualified", qualified == "yes")
+    if call_date:
+        query = query.gte("call_time", f"{call_date}T00:00:00").lte("call_time", f"{call_date}T23:59:59.999999")
 
     result = query.order("call_time", desc=True).range(offset, offset + limit - 1).execute()
-    return {"data": result.data, "error": None, "meta": {"count": len(result.data)}}
+    return {"data": result.data, "error": None, "meta": {"count": result.count}}
 
 
 @router.get("/stats")

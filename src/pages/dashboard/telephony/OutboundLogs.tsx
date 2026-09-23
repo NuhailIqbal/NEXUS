@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  PhoneIncoming, Loader2,
-  FileText, Play,
+  PhoneOutgoing, Loader2,
+  FileText,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,12 +32,11 @@ type CallLog = {
   recording_url?: string;
   stereo_recording_url?: string;
   direction?: string;
-  sentiment?: string;
 };
 
 type Agent = { id: string; name: string };
 
-const InboundLogs = () => {
+const OutboundLogs = () => {
   const [logs, setLogs] = useState<CallLog[]>([]);
   const [agents, setAgents] = useState<Map<string, Agent>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -50,7 +49,7 @@ const InboundLogs = () => {
 
   const fetchLogs = useCallback(async () => {
     const [cRes, aRes] = await Promise.all([
-      api.getConversations("direction=inbound&limit=100"),
+      api.getConversations("direction=outbound&limit=100"),
       api.getAgents(),
     ]);
     if (Array.isArray(cRes.data)) setLogs(cRes.data);
@@ -60,7 +59,7 @@ const InboundLogs = () => {
 
   useEffect(() => {
     fetchLogs();
-    // Silently refresh so background-synced inbound calls appear without a manual reload.
+    // Silently refresh so background-synced outbound calls appear without a manual reload.
     const t = setInterval(() => fetchLogs(), 30000);
     return () => clearInterval(t);
   }, [fetchLogs]);
@@ -109,8 +108,8 @@ const InboundLogs = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Inbound Call Logs</h1>
-        <p className="text-sm text-muted-foreground">All incoming calls received by your AI receptionists.</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Call Logs</h1>
+        <p className="text-sm text-muted-foreground">All outgoing calls placed by your agents and campaigns.</p>
       </div>
 
       {/* Stats */}
@@ -136,14 +135,14 @@ const InboundLogs = () => {
       {/* Logs Table */}
       {logs.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-12 text-center text-muted-foreground">
-          No inbound calls recorded yet.
+          No outbound calls recorded yet.
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-3">Caller</th>
+                <th className="px-4 py-3">Called</th>
                 <th className="px-4 py-3">Agent</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Duration</th>
@@ -196,11 +195,11 @@ const InboundLogs = () => {
         <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <PhoneIncoming className="h-5 w-5 text-primary" />
+              <PhoneOutgoing className="h-5 w-5 text-primary" />
               Call Details
             </DialogTitle>
             <DialogDescription>
-              {detail?.contact_name || detail?.phone || "Unknown caller"} &bull; {detail?.call_time ? new Date(detail.call_time).toLocaleString() : ""}
+              {detail?.contact_name || detail?.phone || "Unknown contact"} &bull; {detail?.call_time ? new Date(detail.call_time).toLocaleString() : ""}
             </DialogDescription>
           </DialogHeader>
 
@@ -270,4 +269,4 @@ const InboundLogs = () => {
   );
 };
 
-export default InboundLogs;
+export default OutboundLogs;

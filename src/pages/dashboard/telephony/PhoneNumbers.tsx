@@ -153,7 +153,7 @@ const PhoneNumbers = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Phone Numbers</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Numbers</h1>
           <p className="text-sm text-muted-foreground">Provision and manage your numbers.</p>
         </div>
         <Button onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />Buy Number</Button>
