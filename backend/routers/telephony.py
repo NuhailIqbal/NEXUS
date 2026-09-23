@@ -967,5 +967,36 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
 
 @router.delete("/inbound/{queue_id}")
 async def delete_inbound_queue(queue_id: str, user=Depends(get_current_user)):
-    supabase.table("inbound_queues").delete().eq("id", queue_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
+    """Deleting a receptionist must also unassign its number — otherwise the number
+    keeps answering calls with the old agent (and the Phone Numbers page keeps
+    showing it as "Inbound") even though the receptionist itself is gone."""
+    owner_id = resolve_owner_id(user["user_id"])
+    queue = (
+        supabase.table("inbound_queues")
+        .select("phone_number_id")
+        .eq("id", queue_id)
+        .eq("user_id", owner_id)
+        .maybe_single()
+        .execute()
+    )
+    phone_number_id = queue.data.get("phone_number_id") if queue.data else None
+
+    supabase.table("inbound_queues").delete().eq("id", queue_id).eq("user_id", owner_id).execute()
+
+    if phone_number_id:
+        phone = (
+            supabase.table("phone_numbers")
+            .select("vapi_phone_id")
+            .eq("id", phone_number_id)
+            .eq("user_id", owner_id)
+            .maybe_single()
+            .execute()
+        )
+        if phone.data and phone.data.get("vapi_phone_id") and settings.vapi_api_key:
+            try:
+                await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": None})
+            except Exception:
+                logger.exception("Failed to clear VAPI assistant for phone number %s on receptionist delete", phone_number_id)
+        supabase.table("phone_numbers").update({"agent_id": None}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
+
     return {"data": None, "error": None}

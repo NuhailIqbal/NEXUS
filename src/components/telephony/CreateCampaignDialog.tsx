@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  X, Rocket, Mic, Phone, Clipboard, BookOpen,
+  X, Rocket, Mic, Phone, Clipboard, BookOpen, Check, ChevronsUpDown,
   ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -10,6 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 
 type Props = {
@@ -189,14 +193,14 @@ function Step1({
           />
         ) : (
           <Field label="Agent" required>
-            <select
-              value={data.agentId}
-              onChange={(e) => update("agentId", e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">Select an agent…</option>
-              {agents.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
-            </select>
+            <Select value={data.agentId} onValueChange={(v) => update("agentId", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select an agent…" />
+              </SelectTrigger>
+              <SelectContent>
+                {agents.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
+              </SelectContent>
+            </Select>
           </Field>
         )}
       </Section>
@@ -210,14 +214,7 @@ function Step1({
           />
         ) : (
           <Field label="From Number" required>
-            <select
-              value={data.phoneNumberId}
-              onChange={(e) => update("phoneNumberId", e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">Select a number…</option>
-              {phoneNumbers.map((p) => (<option key={p.id} value={p.id}>{p.number}</option>))}
-            </select>
+            <PhoneNumberCombobox phoneNumbers={phoneNumbers} value={data.phoneNumberId} onChange={(v) => update("phoneNumberId", v)} />
           </Field>
         )}
       </Section>
@@ -272,18 +269,18 @@ function Step3({
           />
         ) : (
           <Field label="Contact List" required>
-            <select
-              value={data.listId}
-              onChange={(e) => update("listId", e.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">Select a list…</option>
-              {lists.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}{l.contact_count != null ? ` (${l.contact_count} contacts)` : ""}
-                </option>
-              ))}
-            </select>
+            <Select value={data.listId} onValueChange={(v) => update("listId", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a list…" />
+              </SelectTrigger>
+              <SelectContent>
+                {lists.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>
+                    {l.name}{l.contact_count != null ? ` (${l.contact_count} contacts)` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
         )}
       </Section>
@@ -384,5 +381,54 @@ function EmptyHint({ label, hint, href }: { label: string; hint: string; href: s
         Open →
       </a>
     </div>
+  );
+}
+
+function PhoneNumberCombobox({
+  phoneNumbers, value, onChange,
+}: {
+  phoneNumbers: PhoneNumber[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = phoneNumbers.find((p) => p.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-expanded={open}
+          className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm"
+        >
+          <span className={selected ? "" : "text-muted-foreground"}>
+            {selected ? selected.number : "Select a number…"}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Type a number to search…" />
+          <CommandList>
+            <CommandEmpty>No matching number.</CommandEmpty>
+            <CommandGroup>
+              {phoneNumbers.map((p) => (
+                <CommandItem
+                  key={p.id}
+                  value={p.number}
+                  onSelect={() => { onChange(p.id); setOpen(false); }}
+                >
+                  <Check className={cn("mr-2 h-4 w-4", value === p.id ? "opacity-100" : "opacity-0")} />
+                  {p.number}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

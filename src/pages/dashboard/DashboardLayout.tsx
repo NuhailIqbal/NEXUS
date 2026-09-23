@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
-  LayoutDashboard, Bot, Mic, Database,
+  LayoutDashboard, Bot, Mic, Database, Phone,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
   Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow,
 } from "lucide-react";
@@ -44,12 +44,12 @@ const NAV: NavItem[] = [
       { label: "Lists", to: "/dashboard/database/lists" },
     ],
   },
+  { label: "Phone Numbers", to: "/dashboard/telephony/phone-numbers", icon: Phone },
   {
     label: "Outbound",
     icon: PhoneOutgoing,
     children: [
       { label: "Campaigns", to: "/dashboard/telephony/campaigns" },
-      { label: "Outbound Numbers", to: "/dashboard/telephony/phone-numbers" },
       { label: "Call Logs", to: "/dashboard/telephony/outbound-logs" },
     ],
   },
@@ -58,7 +58,6 @@ const NAV: NavItem[] = [
     icon: PhoneIncoming,
     children: [
       { label: "AI Receptionist", to: "/dashboard/telephony/inbound" },
-      { label: "Inbound Numbers", to: "/dashboard/telephony/inbound-numbers" },
       { label: "Call Logs", to: "/dashboard/telephony/inbound-logs" },
     ],
   },

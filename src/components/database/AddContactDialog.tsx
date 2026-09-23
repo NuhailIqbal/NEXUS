@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/services/api";
 
 type Props = {
@@ -127,15 +128,24 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                   <Input value={basic.name} onChange={(e) => setBasic((b) => ({ ...b, name: e.target.value }))} placeholder="Please provide customer name" />
                 </Field>
                 <Field label="Timezone">
-                  <select value={basic.timezone} onChange={(e) => setBasic((b) => ({ ...b, timezone: e.target.value }))} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-                    {TIMEZONES.map((tz) => (<option key={tz} value={tz}>{tz}</option>))}
-                  </select>
+                  <Select value={basic.timezone} onValueChange={(v) => setBasic((b) => ({ ...b, timezone: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TIMEZONES.map((tz) => (<SelectItem key={tz} value={tz}>{tz}</SelectItem>))}
+                    </SelectContent>
+                  </Select>
                 </Field>
                 <Field label="List">
-                  <select value={basic.list_id} onChange={(e) => setBasic((b) => ({ ...b, list_id: e.target.value }))} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-                    <option value="">No list (unassigned)</option>
-                    {lists.map((l) => (<option key={l.id} value={l.id}>{l.name}</option>))}
-                  </select>
+                  <Select
+                    value={basic.list_id || "__none__"}
+                    onValueChange={(v) => setBasic((b) => ({ ...b, list_id: v === "__none__" ? "" : v }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No list (unassigned)</SelectItem>
+                      {lists.map((l) => (<SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>))}
+                    </SelectContent>
+                  </Select>
                 </Field>
               </div>
             </div>
@@ -151,11 +161,14 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                 {CUSTOM_FIELDS.map((f) => (
                   <Field key={f.key} label={f.label}>
                     {f.type === "yesno" ? (
-                      <select value={custom[f.key] ?? ""} onChange={(e) => setCf(f.key, e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-                        <option value="">Please select Yes or No</option>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
+                      <Select value={custom[f.key] || "__unset__"} onValueChange={(v) => setCf(f.key, v === "__unset__" ? "" : v)}>
+                        <SelectTrigger><SelectValue placeholder="Please select Yes or No" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__unset__">Please select Yes or No</SelectItem>
+                          <SelectItem value="yes">Yes</SelectItem>
+                          <SelectItem value="no">No</SelectItem>
+                        </SelectContent>
+                      </Select>
                     ) : (
                       <Input value={custom[f.key] ?? ""} onChange={(e) => setCf(f.key, e.target.value)} placeholder={f.placeholder} />
                     )}

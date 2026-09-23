@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
@@ -40,7 +40,6 @@ import Outbound from "./pages/dashboard/telephony/Outbound.tsx";
 import Inbound from "./pages/dashboard/telephony/Inbound.tsx";
 import InboundLogs from "./pages/dashboard/telephony/InboundLogs.tsx";
 import OutboundLogs from "./pages/dashboard/telephony/OutboundLogs.tsx";
-import InboundNumbers from "./pages/dashboard/telephony/InboundNumbers.tsx";
 import PhoneNumbers from "./pages/dashboard/telephony/PhoneNumbers.tsx";
 import BillingLayout from "./components/billing/BillingLayout.tsx";
 import BillingOverview from "./components/billing/BillingOverview.tsx";
@@ -111,7 +110,7 @@ const App = () => {
                   <Route path="telephony/outbound" element={<Outbound />} />
                   <Route path="telephony/campaigns" element={<Outbound />} />
                   <Route path="telephony/inbound" element={<Inbound />} />
-                  <Route path="telephony/inbound-numbers" element={<InboundNumbers />} />
+                  <Route path="telephony/inbound-numbers" element={<Navigate to="/dashboard/telephony/phone-numbers" replace />} />
                   <Route path="telephony/inbound-logs" element={<InboundLogs />} />
                   <Route path="telephony/outbound-logs" element={<OutboundLogs />} />
                   <Route path="telephony/phone-numbers" element={<PhoneNumbers />} />

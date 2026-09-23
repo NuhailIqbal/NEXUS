@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { X, Plus, ChevronDown } from "lucide-react";
+import { X, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/services/api";
 
 type Props = {
@@ -15,29 +14,23 @@ type Props = {
   onCreate?: (data: PhoneNumberData) => void;
 };
 
+export type Purpose = "inbound" | "outbound" | "both";
+
 export type PhoneNumberData = {
-  title: string;
-  description: string;
   active: boolean;
-  useForCall: boolean;
-  useForHumanAgent: boolean;
-  useForSms: boolean;
   serviceProvider: string;
   agentId: string;
+  purpose: Purpose | "";
 };
 
 const PROVIDERS = ["Twilio"];
 
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
-    title: "",
-    description: "",
     active: false,
-    useForCall: false,
-    useForHumanAgent: false,
-    useForSms: false,
     serviceProvider: "",
     agentId: "",
+    purpose: "",
   });
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
 
@@ -47,8 +40,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     }
   }, [open]);
 
-  const reset = () =>
-    setData({ title: "", description: "", active: false, useForCall: false, useForHumanAgent: false, useForSms: false, serviceProvider: "", agentId: "" });
+  const reset = () => setData({ active: false, serviceProvider: "", agentId: "", purpose: "" });
 
   const close = (v: boolean) => {
     if (!v) reset();
@@ -56,7 +48,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   };
 
   const create = () => {
-    if (!data.title.trim()) return toast.error("Title is required");
+    if (!data.purpose) return toast.error("Please select a purpose");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
     onCreate?.(data);
     close(false);
@@ -64,7 +56,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto p-0 gap-0 [&>button]:hidden">
+      <DialogContent className="max-w-lg p-0 gap-0 [&>button]:hidden">
         {/* [&>button]:hidden removes shadcn's built-in close X — this dialog has its own in the header */}
         <VisuallyHidden>
           <DialogTitle>Create Phone Number</DialogTitle>
@@ -78,70 +70,70 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 px-6 py-6">
+        <div className="space-y-4 px-6 py-6">
           <div>
-            <h3 className="text-base font-bold mb-4">Main info</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold mb-1.5">Title</label>
-                <Input placeholder="Title" value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-1.5">Description</label>
-                <Textarea rows={4} placeholder="Description" value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} />
-              </div>
-              <ToggleRow label="Active" checked={data.active} onChange={(v) => setData({ ...data, active: v })} />
-              <ToggleRow label="Use For Call" checked={data.useForCall} onChange={(v) => setData({ ...data, useForCall: v })} />
-              <ToggleRow label="Use For Human Agent" checked={data.useForHumanAgent} onChange={(v) => setData({ ...data, useForHumanAgent: v })} />
-              <ToggleRow label="Use For SMS" checked={data.useForSms} onChange={(v) => setData({ ...data, useForSms: v })} />
-            </div>
+            <label className="block text-sm font-semibold mb-1.5">Purpose</label>
+            <Select
+              value={data.purpose}
+              onValueChange={(v) => setData({ ...data, purpose: v as Purpose, agentId: v === "outbound" ? "" : data.agentId })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inbound">Inbound</SelectItem>
+                <SelectItem value="outbound">Outbound</SelectItem>
+                <SelectItem value="both">Both</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
-            <h3 className="text-base font-bold mb-4">Phone Details</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
-                <div className="relative">
-                  <select
-                    value={data.serviceProvider}
-                    onChange={(e) => setData({ ...data, serviceProvider: e.target.value })}
-                    className="w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  >
-                    <option value="">Please select your phone number provider</option>
-                    {PROVIDERS.map((p) => (<option key={p} value={p}>{p}</option>))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                </div>
-              </div>
-
-              {data.serviceProvider.toLowerCase() === "twilio" && (
-                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
-                  covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
-                  <span className="mt-1 block text-[11px]">The number is provisioned once payment is settled.</span>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-semibold mb-1.5">Assign AI Agent</label>
-                <div className="relative">
-                  <select
-                    value={data.agentId}
-                    onChange={(e) => setData({ ...data, agentId: e.target.value })}
-                    className="w-full appearance-none rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  >
-                    <option value="">No agent assigned</option>
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">Agent that handles inbound calls on this number.</p>
-              </div>
-            </div>
+            <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
+            <Select value={data.serviceProvider} onValueChange={(v) => setData({ ...data, serviceProvider: v })}>
+              <SelectTrigger>
+                <SelectValue placeholder="Please select your phone number provider" />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDERS.map((p) => (<SelectItem key={p} value={p}>{p}</SelectItem>))}
+              </SelectContent>
+            </Select>
           </div>
+
+          {data.serviceProvider.toLowerCase() === "twilio" && (
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
+              covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
+              <span className="mt-1 block text-[11px]">The number is provisioned once payment is settled.</span>
+            </div>
+          )}
+
+          {data.purpose !== "outbound" ? (
+            <div>
+              <label className="block text-sm font-semibold mb-1.5">Assign AI Agent</label>
+              <Select
+                value={data.agentId || "__none__"}
+                onValueChange={(v) => setData({ ...data, agentId: v === "__none__" ? "" : v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="No agent assigned" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No agent assigned</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">Agent that handles inbound calls on this number.</p>
+            </div>
+          ) : (
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              You can add this number to a campaign from Outbound → Campaigns once it's created.
+            </div>
+          )}
+
+          <ToggleRow label="Active" checked={data.active} onChange={(v) => setData({ ...data, active: v })} />
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-6 py-4 bg-muted/20">

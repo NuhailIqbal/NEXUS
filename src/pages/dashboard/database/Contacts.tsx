@@ -45,6 +45,8 @@ const Contacts = () => {
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [showImportInfo, setShowImportInfo] = useState(false);
+  const [importListId, setImportListId] = useState(""); // "" = no list, "__new__" = create new
+  const [importNewListName, setImportNewListName] = useState("");
   const [viewTarget, setViewTarget] = useState<Contact | null>(null);
   const [editTarget, setEditTarget] = useState<Contact | null>(null);
   const [editForm, setEditForm] = useState<Partial<Contact>>({});
@@ -124,6 +126,19 @@ const Contacts = () => {
       toast.error("Please upload a .csv file. In Excel: Save As → CSV (Comma delimited).");
       return;
     }
+
+    // Resolve the target list before touching any rows: either an existing list,
+    // a brand-new one created on the fly, or none (imported contacts stay list-less).
+    let listId: string | undefined;
+    if (importListId === "__new__") {
+      if (!importNewListName.trim()) return toast.error("Enter a name for the new list");
+      const { data, error } = await api.createList({ name: importNewListName.trim() });
+      if (error || !data) return toast.error(error || "Failed to create list");
+      listId = (data as any).id;
+    } else if (importListId) {
+      listId = importListId;
+    }
+
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter(Boolean);
     if (lines.length === 0) return toast.error("Empty file");
@@ -145,6 +160,7 @@ const Contacts = () => {
         phone,
         email: row.email ?? "",
         status: "Active",
+        ...(listId ? { list_id: listId } : {}),
       });
       if (!error) count++;
     }
@@ -155,6 +171,8 @@ const Contacts = () => {
     } else {
       toast.success(`Imported ${count} contact${count === 1 ? "" : "s"}`);
     }
+    setImportListId("");
+    setImportNewListName("");
     fetchContacts();
   };
 
@@ -206,6 +224,28 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
               <li>Don&apos;t put commas inside a value (e.g. write <span className="font-medium text-foreground">John Doe</span>, not <span className="font-medium text-foreground">Doe, John</span>) since commas separate columns.</li>
               <li>New contacts are added with status <span className="font-medium text-foreground">Active</span>.</li>
             </ul>
+            <div className="space-y-2 border-t border-border pt-3">
+              <Label>Add to List (optional)</Label>
+              <Select
+                value={importListId || "__none__"}
+                onValueChange={(v) => setImportListId(v === "__none__" ? "" : v)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No list</SelectItem>
+                  {lists.map((l) => (<SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>))}
+                  <SelectItem value="__new__">+ Create new list…</SelectItem>
+                </SelectContent>
+              </Select>
+              {importListId === "__new__" && (
+                <Input
+                  value={importNewListName}
+                  onChange={(e) => setImportNewListName(e.target.value)}
+                  placeholder="New list name"
+                  autoFocus
+                />
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowImportInfo(false)}>Cancel</Button>

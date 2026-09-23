@@ -3,7 +3,6 @@ import {
   PhoneIncoming, Loader2,
   FileText, Play,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -34,6 +33,13 @@ type CallLog = {
   direction?: string;
   sentiment?: string;
 };
+
+const colorFor = (s: string) =>
+  s === "Completed" ? "bg-success/15 text-success" :
+  s === "Failed" || s === "Unsuccessful" ? "bg-destructive/15 text-destructive" :
+  s === "Ringing" ? "bg-warning/15 text-warning" :
+  s === "In Progress" || s === "Initiated" ? "bg-info/15 text-info" :
+  "bg-muted text-muted-foreground";
 
 type Agent = { id: string; name: string };
 
@@ -161,13 +167,7 @@ const InboundLogs = () => {
                     {c.agent_id ? agents.get(c.agent_id)?.name ?? " " : " "}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge variant={
-                      c.status === "Completed" ? "default" :
-                      c.status === "Failed" ? "destructive" :
-                      "secondary"
-                    }>
-                      {c.status}
-                    </Badge>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}

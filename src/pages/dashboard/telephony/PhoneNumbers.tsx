@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Phone, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -46,26 +46,43 @@ function numberExpiry(nextBillingAt?: string | null) {
   return { date: d, daysLeft };
 }
 
+type Tab = "all" | "inbound" | "outbound" | "unused";
+
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
   const [numbers, setNumbers] = useState<Num[]>([]);
   const [agentsById, setAgentsById] = useState<Map<string, string>>(new Map());
+  const [outboundIds, setOutboundIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<Tab>("all");
 
   const [testTarget, setTestTarget] = useState<Num | null>(null);
   const [testLog, setTestLog] = useState<string[]>([]);
   const [settingsTarget, setSettingsTarget] = useState<Num | null>(null);
-  const [settingsForm, setSettingsForm] = useState<{ agent_id: string; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
+  const [settingsForm, setSettingsForm] = useState<{ agent_id: string | null; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
 
   const fetchNumbers = async () => {
-    const [numbersRes, agentsRes] = await Promise.all([api.getPhoneNumbers(), api.getAgents()]);
+    const [numbersRes, agentsRes, campaignsRes] = await Promise.all([
+      api.getPhoneNumbers(), api.getAgents(), api.getCampaigns(),
+    ]);
     if (numbersRes.data) setNumbers(Array.isArray(numbersRes.data) ? numbersRes.data : []);
     if (Array.isArray(agentsRes.data))
       setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
+    if (Array.isArray(campaignsRes.data))
+      setOutboundIds(new Set(campaignsRes.data.map((c: any) => c.phone_number_id).filter(Boolean)));
     setLoading(false);
   };
 
   useEffect(() => { fetchNumbers(); }, []);
+
+  // Inbound = actively answering calls (agent assigned). Outbound = referenced by a
+  // campaign. Unused = neither — a number just sitting idle, doing nothing.
+  const visibleNumbers = useMemo(() => {
+    if (tab === "inbound") return numbers.filter((n) => !!n.agent_id);
+    if (tab === "outbound") return numbers.filter((n) => outboundIds.has(n.id));
+    if (tab === "unused") return numbers.filter((n) => !n.agent_id && !outboundIds.has(n.id));
+    return numbers;
+  }, [numbers, outboundIds, tab]);
 
   // Handle the return from Stripe checkout (low-balance number purchase).
   const confirming = useRef(false);
@@ -149,20 +166,47 @@ const PhoneNumbers = () => {
     fetchNumbers();
   };
 
+  const emptyMessage =
+    tab === "inbound" ? "No inbound numbers." :
+    tab === "outbound" ? "No outbound numbers." :
+    tab === "unused" ? "No unused numbers." :
+    "No phone numbers found.";
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Numbers</h1>
-          <p className="text-sm text-muted-foreground">Provision and manage your numbers.</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Phone Numbers</h1>
+          <p className="text-sm text-muted-foreground">Every number across inbound and outbound use, in one place.</p>
         </div>
         <Button onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />Buy Number</Button>
       </div>
+
+      <div className="flex items-center gap-6 border-b border-border">
+        {([
+          { key: "all", label: "All" },
+          { key: "inbound", label: "Inbound" },
+          { key: "outbound", label: "Outbound" },
+          { key: "unused", label: "Unused" },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`relative py-3 text-sm font-medium ${tab === t.key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            {t.label}
+            {tab === t.key && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
+          </button>
+        ))}
+      </div>
+
       <div className="overflow-hidden rounded-xl border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Number</th>
+              <th className="px-4 py-3">Used In</th>
               <th className="px-4 py-3">Provider</th>
               <th className="px-4 py-3">Assigned Agent</th>
               <th className="px-4 py-3">Status</th>
@@ -174,18 +218,31 @@ const PhoneNumbers = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
-            ) : numbers.length === 0 ? (
+            ) : visibleNumbers.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No phone numbers found.</td>
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">{emptyMessage}</td>
               </tr>
             ) : (
-              numbers.map((n) => (
+              visibleNumbers.map((n) => (
                 <tr key={n.id} className="border-t border-border bg-card/30">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2 font-mono text-foreground">
                       <Phone className="h-4 w-4 text-primary" /> {n.number}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-1.5">
+                      {n.agent_id && (
+                        <span className="rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Inbound</span>
+                      )}
+                      {outboundIds.has(n.id) && (
+                        <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
+                      )}
+                      {!n.agent_id && !outboundIds.has(n.id) && (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3">{n.provider}</td>
@@ -231,7 +288,6 @@ const PhoneNumbers = () => {
         onOpenChange={setOpen}
         onCreate={async (d) => {
           const payload: Record<string, any> = {
-            label: d.title,
             status: d.active ? "Active" : "Inactive",
             provider: d.serviceProvider,
           };
@@ -244,7 +300,7 @@ const PhoneNumbers = () => {
             window.location.href = data.checkout_url;
             return;
           }
-          toast.success(`Phone number "${d.title}" created`);
+          toast.success(`Phone number ${data?.number || ""} created`);
           fetchNumbers();
         }}
       />
@@ -267,9 +323,13 @@ const PhoneNumbers = () => {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>Assigned Agent</Label>
-              <Select value={settingsForm.agent_id} onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v }))}>
+              <Select
+                value={settingsForm.agent_id || "__none__"}
+                onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v === "__none__" ? null : v }))}
+              >
                 <SelectTrigger><SelectValue placeholder="Select an agent" /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__none__">No agent assigned</SelectItem>
                   {Array.from(agentsById.entries()).map(([id, name]) => (
                     <SelectItem key={id} value={id}>{name}</SelectItem>
                   ))}

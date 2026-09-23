@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, RefreshCw, Search, X } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { format } from "date-fns";
 import { api } from "@/services/api";
 import { Input } from "@/components/ui/input";

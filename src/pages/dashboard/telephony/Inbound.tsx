@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   PhoneIncoming, Plus, Phone, Bot, Loader2, Trash2,
-  CheckCircle2, XCircle, Clock, PhoneCall, Settings as SettingsIcon,
+  CheckCircle2, Settings as SettingsIcon,
   Copy, Headphones, TrendingUp, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -69,8 +69,11 @@ const Inbound = () => {
   const [loading, setLoading] = useState(true);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: "", agent_id: "" });
+  const [createForm, setCreateForm] = useState({ name: "", agent_id: "", phone_number_id: "" });
   const [creating, setCreating] = useState(false);
+
+  // Numbers not already answering inbound calls — reusable instead of buying a new one.
+  const availableNumbers = phones.filter((p) => !p.agent_id && p.vapi_phone_id);
 
   const [settingsTarget, setSettingsTarget] = useState<Receptionist | null>(null);
   const [settingsForm, setSettingsForm] = useState({ name: "", agent_id: "", status: "" });
@@ -133,11 +136,13 @@ const Inbound = () => {
     if (!createForm.name.trim()) return toast.error("Name is required");
     if (!createForm.agent_id) return toast.error("Select an AI agent");
     setCreating(true);
-    // Twilio number: if the wallet has enough it's deducted from balance; otherwise
-    // the backend returns a Stripe checkout URL to pay for this number directly.
+    // Reusing an existing unassigned number just reassigns it (no purchase). Otherwise
+    // a new Twilio number is bought — from the wallet if it covers it, or Stripe checkout
+    // if the balance is low.
     const { data, error } = await api.createInboundQueue({
       name: createForm.name,
       agent_id: createForm.agent_id,
+      phone_number_id: createForm.phone_number_id || undefined,
       status: "Active",
       success_url: `${window.location.origin}/dashboard/telephony/inbound`,
     });
@@ -147,9 +152,13 @@ const Inbound = () => {
       window.location.href = data.checkout_url;
       return;
     }
-    toast.success("AI Receptionist created — phone number provisioned!");
+    toast.success(
+      createForm.phone_number_id
+        ? "AI Receptionist created. Existing number reassigned!"
+        : "AI Receptionist created. Phone number provisioned!"
+    );
     setCreateOpen(false);
-    setCreateForm({ name: "", agent_id: "" });
+    setCreateForm({ name: "", agent_id: "", phone_number_id: "" });
     fetchAll();
   };
 
@@ -302,81 +311,6 @@ const Inbound = () => {
         </div>
       )}
 
-      {/* Recent Inbound Calls */}
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
-            <PhoneCall className="h-5 w-5 text-primary" />
-            Recent Inbound Calls
-          </h2>
-          {callLogs.length > 0 && (
-            <span className="text-xs text-muted-foreground">{callLogs.length} call{callLogs.length !== 1 ? "s" : ""} recorded</span>
-          )}
-        </div>
-
-        {callLogs.length === 0 ? (
-          <div className="rounded-xl border border-border bg-card p-10 text-center">
-            <PhoneIncoming className="mx-auto h-8 w-8 text-muted-foreground/40" />
-            <p className="mt-3 text-sm font-medium text-foreground">No inbound calls yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Once callers dial your receptionist number, logs appear here in real time.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">Caller</th>
-                  <th className="px-4 py-3">Agent</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Duration</th>
-                  <th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">AI Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {callLogs.map((c) => (
-                  <tr key={c.id} className="border-t border-border bg-card/30 hover:bg-muted/20 transition-colors">
-                    <td className="px-4 py-3 font-medium text-foreground">
-                      {c.customer_number || "Unknown"}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {c.agent_id ? agentsMap.get(c.agent_id)?.name ?? " " : " "}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        {c.status === "Completed"
-                          ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                          : c.status === "Failed"
-                          ? <XCircle className="h-3.5 w-3.5 text-destructive" />
-                          : <Clock className="h-3.5 w-3.5 text-yellow-500" />}
-                        <span className={
-                          c.status === "Completed" ? "text-green-600 font-medium" :
-                          c.status === "Failed"    ? "text-destructive font-medium" :
-                          "text-yellow-600 font-medium"
-                        }>
-                          {c.status}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {c.duration ? formatDuration(c.duration) : " "}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {c.call_time ? new Date(c.call_time).toLocaleString() : " "}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground max-w-[220px] truncate">
-                      {c.ai_summary || <span className="italic opacity-50">No summary</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
       {/* Create Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-lg">
@@ -388,7 +322,7 @@ const Inbound = () => {
               New AI Receptionist
             </DialogTitle>
             <DialogDescription>
-              Pick an AI agent and we'll set up a phone number for it ($3/month, deducted from your wallet or paid by card if your balance is low). Incoming calls to that number go straight to your agent.
+              Pick an AI agent and a phone number for it. Incoming calls to that number go straight to your agent.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -412,6 +346,28 @@ const Inbound = () => {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Phone Number</Label>
+              <Select
+                value={createForm.phone_number_id || "__new__"}
+                onValueChange={(v) => setCreateForm((f) => ({ ...f, phone_number_id: v === "__new__" ? "" : v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__new__">Buy a new number ($3/month)</SelectItem>
+                  {availableNumbers.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.number} (existing, unused)</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {createForm.phone_number_id
+                  ? "This existing number will be reassigned to the agent above. No new purchase."
+                  : "A new number is deducted from your wallet, or paid by card if your balance is low."}
+              </p>
             </div>
           </div>
           <DialogFooter>
