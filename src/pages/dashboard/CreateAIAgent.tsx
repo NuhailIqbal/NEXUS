@@ -1,22 +1,19 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
-  X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
-  ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, ChevronsUpDown,
-  Shield, ClipboardList, Wifi, Wallet, Gavel, Handshake,
+  X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles, Briefcase,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn, isE164 } from "@/lib/utils";
 import { ALL_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
+import { IndustryCombobox } from "@/components/dashboard/IndustryCombobox";
 
 type StepKey = "setup" | "knowledge" | "prompt" | "testing";
 
@@ -25,26 +22,6 @@ const STEPS: { key: StepKey; title: string; description: string; icon: React.Com
   { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
   { key: "prompt", title: "Prompt Studio", description: "Craft the agent's instructions", icon: FileText },
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
-];
-
-// Real industries only — specific products/niches (Final Expense, Medicare, Roofing,
-// etc.) are NOT listed here; those are niches within one of these industries, not
-// industries themselves, so they're left off this picker entirely.
-const INDUSTRIES = [
-  { id: "retail", label: "Retail & E-commerce", icon: ShoppingBag, color: "bg-orange-500/15 text-orange-400" },
-  { id: "health", label: "Healthcare & Medical", icon: HeartPulse, color: "bg-rose-500/15 text-rose-400" },
-  { id: "finance", label: "Finance & Banking", icon: Landmark, color: "bg-emerald-500/15 text-emerald-400" },
-  { id: "realestate", label: "Real Estate", icon: Home, color: "bg-amber-500/15 text-amber-400" },
-  { id: "education", label: "Education", icon: GraduationCap, color: "bg-blue-500/15 text-blue-400" },
-  { id: "travel", label: "Travel & Hospitality", icon: Plane, color: "bg-cyan-500/15 text-cyan-400" },
-  { id: "saas", label: "SaaS & Technology", icon: Briefcase, color: "bg-violet-500/15 text-violet-400" },
-  { id: "automotive", label: "Automotive Industry", icon: Car, color: "bg-red-500/15 text-red-400" },
-  { id: "insurance", label: "Insurance", icon: Shield, color: "bg-teal-500/15 text-teal-400" },
-  { id: "debt-credit", label: "Debt & Credit Services", icon: Wallet, color: "bg-amber-500/15 text-amber-400" },
-  { id: "home-services", label: "Home Services & Contracting", icon: ClipboardList, color: "bg-slate-500/15 text-slate-400" },
-  { id: "legal", label: "Legal Services", icon: Gavel, color: "bg-gray-500/15 text-gray-400" },
-  { id: "internet-telecom", label: "Telecommunications & Internet", icon: Wifi, color: "bg-sky-500/15 text-sky-400" },
-  { id: "marketing", label: "Marketing & Professional Services", icon: Handshake, color: "bg-orange-500/15 text-orange-400" },
 ];
 
 type FormState = {
@@ -307,8 +284,6 @@ function StepSetup({
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
   const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
-  const [industryOpen, setIndustryOpen] = useState(false);
-  const selectedIndustry = INDUSTRIES.find((ind) => ind.id === form.industry);
 
   const analyzeWebsite = async () => {
     if (!form.website.trim()) return toast.error("Enter a website URL first");
@@ -405,54 +380,7 @@ function StepSetup({
       <div>
         <SectionTitle icon={<Briefcase className="h-4 w-4 text-primary" />}>Business Context</SectionTitle>
         <Field label="Industry" required className="mt-4">
-          <Popover open={industryOpen} onOpenChange={setIndustryOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                role="combobox"
-                aria-expanded={industryOpen}
-                className="flex h-11 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm"
-              >
-                {selectedIndustry ? (
-                  <span className="flex items-center gap-2">
-                    <span className={cn("flex h-6 w-6 items-center justify-center rounded-md", selectedIndustry.color)}>
-                      <selectedIndustry.icon className="h-3.5 w-3.5" />
-                    </span>
-                    {selectedIndustry.label}
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">Select an industry…</span>
-                )}
-                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-              <Command>
-                <CommandInput placeholder="Search industries…" />
-                <CommandList>
-                  <CommandEmpty>No industries found.</CommandEmpty>
-                  <CommandGroup>
-                    {INDUSTRIES.map((ind) => {
-                      const Icon = ind.icon;
-                      return (
-                        <CommandItem
-                          key={ind.id}
-                          value={ind.label}
-                          onSelect={() => { update("industry", ind.id); setIndustryOpen(false); }}
-                        >
-                          <Check className={cn("mr-2 h-4 w-4 shrink-0", form.industry === ind.id ? "opacity-100" : "opacity-0")} />
-                          <span className={cn("mr-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md", ind.color)}>
-                            <Icon className="h-3.5 w-3.5" />
-                          </span>
-                          {ind.label}
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
+          <IndustryCombobox value={form.industry} onChange={(label) => update("industry", label)} />
         </Field>
       </div>
 

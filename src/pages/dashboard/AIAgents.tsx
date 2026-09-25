@@ -9,6 +9,7 @@ import { api } from "@/services/api";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { SmartFilters, STATUS_DEFAULT, CATEGORY_DEFAULT, DATE_DEFAULT } from "@/components/dashboard/SmartFilters";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
+import { IndustryCombobox } from "@/components/dashboard/IndustryCombobox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -371,11 +372,9 @@ const AIAgents = () => {
 
             <div className="space-y-2">
               <Label htmlFor="agent-category">Category</Label>
-              <Input
-                id="agent-category"
+              <IndustryCombobox
                 value={editForm.category ?? ""}
-                onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}
-                placeholder="e.g. Lead Qualifying"
+                onChange={(label) => setEditForm((f) => ({ ...f, category: label }))}
               />
             </div>
 
