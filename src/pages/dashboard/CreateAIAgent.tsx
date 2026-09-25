@@ -3,12 +3,18 @@ import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, ChevronsUpDown,
+  ShieldCheck, Stethoscope, CarFront, Umbrella, Shield, HandHeart, HandCoins,
+  Receipt, CreditCard, Sun, Hammer, FileCheck2, ClipboardList, Bath, Droplets,
+  AppWindow, Wind, Bug, Wrench, KeyRound, BellRing, Accessibility, Scale,
+  Globe2, Wifi, Megaphone, Presentation, TrendingUp, LineChart,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn, isE164 } from "@/lib/utils";
 import { ALL_VOICE_NAMES } from "@/lib/voices";
 import { api } from "@/services/api";
@@ -33,6 +39,37 @@ const INDUSTRIES = [
   { id: "travel", label: "Travel & Hospitality", icon: Plane, color: "bg-cyan-500/15 text-cyan-400" },
   { id: "saas", label: "SaaS & Technology", icon: Briefcase, color: "bg-violet-500/15 text-violet-400" },
   { id: "automotive", label: "Automotive Industry", icon: Car, color: "bg-red-500/15 text-red-400" },
+  // Below: call-center verticals pulled from the Jobix AI script library (insurance,
+  // home-services, debt/legal and other lead-gen niches used across those prompts).
+  { id: "health-insurance", label: "Health Insurance (ACA/Marketplace)", icon: ShieldCheck, color: "bg-teal-500/15 text-teal-400" },
+  { id: "medicare", label: "Medicare", icon: Stethoscope, color: "bg-sky-500/15 text-sky-400" },
+  { id: "auto-insurance", label: "Auto Insurance", icon: CarFront, color: "bg-indigo-500/15 text-indigo-400" },
+  { id: "home-insurance", label: "Homeowners Insurance", icon: Umbrella, color: "bg-blue-500/15 text-blue-400" },
+  { id: "life-insurance", label: "Term Life Insurance", icon: Shield, color: "bg-emerald-500/15 text-emerald-400" },
+  { id: "final-expense", label: "Final Expense Insurance", icon: HandHeart, color: "bg-rose-500/15 text-rose-400" },
+  { id: "debt-relief", label: "Debt Relief & Settlement", icon: HandCoins, color: "bg-amber-500/15 text-amber-400" },
+  { id: "tax-debt", label: "Tax Debt Settlement", icon: Receipt, color: "bg-lime-500/15 text-lime-400" },
+  { id: "credit-repair", label: "Credit Repair", icon: CreditCard, color: "bg-cyan-500/15 text-cyan-400" },
+  { id: "solar", label: "Solar Energy", icon: Sun, color: "bg-yellow-500/15 text-yellow-400" },
+  { id: "roofing", label: "Roofing", icon: Hammer, color: "bg-orange-500/15 text-orange-400" },
+  { id: "home-warranty", label: "Home Warranty", icon: FileCheck2, color: "bg-green-500/15 text-green-400" },
+  { id: "home-services", label: "Home Services & Remodeling", icon: ClipboardList, color: "bg-slate-500/15 text-slate-400" },
+  { id: "bathroom-remodeling", label: "Bathroom Remodeling", icon: Bath, color: "bg-pink-500/15 text-pink-400" },
+  { id: "water-damage", label: "Water Damage Restoration", icon: Droplets, color: "bg-blue-500/15 text-blue-400" },
+  { id: "windows-doors", label: "Windows & Doors", icon: AppWindow, color: "bg-fuchsia-500/15 text-fuchsia-400" },
+  { id: "hvac", label: "HVAC", icon: Wind, color: "bg-cyan-500/15 text-cyan-400" },
+  { id: "pest-control", label: "Pest Control", icon: Bug, color: "bg-lime-500/15 text-lime-400" },
+  { id: "plumbing", label: "Plumbing", icon: Wrench, color: "bg-blue-500/15 text-blue-400" },
+  { id: "mortgage", label: "Mortgage", icon: KeyRound, color: "bg-amber-500/15 text-amber-400" },
+  { id: "medical-alert", label: "Medical Alert", icon: BellRing, color: "bg-red-500/15 text-red-400" },
+  { id: "ssdi", label: "Disability & SSDI", icon: Accessibility, color: "bg-purple-500/15 text-purple-400" },
+  { id: "legal", label: "Legal & Class Action", icon: Scale, color: "bg-gray-500/15 text-gray-400" },
+  { id: "immigration", label: "Immigration Services", icon: Globe2, color: "bg-teal-500/15 text-teal-400" },
+  { id: "internet-telecom", label: "Internet & Telecom", icon: Wifi, color: "bg-sky-500/15 text-sky-400" },
+  { id: "marketing", label: "Marketing Agency", icon: Megaphone, color: "bg-orange-500/15 text-orange-400" },
+  { id: "sales-training", label: "Sales Training & L&D", icon: Presentation, color: "bg-violet-500/15 text-violet-400" },
+  { id: "real-estate-investing", label: "Real Estate Investing & Coaching", icon: TrendingUp, color: "bg-emerald-500/15 text-emerald-400" },
+  { id: "fintech-trading", label: "Financial Trading & Prediction Markets", icon: LineChart, color: "bg-indigo-500/15 text-indigo-400" },
 ];
 
 type FormState = {
@@ -295,6 +332,8 @@ function StepSetup({
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
   const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
+  const [industryOpen, setIndustryOpen] = useState(false);
+  const selectedIndustry = INDUSTRIES.find((ind) => ind.id === form.industry);
 
   const analyzeWebsite = async () => {
     if (!form.website.trim()) return toast.error("Enter a website URL first");
@@ -391,30 +430,54 @@ function StepSetup({
       <div>
         <SectionTitle icon={<Briefcase className="h-4 w-4 text-primary" />}>Business Context</SectionTitle>
         <Field label="Industry" required className="mt-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {INDUSTRIES.map((ind) => {
-              const Icon = ind.icon;
-              const active = form.industry === ind.id;
-              return (
-                <button
-                  key={ind.id}
-                  type="button"
-                  onClick={() => update("industry", ind.id)}
-                  className={cn(
-                    "flex flex-col items-center gap-2 rounded-xl border p-4 text-center text-sm transition",
-                    active
-                      ? "border-primary bg-primary/5 text-foreground shadow-sm"
-                      : "border-input hover:border-primary/40 hover:bg-muted/40",
-                  )}
-                >
-                  <span className={cn("flex h-10 w-10 items-center justify-center rounded-lg", ind.color)}>
-                    <Icon className="h-5 w-5" />
+          <Popover open={industryOpen} onOpenChange={setIndustryOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                role="combobox"
+                aria-expanded={industryOpen}
+                className="flex h-11 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {selectedIndustry ? (
+                  <span className="flex items-center gap-2">
+                    <span className={cn("flex h-6 w-6 items-center justify-center rounded-md", selectedIndustry.color)}>
+                      <selectedIndustry.icon className="h-3.5 w-3.5" />
+                    </span>
+                    {selectedIndustry.label}
                   </span>
-                  <span className="font-medium leading-tight">{ind.label}</span>
-                </button>
-              );
-            })}
-          </div>
+                ) : (
+                  <span className="text-muted-foreground">Select an industry…</span>
+                )}
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search industries…" />
+                <CommandList>
+                  <CommandEmpty>No industries found.</CommandEmpty>
+                  <CommandGroup>
+                    {INDUSTRIES.map((ind) => {
+                      const Icon = ind.icon;
+                      return (
+                        <CommandItem
+                          key={ind.id}
+                          value={ind.label}
+                          onSelect={() => { update("industry", ind.id); setIndustryOpen(false); }}
+                        >
+                          <Check className={cn("mr-2 h-4 w-4 shrink-0", form.industry === ind.id ? "opacity-100" : "opacity-0")} />
+                          <span className={cn("mr-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md", ind.color)}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </span>
+                          {ind.label}
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </Field>
       </div>
 

@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, Eye, EyeOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Props = {
   open: boolean;
@@ -33,6 +34,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
   const [description, setDescription] = useState("");
   const [type, setType] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
   const selected = INTEGRATION_TYPES.find((t) => t.value === type);
 
@@ -130,10 +132,13 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-medium">Select Integration Type <span className="text-destructive">*</span></label>
-                <select value={type} onChange={(e) => { setType(e.target.value); setCreds({}); }} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-                  <option value="">Select Integration</option>
-                  {INTEGRATION_TYPES.map((t) => (<option key={t.value} value={t.value}>{t.label}</option>))}
-                </select>
+                <Select value={type || "__none__"} onValueChange={(v) => { setType(v === "__none__" ? "" : v); setCreds({}); }}>
+                  <SelectTrigger><SelectValue placeholder="Select Integration" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__" disabled>Select Integration</SelectItem>
+                    {INTEGRATION_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           )}
@@ -171,7 +176,27 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
               {selected.fields.map((f) => (
                 <div key={f.key}>
                   <label className="mb-1.5 block text-sm font-medium">{f.label} <span className="text-destructive">*</span></label>
-                  <Input type={f.type ?? "text"} value={creds[f.key] ?? ""} onChange={(e) => setCreds((c) => ({ ...c, [f.key]: e.target.value }))} placeholder={f.placeholder} />
+                  {f.type === "password" ? (
+                    <div className="relative">
+                      <Input
+                        type={revealed[f.key] ? "text" : "password"}
+                        value={creds[f.key] ?? ""}
+                        onChange={(e) => setCreds((c) => ({ ...c, [f.key]: e.target.value }))}
+                        placeholder={f.placeholder}
+                        className="pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setRevealed((r) => ({ ...r, [f.key]: !r[f.key] }))}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label={revealed[f.key] ? "Hide secret" : "Show secret"}
+                      >
+                        {revealed[f.key] ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  ) : (
+                    <Input value={creds[f.key] ?? ""} onChange={(e) => setCreds((c) => ({ ...c, [f.key]: e.target.value }))} placeholder={f.placeholder} />
+                  )}
                   <p className="mt-1 text-xs text-muted-foreground">{f.help}</p>
                 </div>
               ))}

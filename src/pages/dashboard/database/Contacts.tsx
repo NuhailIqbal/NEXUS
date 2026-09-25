@@ -312,7 +312,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
         open={open}
         onOpenChange={setOpen}
         onCreate={async (payload) => {
-          const name = payload.basic.name || payload.custom.first_name || "Unnamed";
+          const name = payload.basic.name || "Unnamed";
           const { error } = await api.createContact({
             name,
             phone: payload.basic.phone || "",

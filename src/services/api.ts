@@ -165,6 +165,7 @@ export const api = {
 
   // Telephony - Call
   makeCall: (data: any) => post("/telephony/call", data),
+  getCallStatus: (vapiCallId: string) => get(`/telephony/call/${vapiCallId}/status`),
 
   // Telephony - Inbound
   getInboundQueues: () => get("/telephony/inbound"),

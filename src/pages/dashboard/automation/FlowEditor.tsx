@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -8,7 +8,11 @@ import {
   Settings as SettingsIcon,
   FileText,
   Maximize,
-  TrendingUp,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  RefreshCw,
+  PlayCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import ReactFlow, {
@@ -79,6 +83,19 @@ function loadGraph(id: string): Snapshot {
   return defaultGraph();
 }
 
+// The backend's automation engine (services/automation_engine.py) only ever fires
+// a flow when definition.trigger.event === "call_ended" — it doesn't inspect the
+// node graph itself. Derive that top-level field from whichever trigger node the
+// user actually placed, so saved flows can be matched by the engine at all.
+function deriveTrigger(nodes: Node<FlowNodeData>[]): { event: string } {
+  const trigger = nodes.find((n) => n.type === "trigger");
+  const kind = trigger?.data.kind;
+  if (kind === "inbound-call" || kind === "internet-call") {
+    return { event: "call_ended" };
+  }
+  return { event: "manual" };
+}
+
 function saveGraph(id: string, snap: Snapshot) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEY(id), JSON.stringify(snap));
@@ -111,6 +128,20 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   });
   const [serverVersions, setServerVersions] = useState<ServerVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+  const [phoneNumbers, setPhoneNumbers] = useState<{ id: string; number: string }[]>([]);
+
+  useEffect(() => {
+    api.getAgents().then(({ data }) => {
+      if (Array.isArray(data)) setAgents(data.map((a: any) => ({ id: a.id, name: a.name })));
+    });
+    // Only platform-purchased numbers can send SMS through the platform's own Twilio
+    // account (see automation_engine.py) — a number from the user's own separate
+    // Twilio integration must still be typed in by hand.
+    api.getPhoneNumbers().then(({ data }) => {
+      if (Array.isArray(data)) setPhoneNumbers(data.map((p: any) => ({ id: p.id, number: p.number })));
+    });
+  }, []);
 
   const loadServerVersions = useCallback(async () => {
     if (!flowId || flowId === "new") return;
@@ -236,7 +267,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       if (flowId && flowId !== "new") {
         const { error } = await api.updateFlow(flowId, {
           name,
-          definition: { nodes, edges },
+          definition: { nodes, edges, trigger: deriveTrigger(nodes) },
         });
         if (error && !silent) {
           toast.error(`Saved locally but server update failed: ${error}`);
@@ -365,15 +396,15 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
 
       {/* Tabs */}
       <div className="flex items-center gap-6 border-b border-border bg-card px-5">
-        {(["design", "statistics"] as const).map((t) => (
+        {([["design", "Design"], ["statistics", "Runs"]] as const).map(([t, label]) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`relative py-3 text-sm font-medium capitalize ${
+            className={`relative py-3 text-sm font-medium ${
               tab === t ? "text-foreground" : "text-muted-foreground"
             }`}
           >
-            {t}
+            {label}
             {tab === t && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
           </button>
         ))}
@@ -424,13 +455,15 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
 
           <NodeEditPanel
             node={selected}
+            agents={agents}
+            phoneNumbers={phoneNumbers}
             onClose={() => setSelected(null)}
             onSave={updateNodeData}
             onDelete={deleteNode}
           />
         </div>
       ) : (
-        <StatisticsTab nodeCount={nodes.length} edgeCount={edges.length} />
+        <RunsTab flowId={flowId} />
       )}
     </div>
   );
@@ -479,18 +512,87 @@ function Palette() {
   );
 }
 
-function StatisticsTab({ nodeCount, edgeCount }: { nodeCount: number; edgeCount: number }) {
+type FlowRun = {
+  id: string;
+  status: "queued" | "running" | "success" | "failed";
+  trigger_event?: string;
+  created_at: string;
+  completed_at?: string | null;
+  input_data?: { phone?: string; contact_name?: string; conversation_id?: string } | null;
+  output_data?: { error?: string; nodes_executed?: number } | null;
+};
+
+function runDurationLabel(run: FlowRun): string {
+  if (!run.completed_at) return "—";
+  const ms = new Date(run.completed_at).getTime() - new Date(run.created_at).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function RunStatusBadge({ status }: { status: FlowRun["status"] }) {
+  if (status === "success") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
+        <CheckCircle2 className="h-3 w-3" /> Success
+      </span>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive">
+        <XCircle className="h-3 w-3" /> Failed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
+      <Loader2 className="h-3 w-3 animate-spin" /> {status === "running" ? "Running" : "Queued"}
+    </span>
+  );
+}
+
+function RunsTab({ flowId }: { flowId: string }) {
+  const [runs, setRuns] = useState<FlowRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const fetchRuns = useCallback(async () => {
+    if (!flowId || flowId === "new") { setLoading(false); return; }
+    const { data } = await api.getRuns(`flow_id=${flowId}&limit=100`);
+    if (Array.isArray(data)) setRuns(data as FlowRun[]);
+    setLoading(false);
+  }, [flowId]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchRuns();
+    // Runs land asynchronously (a call has to actually finish) — poll while this
+    // tab is open so a fresh run shows up without the user manually refreshing.
+    const t = setInterval(fetchRuns, 15000);
+    return () => clearInterval(t);
+  }, [fetchRuns]);
+
+  const total = runs.length;
+  const success = runs.filter((r) => r.status === "success").length;
+  const failed = runs.filter((r) => r.status === "failed").length;
+  const successRate = total > 0 ? `${Math.round((success / total) * 100)}%` : "—";
+
   const stats = [
-    { label: "Total runs", value: 1284 },
-    { label: "Success rate", value: "97.4%" },
-    { label: "Failed runs", value: 33 },
-    { label: "Avg. completion", value: "2m 14s" },
+    { label: "Total runs", value: total },
+    { label: "Success rate", value: successRate },
+    { label: "Failed runs", value: failed },
+    { label: "In progress", value: runs.filter((r) => r.status === "running" || r.status === "queued").length },
   ];
-  const points = Array.from({ length: 30 }).map((_, i) => 30 + Math.round(Math.sin(i / 3) * 15 + Math.random() * 10));
-  const max = Math.max(...points);
-  const path = points
-    .map((v, i) => `${i === 0 ? "M" : "L"} ${(i / (points.length - 1)) * 100} ${100 - (v / max) * 100}`)
-    .join(" ");
+
+  if (!flowId || flowId === "new") {
+    return (
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
+          Save this flow first — runs only start showing up here once it's a real, saved flow that can actually trigger.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -503,20 +605,83 @@ function StatisticsTab({ nodeCount, edgeCount }: { nodeCount: number; edgeCount:
         ))}
       </div>
 
-      <div className="mt-6 rounded-xl border border-border bg-card p-5">
-        <div className="mb-3 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-semibold">Runs · last 30 days</h3>
+      <div className="mt-6 rounded-xl border border-border bg-card">
+        <div className="flex items-center justify-between border-b border-border p-4">
+          <div className="flex items-center gap-2">
+            <PlayCircle className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-semibold">Run history</h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); fetchRuns(); }}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Refresh"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-48 w-full">
-          <path d={path} fill="none" stroke="currentColor" strokeWidth="1.2" className="text-primary" vectorEffect="non-scaling-stroke" />
-          <path d={`${path} L 100 100 L 0 100 Z`} fill="currentColor" className="text-primary/10" />
-        </svg>
-      </div>
 
-      <div className="mt-6 rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
-        Flow has <span className="font-semibold text-foreground">{nodeCount}</span> nodes and{" "}
-        <span className="font-semibold text-foreground">{edgeCount}</span> connections.
+        {loading ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" /> Loading…
+          </div>
+        ) : runs.length === 0 ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            No runs yet. This flow's trigger has never fired — place or receive a real call
+            that matches its trigger to see a run appear here.
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2.5">Status</th>
+                <th className="px-4 py-2.5">Contact / Phone</th>
+                <th className="px-4 py-2.5">Started</th>
+                <th className="px-4 py-2.5">Duration</th>
+                <th className="px-4 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r) => (
+                <Fragment key={r.id}>
+                  <tr
+                    className="cursor-pointer border-t border-border hover:bg-muted/20"
+                    onClick={() => setExpanded((id) => (id === r.id ? null : r.id))}
+                  >
+                    <td className="px-4 py-2.5"><RunStatusBadge status={r.status} /></td>
+                    <td className="px-4 py-2.5 text-foreground">
+                      {r.input_data?.contact_name || r.input_data?.phone || "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
+                      {new Date(r.created_at).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{runDurationLabel(r)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground">
+                      {expanded === r.id ? "Hide" : "Details"}
+                    </td>
+                  </tr>
+                  {expanded === r.id && (
+                    <tr className="border-t border-border bg-muted/10">
+                      <td colSpan={5} className="px-4 py-3">
+                        {r.status === "failed" && r.output_data?.error ? (
+                          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                            {r.output_data.error}
+                          </div>
+                        ) : r.status === "success" ? (
+                          <div className="text-xs text-muted-foreground">
+                            Ran {r.output_data?.nodes_executed ?? "—"} node(s) successfully.
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">Still in progress…</div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

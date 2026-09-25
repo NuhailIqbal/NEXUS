@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from config import settings
 from database import supabase
 from services import vapi_client
+from services.automation_engine import run_post_call_automations
 from routers.webhooks import import_vapi_call
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,11 @@ def _assistant_user_map() -> dict[str, str]:
     """{ vapi_assistant_id -> user_id } for every VAPI-linked agent (one query)."""
     rows = supabase.table("ai_agents").select("user_id, vapi_assistant_id").execute().data or []
     return {r["vapi_assistant_id"]: r["user_id"] for r in rows if r.get("vapi_assistant_id")}
+
+
+def _get_conversation(vapi_call_id: str) -> dict | None:
+    r = supabase.table("conversations").select("*").eq("vapi_call_id", vapi_call_id).limit(1).execute()
+    return r.data[0] if r.data else None
 
 
 def _existing_by_call_id(call_ids: list[str]) -> dict[str, dict]:
@@ -96,9 +102,22 @@ async def run_global_sync() -> dict:
     for c in to_process:
         try:
             full = await vapi_client.get_call(c["id"])
-            res = await asyncio.to_thread(import_vapi_call, full, assistant_map[c["assistantId"]])
+            user_id = assistant_map[c["assistantId"]]
+            res = await asyncio.to_thread(import_vapi_call, full, user_id)
             if res == "imported":
                 imported += 1
+                # The real-time call_ended webhook (which normally fires automations)
+                # can't reach a localhost backend — this poll loop is the only place
+                # a locally-run backend ever learns a call ended, so it must trigger
+                # post-call automations itself. Only on first import, not on later
+                # "updated" passes (e.g. a recording arriving late), so a flow never
+                # runs twice for the same call.
+                conversation = await asyncio.to_thread(_get_conversation, c["id"])
+                if conversation:
+                    try:
+                        await run_post_call_automations(user_id, conversation)
+                    except Exception as automation_error:
+                        logger.warning(f"vapi-sync: automations failed for call {c['id']}: {automation_error}")
             elif res == "updated":
                 updated += 1
         except Exception as e:  # never let one bad call abort the whole pass

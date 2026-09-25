@@ -552,6 +552,28 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     return {"data": {"vapi_call_id": vapi_result.get("id"), "status": vapi_result.get("status", "queued")}, "error": None}
 
 
+@router.get("/call/{vapi_call_id}/status")
+async def get_call_status(vapi_call_id: str, user=Depends(get_current_user)):
+    """Poll VAPI directly for a call's live status (queued/ringing/in-progress/ended…),
+    used by the test-call dialer to reflect real progress instead of a static 'queued'."""
+    if not settings.vapi_api_key:
+        raise HTTPException(status_code=503, detail="VAPI not configured")
+    try:
+        call = await vapi_client.get_call(vapi_call_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"VAPI call error: {str(e)}")
+
+    return {
+        "data": {
+            "status": call.get("status"),
+            "ended_reason": call.get("endedReason"),
+            "started_at": call.get("startedAt"),
+            "ended_at": call.get("endedAt"),
+        },
+        "error": None,
+    }
+
+
 # ── Outbound Campaigns ──
 
 def _phone_key(phone: str) -> str:

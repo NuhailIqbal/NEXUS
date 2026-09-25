@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Phone, Clock } from "lucide-react";
+import { format } from "date-fns";
+import { Plus, Phone, Clock, Delete, PhoneCall, PhoneOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -48,6 +49,11 @@ function numberExpiry(nextBillingAt?: string | null) {
 
 type Tab = "all" | "inbound" | "outbound" | "unused";
 
+type CallStage = "idle" | "dialing" | "queued" | "ringing" | "in-progress" | "ended" | "failed";
+
+const POLL_INTERVAL_MS = 2000;
+const POLL_TIMEOUT_MS = 120000;
+
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
   const [numbers, setNumbers] = useState<Num[]>([]);
@@ -58,6 +64,8 @@ const PhoneNumbers = () => {
 
   const [testTarget, setTestTarget] = useState<Num | null>(null);
   const [testLog, setTestLog] = useState<string[]>([]);
+  const [callStage, setCallStage] = useState<CallStage>("idle");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [settingsTarget, setSettingsTarget] = useState<Num | null>(null);
   const [settingsForm, setSettingsForm] = useState<{ agent_id: string | null; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
 
@@ -119,12 +127,49 @@ const PhoneNumbers = () => {
     fetchNumbers();
   };
 
-  const openTest = (n: Num) => {
-    setTestTarget(n);
-    setTestLog([`Selected ${n.number}.`,
-      "To test, click 'Place Call' below and enter a phone number to dial.",
-      "VAPI will place a real outbound call using this number's assigned agent."]);
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
+
+  const openTest = (n: Num) => {
+    stopPolling();
+    setTestTarget(n);
+    setCallStage("idle");
+    setTestLog([]);
+  };
+
+  const closeTest = () => {
+    stopPolling();
+    setTestTarget(null);
+  };
+
+  // Polls VAPI directly for the live call status so the dialog reflects what's
+  // actually happening (ringing → in-progress → ended) instead of a static "queued".
+  const trackCallStatus = (vapiCallId: string) => {
+    stopPolling();
+    const startedAt = Date.now();
+    let lastStatus = "";
+    pollRef.current = setInterval(async () => {
+      if (Date.now() - startedAt > POLL_TIMEOUT_MS) { stopPolling(); return; }
+      const { data, error } = await api.getCallStatus(vapiCallId);
+      if (error || !data) return;
+      const status = data.status as string;
+      if (status && status !== lastStatus) {
+        lastStatus = status;
+        setCallStage(
+          status === "ended" ? "ended" :
+          status === "in-progress" || status === "forwarding" ? "in-progress" :
+          status === "ringing" ? "ringing" : "queued"
+        );
+        setTestLog((l) => [...l, status === "ended"
+          ? `Call ended${data.ended_reason ? ` (${data.ended_reason})` : ""}.`
+          : `Status: ${status}`]);
+      }
+      if (status === "ended") stopPolling();
+    }, POLL_INTERVAL_MS);
+  };
+
+  useEffect(() => stopPolling, []);
 
   const placeTestCall = async (n: Num, to: string) => {
     if (!n.agent_id) {
@@ -135,6 +180,7 @@ const PhoneNumbers = () => {
       setTestLog((l) => [...l, "Error: enter a target phone number."]);
       return;
     }
+    setCallStage("dialing");
     setTestLog((l) => [...l, `Dialing ${to}…`]);
     const { data, error } = await api.makeCall({
       agent_id: n.agent_id,
@@ -142,9 +188,12 @@ const PhoneNumbers = () => {
       phone_number_id: n.id,
     });
     if (error) {
+      setCallStage("failed");
       setTestLog((l) => [...l, `Call failed: ${error}`]);
     } else {
+      setCallStage("queued");
       setTestLog((l) => [...l, `Call queued (status: ${data?.status ?? "queued"})`]);
+      if (data?.vapi_call_id) trackCallStatus(data.vapi_call_id);
     }
   };
 
@@ -251,7 +300,7 @@ const PhoneNumbers = () => {
                     <NumberStatus num={n} />
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {n.created_at ? new Date(n.created_at).toLocaleDateString() : "—"}
+                    {n.created_at ? format(new Date(n.created_at), "MMM d, yyyy") : "—"}
                   </td>
                   <td className="px-4 py-3">
                     {(() => {
@@ -261,7 +310,7 @@ const PhoneNumbers = () => {
                       const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
                       return (
                         <>
-                          <div className="text-foreground">{e.date.toLocaleDateString()}</div>
+                          <div className="text-foreground">{format(e.date, "MMM d, yyyy")}</div>
                           <div className={`text-xs ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
                             {expired ? "expired" : `${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"} left`}
                           </div>
@@ -309,8 +358,9 @@ const PhoneNumbers = () => {
       <TestCallDialog
         target={testTarget}
         log={testLog}
+        stage={callStage}
         onPlace={placeTestCall}
-        onClose={() => setTestTarget(null)}
+        onClose={closeTest}
       />
 
       {/* Settings modal */}
@@ -402,34 +452,112 @@ function NumberStatus({ num }: { num: Num }) {
   return <Badge variant={num.status === "Active" ? "default" : "secondary"}>{num.status}</Badge>;
 }
 
+const DIAL_KEYS: [string, string][] = [
+  ["1", ""], ["2", "ABC"], ["3", "DEF"],
+  ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
+  ["7", "PQRS"], ["8", "TUV"], ["9", "WXYZ"],
+  ["+", ""], ["0", ""], ["#", ""],
+];
+
+const CALL_STAGE_META: Record<CallStage, { label: string; className: string } | null> = {
+  idle: null,
+  dialing: { label: "Dialing…", className: "border-info/40 bg-info/10 text-info" },
+  queued: { label: "Queued", className: "border-yellow-500/40 bg-yellow-500/10 text-yellow-500" },
+  ringing: { label: "Ringing…", className: "border-info/40 bg-info/10 text-info" },
+  "in-progress": { label: "In progress", className: "border-success/40 bg-success/10 text-success" },
+  ended: { label: "Call ended", className: "border-muted-foreground/30 bg-muted text-muted-foreground" },
+  failed: { label: "Call failed", className: "border-destructive/40 bg-destructive/10 text-destructive" },
+};
+
 function TestCallDialog({
-  target, log, onPlace, onClose,
+  target, log, stage, onPlace, onClose,
 }: {
   target: Num | null;
   log: string[];
+  stage: CallStage;
   onPlace: (n: Num, to: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [to, setTo] = useState("");
+  const isBusy = stage === "dialing" || stage === "queued" || stage === "ringing" || stage === "in-progress";
+  const meta = CALL_STAGE_META[stage];
+
+  useEffect(() => {
+    if (target) setTo("");
+  }, [target]);
+
+  const pressKey = (k: string) => setTo((v) => v + k);
+  const backspace = () => setTo((v) => v.slice(0, -1));
+
   return (
     <Dialog open={!!target} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Place test call from {target?.number}</DialogTitle>
-          <DialogDescription>This dials a real number through VAPI using the agent assigned to this number.</DialogDescription>
+          <DialogTitle>Place test call</DialogTitle>
+          <DialogDescription>Enter any phone number to place a real test call and hear your agent in action.</DialogDescription>
         </DialogHeader>
+
         <div className="space-y-3">
-          <div className="space-y-2">
-            <Label>Target phone number</Label>
-            <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="+15551234567" />
+          {meta && (
+            <div className={`flex items-center justify-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${meta.className}`}>
+              {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : stage === "failed" ? <PhoneOff className="h-3.5 w-3.5" /> : <PhoneCall className="h-3.5 w-3.5" />}
+              {meta.label}
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 rounded-xl border border-border bg-muted/30 px-3 py-2">
+            <Input
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              placeholder="+1 (555) 123-4567"
+              disabled={isBusy}
+              className="h-8 border-0 bg-transparent p-0 text-center font-mono text-lg tracking-wide shadow-none focus-visible:ring-0"
+            />
+            <button
+              type="button"
+              onClick={backspace}
+              disabled={!to || isBusy}
+              className="shrink-0 rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              aria-label="Backspace"
+            >
+              <Delete className="h-4 w-4" />
+            </button>
           </div>
-          <div className="rounded-md border border-border bg-muted/30 p-3 font-mono text-xs space-y-1 max-h-56 overflow-y-auto">
-            {log.map((l, i) => <div key={i}>{l}</div>)}
+
+          <div className="grid grid-cols-3 gap-2 justify-items-center">
+            {DIAL_KEYS.map(([digit, sub]) => (
+              <button
+                key={digit}
+                type="button"
+                disabled={isBusy}
+                onClick={() => pressKey(digit)}
+                className="flex h-12 w-12 flex-col items-center justify-center rounded-full bg-muted/50 text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+              >
+                <span className="text-base font-semibold leading-none">{digit}</span>
+                {sub && <span className="mt-0.5 text-[8px] tracking-widest text-muted-foreground">{sub}</span>}
+              </button>
+            ))}
           </div>
+
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => target && onPlace(target, to)}
+              disabled={!to.trim() || isBusy}
+              aria-label="Place call"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-success text-success-foreground shadow-md transition-transform hover:scale-105 hover:bg-success/90 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {isBusy ? <Loader2 className="h-5 w-5 animate-spin" /> : <PhoneCall className="h-5 w-5" />}
+            </button>
+          </div>
+
+          {log.length > 0 && (
+            <p className="text-center text-xs text-muted-foreground">{log[log.length - 1]}</p>
+          )}
         </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Close</Button>
-          <Button onClick={() => target && onPlace(target, to)} disabled={!to.trim()}>Place Call</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

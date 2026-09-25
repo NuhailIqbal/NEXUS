@@ -1243,7 +1243,7 @@ const Admin = () => {
             <DialogHeader>
               <DialogTitle>Add User</DialogTitle>
               <DialogDescription>
-                Creates an account that can sign in immediately — no email verification step,
+                Creates an account that can sign in immediately. No email verification step,
                 since you're vouching for it directly. Gets the same welcome credit a verified
                 sign-up would.
               </DialogDescription>
@@ -1272,7 +1272,7 @@ const Admin = () => {
                   type="text"
                   value={addUserForm.password}
                   onChange={(e) => setAddUserForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder="At least 6 characters — share this with the user directly"
+                  placeholder="At least 6 characters. Share this with the user directly"
                 />
               </div>
             </div>

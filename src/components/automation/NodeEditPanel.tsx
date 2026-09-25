@@ -4,18 +4,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Node } from "reactflow";
 import type { FlowNodeData } from "./flow-nodes";
 import { paletteFor } from "./flow-nodes";
 
 type Props = {
   node: Node<FlowNodeData> | null;
+  agents: { id: string; name: string }[];
+  phoneNumbers: { id: string; number: string }[];
   onClose: () => void;
   onSave: (id: string, data: FlowNodeData) => void;
   onDelete: (id: string) => void;
 };
 
-export function NodeEditPanel({ node, onClose, onSave, onDelete }: Props) {
+export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onDelete }: Props) {
   const [label, setLabel] = useState("");
   const [config, setConfig] = useState<Record<string, string>>({});
 
@@ -45,8 +48,35 @@ export function NodeEditPanel({ node, onClose, onSave, onDelete }: Props) {
             <Field label="Message">
               <Textarea rows={4} value={config.message ?? ""} onChange={(e) => set("message", e.target.value)} placeholder="Hi {{contact_name}}, thanks for your time today!" />
             </Field>
-            <Field label="From number (Twilio)">
-              <Input value={config.from ?? ""} onChange={(e) => set("from", e.target.value)} placeholder="+15551234567" />
+            <Field label="From number">
+              <Select
+                value={
+                  !config.from ? "__custom__"
+                    : phoneNumbers.some((p) => p.number === config.from) ? config.from
+                    : "__custom__"
+                }
+                onValueChange={(v) => set("from", v === "__custom__" ? (config.from && !phoneNumbers.some((p) => p.number === config.from) ? config.from : "") : v)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {phoneNumbers.map((p) => (
+                    <SelectItem key={p.id} value={p.number}>{p.number} (your number)</SelectItem>
+                  ))}
+                  <SelectItem value="__custom__">Custom Twilio number…</SelectItem>
+                </SelectContent>
+              </Select>
+              {(!config.from || !phoneNumbers.some((p) => p.number === config.from)) && (
+                <Input
+                  className="mt-2"
+                  value={config.from ?? ""}
+                  onChange={(e) => set("from", e.target.value)}
+                  placeholder="+15551234567"
+                />
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                Your own purchased numbers send through the platform's Twilio account automatically.
+                A custom number must belong to the Twilio account connected above.
+              </p>
             </Field>
             <p className="text-xs text-muted-foreground">Variables: <code>{"{{contact_name}}"}</code>, <code>{"{{phone}}"}</code>, <code>{"{{status}}"}</code></p>
           </>
@@ -104,6 +134,57 @@ export function NodeEditPanel({ node, onClose, onSave, onDelete }: Props) {
             </select>
           </Field>
         );
+      case "connect-agent":
+        return (
+          <>
+            <Field label="AI Agent">
+              <Select value={config.agent_id ?? ""} onValueChange={(v) => set("agent_id", v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder={agents.length ? "Select an agent" : "No agents yet"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <p className="text-xs text-muted-foreground">
+              Places a real outbound call to the contact using this agent when the flow runs.
+            </p>
+          </>
+        );
+      case "call":
+        return (
+          <>
+            <Field label="AI Agent">
+              <Select value={config.agent_id ?? ""} onValueChange={(v) => set("agent_id", v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder={agents.length ? "Select an agent" : "No agents yet"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Phone number to call">
+              <Input value={config.to ?? ""} onChange={(e) => set("to", e.target.value)} placeholder="+15551234567" />
+            </Field>
+            <p className="text-xs text-muted-foreground">
+              Places a real outbound call to this fixed number (not the contact) using this agent —
+              e.g. to notify a manager when the flow runs. Use "Connect Call Agent" instead to call the contact back.
+            </p>
+          </>
+        );
+      case "split":
+        return (
+          <p className="text-sm text-muted-foreground">
+            No configuration needed. Connect this node to multiple next steps — every connected
+            branch runs when the flow reaches this point.
+          </p>
+        );
       case "webhook":
         return (
           <>
@@ -113,6 +194,40 @@ export function NodeEditPanel({ node, onClose, onSave, onDelete }: Props) {
                 <option>POST</option><option>GET</option><option>PUT</option><option>DELETE</option>
               </select>
             </Field>
+          </>
+        );
+      case "update-contact":
+        return (
+          <>
+            <Field label="Field to update">
+              <Select value={config.field || "status"} onValueChange={(v) => set("field", v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="status">Status</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            {(config.field ?? "status") === "status" ? (
+              <Field label="New value">
+                <Select value={config.value ?? "Active"} onValueChange={(v) => set("value", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Inactive">Inactive</SelectItem>
+                    <SelectItem value="Pending">Pending</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            ) : (
+              <Field label="New value">
+                <Input value={config.value ?? ""} onChange={(e) => set("value", e.target.value)} />
+              </Field>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Only applies when the call is linked to a saved contact (matched by phone number).
+            </p>
           </>
         );
       default:

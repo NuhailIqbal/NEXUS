@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, UserPlus, X, Shield, Trash2 } from "lucide-react";
+import { Loader2, UserPlus, X, Shield, Trash2, Pencil, Mail, Building2, Phone as PhoneIcon } from "lucide-react";
 
 type TeamMember = {
   id: string;
@@ -29,6 +29,7 @@ const Profile = () => {
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [myRole, setMyRole] = useState<MyRole | null>(null);
 
@@ -70,6 +71,12 @@ const Profile = () => {
     setSaving(false);
     if (error) return toast.error(error);
     toast.success("Profile saved");
+    setEditingProfile(false);
+  };
+
+  const cancelEdit = () => {
+    fetchData(); // discard unsaved edits by re-loading the last saved values
+    setEditingProfile(false);
   };
 
   const handleInvite = async () => {
@@ -109,6 +116,14 @@ const Profile = () => {
 
   const isOwner = myRole?.is_owner ?? true;
 
+  const initials = (fullName || user?.email || "?")
+    .split(" ")
+    .map((s) => s[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   return (
     <div className="space-y-8">
       <div>
@@ -129,9 +144,34 @@ const Profile = () => {
 
       {/* Profile Form */}
       <section className="rounded-xl border border-border bg-card p-6">
-        <h2 className="mb-4 font-semibold text-foreground">Your profile</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-semibold text-foreground">Your profile</h2>
+          {!loading && !editingProfile && (
+            <Button variant="outline" size="sm" onClick={() => setEditingProfile(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </Button>
+          )}
+        </div>
         {loading ? (
           <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : !editingProfile ? (
+          <div className="space-y-5">
+            <div className="flex items-center gap-4">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-semibold text-primary-foreground">
+                {initials}
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-lg font-semibold text-foreground">{fullName || "Unnamed"}</div>
+                <div className="truncate text-sm text-muted-foreground">{user?.email ?? "—"}</div>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <InfoTile icon={Mail} label="Email" value={user?.email ?? "—"} />
+              <InfoTile icon={Building2} label="Company" value={companyName || "Not set"} />
+              <InfoTile icon={PhoneIcon} label="Phone" value={phone || "Not set"} />
+            </div>
+          </div>
         ) : (
           <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -150,7 +190,10 @@ const Profile = () => {
               <Label>Phone</Label>
               <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
             </div>
-            <div className="sm:col-span-2 flex justify-end">
+            <div className="sm:col-span-2 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={cancelEdit} disabled={saving}>
+                Cancel
+              </Button>
               <Button type="submit" disabled={saving}>
                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save changes
@@ -277,5 +320,19 @@ const Profile = () => {
     </div>
   );
 };
+
+function InfoTile({ icon: Icon, label, value }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="truncate text-sm font-medium text-foreground">{value}</div>
+      </div>
+    </div>
+  );
+}
 
 export default Profile;

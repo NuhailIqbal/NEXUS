@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Eye, Plus, Settings, User, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Eye, Plus, User, X } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -10,40 +10,19 @@ import { api } from "@/services/api";
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate?: (data: { basic: BasicInfo; custom: Record<string, string> }) => void;
+  onCreate?: (data: { basic: BasicInfo }) => void;
 };
 
 type BasicInfo = {
   phone: string;
   email: string;
   name: string;
-  timezone: string;
   list_id: string;
 };
 
-type CustomField = { key: string; label: string; placeholder?: string; type?: "text" | "yesno" };
-
-const CUSTOM_FIELDS: CustomField[] = [
-  { key: "first_name", label: "First Name", placeholder: "first_name" },
-  { key: "last_name", label: "Last Name", placeholder: "last_name" },
-  { key: "company", label: "Company", placeholder: "company" },
-  { key: "address", label: "Address", placeholder: "address" },
-  { key: "zip", label: "Zip", placeholder: "zip" },
-  { key: "state", label: "State", placeholder: "state" },
-  { key: "country", label: "Country", placeholder: "country" },
-  { key: "language", label: "Language", placeholder: "language" },
-  { key: "lead_status", label: "Lead Status", placeholder: "lead_status" },
-  { key: "do_not_contact", label: "Do Not Contact", type: "yesno" },
-  { key: "is_qualified", label: "Is Qualified", type: "yesno" },
-  { key: "tcpa_consent", label: "TCPA Consent", type: "yesno" },
-];
-
-const TIMEZONES = ["UTC", "America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney"];
-
 export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [basic, setBasic] = useState<BasicInfo>({ phone: "", email: "", name: "", timezone: "UTC", list_id: "" });
-  const [custom, setCustom] = useState<Record<string, string>>({});
+  const [step, setStep] = useState<1 | 2>(1);
+  const [basic, setBasic] = useState<BasicInfo>({ phone: "", email: "", name: "", list_id: "" });
   const [lists, setLists] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
@@ -52,12 +31,11 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
     }
   }, [open]);
 
-  const progress = useMemo(() => Math.round((step / 3) * 100), [step]);
+  const progress = useMemo(() => Math.round((step / 2) * 100), [step]);
 
   const reset = () => {
     setStep(1);
-    setBasic({ phone: "", email: "", name: "", timezone: "UTC", list_id: "" });
-    setCustom({});
+    setBasic({ phone: "", email: "", name: "", list_id: "" });
   };
 
   const close = (next: boolean) => {
@@ -66,24 +44,20 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
   };
 
   const next = () => {
-    if (step === 1) {
-      if (!basic.name.trim()) return toast.error("Name is required");
-      if (!basic.phone.trim()) return toast.error("Phone number is required");
-    }
-    if (step < 3) setStep((s) => (s + 1) as 1 | 2 | 3);
+    if (!basic.name.trim()) return toast.error("Name is required");
+    if (!basic.phone.trim()) return toast.error("Phone number is required");
+    setStep(2);
   };
 
   const submit = () => {
-    onCreate?.({ basic, custom });
+    onCreate?.({ basic });
     toast.success("Contact created");
     close(false);
   };
 
-  const setCf = (k: string, v: string) => setCustom((c) => ({ ...c, [k]: v }));
-
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-4xl gap-0 p-0 sm:rounded-xl [&>button]:hidden">
+      <DialogContent className="max-w-2xl gap-0 p-0 sm:rounded-xl [&>button]:hidden">
         <div className="flex items-start justify-between border-b border-border p-5">
           <div className="flex items-center gap-2">
             <User className="h-5 w-5" />
@@ -96,7 +70,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
 
         <div className="px-6 pt-4">
           <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-            <span>Step {step} of 3</span>
+            <span>Step {step} of 2</span>
             <span>{progress}% Complete</span>
           </div>
           <div className="relative h-2 overflow-hidden rounded-full bg-muted">
@@ -104,10 +78,9 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 px-6 pt-4">
+        <div className="grid grid-cols-2 gap-2 px-6 pt-4">
           <TabPill active={step === 1} icon={<User className="h-4 w-4" />} label="Basic Info" />
-          <TabPill active={step === 2} icon={<Settings className="h-4 w-4" />} label="Custom fields" />
-          <TabPill active={step === 3} icon={<Eye className="h-4 w-4" />} label="Review" />
+          <TabPill active={step === 2} icon={<Eye className="h-4 w-4" />} label="Review" />
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto p-6">
@@ -126,14 +99,6 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
                 </Field>
                 <Field label="Name">
                   <Input value={basic.name} onChange={(e) => setBasic((b) => ({ ...b, name: e.target.value }))} placeholder="Please provide customer name" />
-                </Field>
-                <Field label="Timezone">
-                  <Select value={basic.timezone} onValueChange={(v) => setBasic((b) => ({ ...b, timezone: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {TIMEZONES.map((tz) => (<SelectItem key={tz} value={tz}>{tz}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
                 </Field>
                 <Field label="List">
                   <Select
@@ -154,58 +119,15 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
           {step === 2 && (
             <div>
               <div className="text-center">
-                <h3 className="text-lg font-semibold">Custom Field Values</h3>
-                <p className="text-sm text-muted-foreground">Fill in the custom field values for this lead</p>
-              </div>
-              <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-                {CUSTOM_FIELDS.map((f) => (
-                  <Field key={f.key} label={f.label}>
-                    {f.type === "yesno" ? (
-                      <Select value={custom[f.key] || "__unset__"} onValueChange={(v) => setCf(f.key, v === "__unset__" ? "" : v)}>
-                        <SelectTrigger><SelectValue placeholder="Please select Yes or No" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__unset__">Please select Yes or No</SelectItem>
-                          <SelectItem value="yes">Yes</SelectItem>
-                          <SelectItem value="no">No</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Input value={custom[f.key] ?? ""} onChange={(e) => setCf(f.key, e.target.value)} placeholder={f.placeholder} />
-                    )}
-                  </Field>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {step === 3 && (
-            <div>
-              <div className="text-center">
                 <h3 className="text-lg font-semibold">Review &amp; Submit</h3>
                 <p className="text-sm text-muted-foreground">Review the lead information before saving</p>
               </div>
               <div className="mt-6 space-y-4 rounded-lg bg-muted/50 p-5">
-                <div>
-                  <h4 className="mb-3 font-semibold">Basic Information</h4>
-                  <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
-                    <ReviewRow label="Name" value={basic.name} />
-                    <ReviewRow label="Phone" value={basic.phone} />
-                    <ReviewRow label="Email" value={basic.email} />
-                    <ReviewRow label="Timezone" value={basic.timezone} />
-                    <ReviewRow label="List" value={lists.find((l) => l.id === basic.list_id)?.name ?? "Unassigned"} />
-                  </div>
-                </div>
-                <div>
-                  <h4 className="mb-3 font-semibold">Custom Fields Information</h4>
-                  <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
-                    {Object.entries(custom).filter(([, v]) => v?.trim()).map(([k, v]) => {
-                      const def = CUSTOM_FIELDS.find((f) => f.key === k);
-                      return <ReviewRow key={k} label={def?.label ?? k} value={v} />;
-                    })}
-                    {Object.values(custom).filter((v) => v?.trim()).length === 0 && (
-                      <p className="text-sm text-muted-foreground">No custom fields filled.</p>
-                    )}
-                  </div>
+                <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+                  <ReviewRow label="Name" value={basic.name} />
+                  <ReviewRow label="Phone" value={basic.phone} />
+                  <ReviewRow label="Email" value={basic.email} />
+                  <ReviewRow label="List" value={lists.find((l) => l.id === basic.list_id)?.name ?? "Unassigned"} />
                 </div>
               </div>
             </div>
@@ -214,11 +136,11 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
 
         <div className="flex items-center justify-between gap-2 border-t border-border p-4">
           {step === 1 ? <span /> : (
-            <Button variant="outline" onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}>
+            <Button variant="outline" onClick={() => setStep(1)}>
               <ChevronLeft className="mr-1 h-4 w-4" /> Previous
             </Button>
           )}
-          {step < 3 ? (
+          {step < 2 ? (
             <Button onClick={next} className="bg-primary text-primary-foreground hover:opacity-90">
               Next <ChevronRight className="ml-1 h-4 w-4" />
             </Button>
