@@ -28,6 +28,7 @@ const colorFor = (s: string) =>
 type Conversation = {
   id: string;
   channel: string;
+  agent_name: string;
   contact_name: string;
   phone: string;
   duration: string;
@@ -45,10 +46,11 @@ type Conversation = {
 
 type StatItem = { label: string; count: number };
 
-type ColumnKey = "channel" | "direction" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
+type ColumnKey = "channel" | "direction" | "agent_name" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
 
 const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "channel", label: "Channel" },
+  { key: "agent_name", label: "Agent" },
   { key: "contact_name", label: "Contact" },
   { key: "phone", label: "Phone" },
   { key: "duration", label: "Duration", width: "w-36" },
@@ -86,7 +88,7 @@ const Conversations = () => {
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({
-    channel: "", direction: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
+    channel: "", direction: "", agent_name: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
   });
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
 
@@ -166,6 +168,7 @@ const Conversations = () => {
     const p = new URLSearchParams();
     if (debouncedFilters.channel.trim()) p.set("channel", debouncedFilters.channel.trim());
     if (debouncedFilters.direction) p.set("direction", debouncedFilters.direction);
+    if (debouncedFilters.agent_name.trim()) p.set("agent_name", debouncedFilters.agent_name.trim());
     if (debouncedFilters.contact_name.trim()) p.set("contact_name", debouncedFilters.contact_name.trim());
     if (debouncedFilters.phone.trim()) p.set("phone", debouncedFilters.phone.trim());
     if (debouncedFilters.duration.trim()) p.set("duration", debouncedFilters.duration.trim());
@@ -371,11 +374,11 @@ const Conversations = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
             ) : visibleConversations.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
                   {conversations.length === 0 ? "No conversations found." : "No conversations match your filters."}
                 </td>
               </tr>
@@ -383,6 +386,7 @@ const Conversations = () => {
               visibleConversations.map((c) => (
                 <tr key={c.id} className="divide-x divide-border border-t border-border bg-card/30">
                   <td className="px-4 py-3 text-center">{c.channel}</td>
+                  <td className="px-4 py-3 text-center text-muted-foreground">{c.agent_name || "—"}</td>
                   <td className="px-4 py-3 text-center font-medium text-foreground">{c.contact_name}</td>
                   <td className="px-4 py-3 text-center text-muted-foreground">{c.phone}</td>
                   <td className="px-4 py-3 text-center font-mono text-xs">{c.duration}</td>

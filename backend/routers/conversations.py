@@ -17,6 +17,7 @@ async def list_conversations(
     status: Optional[str] = None,
     channel: Optional[str] = None,
     agent_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
     campaign_id: Optional[str] = None,
     direction: Optional[str] = None,
     contact_name: Optional[str] = None,
@@ -39,6 +40,21 @@ async def list_conversations(
         query = query.ilike("channel", f"%{channel}%")
     if agent_id:
         query = query.eq("agent_id", agent_id)
+    if agent_name:
+        # conversations has no name column to filter on directly (no join support
+        # in the query builder) — resolve matching agent ids first, then filter by
+        # those. No matches means no conversations can match, so short-circuit.
+        matches = (
+            supabase.table("ai_agents")
+            .select("id")
+            .eq("user_id", owner_id)
+            .ilike("name", f"%{agent_name}%")
+            .execute()
+        )
+        matched_ids = [r["id"] for r in (matches.data or [])]
+        if not matched_ids:
+            return {"data": [], "error": None, "meta": {"count": 0}}
+        query = query.in_("agent_id", matched_ids)
     if campaign_id:
         query = query.eq("campaign_id", campaign_id)
     if direction:
@@ -55,7 +71,22 @@ async def list_conversations(
         query = query.gte("call_time", f"{call_date}T00:00:00").lte("call_time", f"{call_date}T23:59:59.999999")
 
     result = query.order("call_time", desc=True).range(offset, offset + limit - 1).execute()
-    return {"data": result.data, "error": None, "meta": {"count": result.count}}
+    rows = result.data or []
+
+    agent_ids = {r["agent_id"] for r in rows if r.get("agent_id")}
+    agent_names: dict[str, str] = {}
+    if agent_ids:
+        agents = (
+            supabase.table("ai_agents")
+            .select("id, name")
+            .in_("id", list(agent_ids))
+            .execute()
+        )
+        agent_names = {a["id"]: a["name"] for a in (agents.data or [])}
+    for r in rows:
+        r["agent_name"] = agent_names.get(r.get("agent_id"), "")
+
+    return {"data": rows, "error": None, "meta": {"count": result.count}}
 
 
 @router.get("/stats")
