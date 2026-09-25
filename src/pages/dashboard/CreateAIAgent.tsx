@@ -4,10 +4,7 @@ import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles,
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
   ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, ChevronsUpDown,
-  ShieldCheck, Stethoscope, CarFront, Umbrella, Shield, HandHeart, HandCoins,
-  Receipt, CreditCard, Sun, Hammer, FileCheck2, ClipboardList, Bath, Droplets,
-  AppWindow, Wind, Bug, Wrench, KeyRound, BellRing, Accessibility, Scale,
-  Globe2, Wifi, Megaphone, Presentation, TrendingUp, LineChart,
+  Shield, ClipboardList, Wifi, Wallet, Gavel, Handshake,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,6 +27,9 @@ const STEPS: { key: StepKey; title: string; description: string; icon: React.Com
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
 ];
 
+// Real industries only — specific products/niches (Final Expense, Medicare, Roofing,
+// etc.) are NOT listed here; those are niches within one of these industries, not
+// industries themselves, so they're left off this picker entirely.
 const INDUSTRIES = [
   { id: "retail", label: "Retail & E-commerce", icon: ShoppingBag, color: "bg-orange-500/15 text-orange-400" },
   { id: "health", label: "Healthcare & Medical", icon: HeartPulse, color: "bg-rose-500/15 text-rose-400" },
@@ -39,37 +39,12 @@ const INDUSTRIES = [
   { id: "travel", label: "Travel & Hospitality", icon: Plane, color: "bg-cyan-500/15 text-cyan-400" },
   { id: "saas", label: "SaaS & Technology", icon: Briefcase, color: "bg-violet-500/15 text-violet-400" },
   { id: "automotive", label: "Automotive Industry", icon: Car, color: "bg-red-500/15 text-red-400" },
-  // Below: call-center verticals pulled from the Jobix AI script library (insurance,
-  // home-services, debt/legal and other lead-gen niches used across those prompts).
-  { id: "health-insurance", label: "Health Insurance (ACA/Marketplace)", icon: ShieldCheck, color: "bg-teal-500/15 text-teal-400" },
-  { id: "medicare", label: "Medicare", icon: Stethoscope, color: "bg-sky-500/15 text-sky-400" },
-  { id: "auto-insurance", label: "Auto Insurance", icon: CarFront, color: "bg-indigo-500/15 text-indigo-400" },
-  { id: "home-insurance", label: "Homeowners Insurance", icon: Umbrella, color: "bg-blue-500/15 text-blue-400" },
-  { id: "life-insurance", label: "Term Life Insurance", icon: Shield, color: "bg-emerald-500/15 text-emerald-400" },
-  { id: "final-expense", label: "Final Expense Insurance", icon: HandHeart, color: "bg-rose-500/15 text-rose-400" },
-  { id: "debt-relief", label: "Debt Relief & Settlement", icon: HandCoins, color: "bg-amber-500/15 text-amber-400" },
-  { id: "tax-debt", label: "Tax Debt Settlement", icon: Receipt, color: "bg-lime-500/15 text-lime-400" },
-  { id: "credit-repair", label: "Credit Repair", icon: CreditCard, color: "bg-cyan-500/15 text-cyan-400" },
-  { id: "solar", label: "Solar Energy", icon: Sun, color: "bg-yellow-500/15 text-yellow-400" },
-  { id: "roofing", label: "Roofing", icon: Hammer, color: "bg-orange-500/15 text-orange-400" },
-  { id: "home-warranty", label: "Home Warranty", icon: FileCheck2, color: "bg-green-500/15 text-green-400" },
-  { id: "home-services", label: "Home Services & Remodeling", icon: ClipboardList, color: "bg-slate-500/15 text-slate-400" },
-  { id: "bathroom-remodeling", label: "Bathroom Remodeling", icon: Bath, color: "bg-pink-500/15 text-pink-400" },
-  { id: "water-damage", label: "Water Damage Restoration", icon: Droplets, color: "bg-blue-500/15 text-blue-400" },
-  { id: "windows-doors", label: "Windows & Doors", icon: AppWindow, color: "bg-fuchsia-500/15 text-fuchsia-400" },
-  { id: "hvac", label: "HVAC", icon: Wind, color: "bg-cyan-500/15 text-cyan-400" },
-  { id: "pest-control", label: "Pest Control", icon: Bug, color: "bg-lime-500/15 text-lime-400" },
-  { id: "plumbing", label: "Plumbing", icon: Wrench, color: "bg-blue-500/15 text-blue-400" },
-  { id: "mortgage", label: "Mortgage", icon: KeyRound, color: "bg-amber-500/15 text-amber-400" },
-  { id: "medical-alert", label: "Medical Alert", icon: BellRing, color: "bg-red-500/15 text-red-400" },
-  { id: "ssdi", label: "Disability & SSDI", icon: Accessibility, color: "bg-purple-500/15 text-purple-400" },
-  { id: "legal", label: "Legal & Class Action", icon: Scale, color: "bg-gray-500/15 text-gray-400" },
-  { id: "immigration", label: "Immigration Services", icon: Globe2, color: "bg-teal-500/15 text-teal-400" },
-  { id: "internet-telecom", label: "Internet & Telecom", icon: Wifi, color: "bg-sky-500/15 text-sky-400" },
-  { id: "marketing", label: "Marketing Agency", icon: Megaphone, color: "bg-orange-500/15 text-orange-400" },
-  { id: "sales-training", label: "Sales Training & L&D", icon: Presentation, color: "bg-violet-500/15 text-violet-400" },
-  { id: "real-estate-investing", label: "Real Estate Investing & Coaching", icon: TrendingUp, color: "bg-emerald-500/15 text-emerald-400" },
-  { id: "fintech-trading", label: "Financial Trading & Prediction Markets", icon: LineChart, color: "bg-indigo-500/15 text-indigo-400" },
+  { id: "insurance", label: "Insurance", icon: Shield, color: "bg-teal-500/15 text-teal-400" },
+  { id: "debt-credit", label: "Debt & Credit Services", icon: Wallet, color: "bg-amber-500/15 text-amber-400" },
+  { id: "home-services", label: "Home Services & Contracting", icon: ClipboardList, color: "bg-slate-500/15 text-slate-400" },
+  { id: "legal", label: "Legal Services", icon: Gavel, color: "bg-gray-500/15 text-gray-400" },
+  { id: "internet-telecom", label: "Telecommunications & Internet", icon: Wifi, color: "bg-sky-500/15 text-sky-400" },
+  { id: "marketing", label: "Marketing & Professional Services", icon: Handshake, color: "bg-orange-500/15 text-orange-400" },
 ];
 
 type FormState = {
