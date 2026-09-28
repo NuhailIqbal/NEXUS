@@ -15,6 +15,7 @@ from models.schemas import (
 from services import vapi_client, twilio_service, whitelist_service
 from config import settings
 from routers.billing import (
+    outbound_call_block_reason,
     check_call_quota,
     get_or_create_billing,
     has_balance,
@@ -504,8 +505,9 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
         raise HTTPException(status_code=503, detail="VAPI not configured")
 
     billing = get_or_create_billing(owner_id)
-    if not billing.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    block_reason = outbound_call_block_reason(billing)
+    if block_reason:
+        raise HTTPException(status_code=403, detail=block_reason)
     if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
@@ -724,8 +726,9 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
 
     billing = get_or_create_billing(owner_id)
-    if not billing.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    block_reason = outbound_call_block_reason(billing)
+    if block_reason:
+        raise HTTPException(status_code=403, detail=block_reason)
     if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 

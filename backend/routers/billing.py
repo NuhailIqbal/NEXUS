@@ -385,12 +385,52 @@ def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
     return new_balance
 
 
+# Admin-settable billing.status values that should block an account outright, the same
+# way is_active=False does — from calling AND from account-building actions like creating
+# an agent. "active" (and any other/legacy value) is unaffected. "trial" is handled
+# separately below: a trial account is allowed to build things, just not to call with them.
+BLOCKED_STATUS_REASONS = {
+    "past_due": "Your account is past due. Update your payment method to keep making calls.",
+    "canceled": "Your subscription has been canceled. Contact support to reactivate.",
+}
+
+TRIAL_CALL_BLOCK_REASON = (
+    "You're on a trial plan — you can create and configure AI agents, but placing calls "
+    "requires an active account. Upgrade to start calling."
+)
+
+
+def account_block_reason(billing: dict) -> Optional[str]:
+    """User-facing reason this account is blocked from most actions (creating an agent,
+    etc.), or None if it can proceed. Checked everywhere is_active used to be checked
+    alone, so setting an account's Status to Past Due / Canceled in the admin panel
+    blocks it exactly like disabling Access does. Trial accounts are NOT blocked here —
+    building agents is exactly what a trial is for; see outbound_call_block_reason for
+    the stricter check that also stops a trial account from placing calls."""
+    if not billing.get("is_active", True):
+        return "Your account has been deactivated. Contact support."
+    return BLOCKED_STATUS_REASONS.get(billing.get("status"))
+
+
+def outbound_call_block_reason(billing: dict) -> Optional[str]:
+    """Everything account_block_reason blocks, plus Trial: a trial account can build and
+    configure agents, but placing an actual (billable) call requires upgrading out of
+    trial. Use this wherever a call is about to be placed; use account_block_reason for
+    everything else (e.g. creating an agent)."""
+    reason = account_block_reason(billing)
+    if reason:
+        return reason
+    if billing.get("status") == "trial":
+        return TRIAL_CALL_BLOCK_REASON
+    return None
+
+
 def check_call_quota(user_id: str, direction: str) -> bool:
     """Prepaid wallet, no plans: placing an outbound call requires a positive balance
     (the exact per-minute cost is metered and debited when the call ends). Inbound
     calls aren't gated — they're billed the same way once they complete."""
     billing = get_or_create_billing(user_id)
-    if not billing.get("is_active", True):
+    if outbound_call_block_reason(billing):
         return False
     if direction == "outbound":
         return float(billing.get("balance") or 0) > 0

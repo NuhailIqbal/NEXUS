@@ -5,7 +5,7 @@ from database import supabase
 from services.email_service import send_email
 from services.sms_service import send_sms
 from services import vapi_client, whitelist_service
-from routers.billing import get_or_create_billing, check_call_quota
+from routers.billing import outbound_call_block_reason, get_or_create_billing, check_call_quota
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +231,9 @@ async def _connect_call_agent(user_id: str, config: dict, conversation: dict, ta
         return
 
     billing = get_or_create_billing(user_id)
-    if not billing.get("is_active", True):
-        logger.warning(f"{node_label} node: account deactivated, skipping")
+    block_reason = outbound_call_block_reason(billing)
+    if block_reason:
+        logger.warning(f"{node_label} node: {block_reason}, skipping")
         return
     if not check_call_quota(user_id, "outbound"):
         logger.warning(f"{node_label} node: balance empty, skipping")

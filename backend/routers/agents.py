@@ -10,7 +10,7 @@ from services.openai_client import chat_reply, analyze_website, OpenAIError
 from services.website_analyzer import fetch_website_text, WebsiteFetchError
 from services.agent_tools import provision_tools_for_agent
 from config import settings
-from routers.billing import get_or_create_billing
+from routers.billing import account_block_reason, get_or_create_billing
 from routers.team import resolve_owner_id
 
 limiter = Limiter(key_func=get_remote_address)
@@ -58,8 +58,9 @@ def _compose_system_prompt(name: str, base_prompt: str | None, main_goal: str | 
 async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     billing = get_or_create_billing(owner_id)
-    if not billing.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Your account has been deactivated. Contact support.")
+    block_reason = account_block_reason(billing)
+    if block_reason:
+        raise HTTPException(status_code=403, detail=block_reason)
     _validate_transfer_number(body.transfer_number)
 
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
