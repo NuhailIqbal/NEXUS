@@ -9,9 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { api, ADMIN_TOKEN_KEY } from "@/services/api";
 import { toast } from "sonner";
@@ -129,8 +134,6 @@ const NAV: NavEntry[] = [
   { key: "agents",       label: "Agents",         icon: Bot },
   { key: "numbers",      label: "Numbers",        icon: Phone },
   { key: "payments",     label: "Payments",       icon: CreditCard },
-  { key: "promotions",   label: "Promotions",     icon: Gift },
-  { key: "referrals",    label: "Referrals",      icon: Share2 },
   {
     group: "Reports", icon: BarChart3, children: [
       { key: "revenue",      label: "Revenue Report", icon: DollarSign },
@@ -138,6 +141,8 @@ const NAV: NavEntry[] = [
       { key: "user-report",  label: "User Report",    icon: FileText },
     ],
   },
+  { key: "promotions",   label: "Promotions",     icon: Gift },
+  { key: "referrals",    label: "Referrals",      icon: Share2 },
 ];
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Users }) {
@@ -165,7 +170,7 @@ const Admin = () => {
   const [loginError, setLoginError] = useState("");
 
   const [section, setSection] = useState<SectionKey>("overview");
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Reports: true });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -178,6 +183,10 @@ const Admin = () => {
 
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [addUserForm, setAddUserForm] = useState({ email: "", full_name: "", password: "" });
+  // Confirmation dialogs — Disable and Delete are the two destructive actions here, so
+  // both require an explicit confirm; re-enabling access needs no confirmation.
+  const [pendingDisable, setPendingDisable] = useState<{ id: string; label: string } | null>(null);
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<{ id: string; label: string } | null>(null);
   const [addUserSaving, setAddUserSaving] = useState(false);
 
   const [agents, setAgents] = useState<AdminAgent[]>([]);
@@ -334,6 +343,12 @@ const Admin = () => {
     fetchData();
   };
 
+  const confirmDisable = async () => {
+    if (!pendingDisable) return;
+    await handleToggleAccess(pendingDisable.id);
+    setPendingDisable(null);
+  };
+
   const handleAddBalance = async (userId: string) => {
     if (!balanceAmount) return toast.error("Enter an amount");
     const { data, error } = await api.adjustUserBalance(userId, balanceAmount, "Admin credit");
@@ -377,20 +392,29 @@ const Admin = () => {
     }
   };
 
-  const handleDeleteUser = async (userId: string, label: string) => {
-    if (!confirm(`Permanently delete ${label} and ALL their data (agents, contacts, calls, numbers)?\n\nThis cannot be undone.`)) return;
-    const { error } = await api.deleteAdminUser(userId);
-    if (error) return toast.error(error);
+  const handleDeleteUser = (userId: string, label: string) => {
+    setPendingDeleteUser({ id: userId, label });
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!pendingDeleteUser) return;
+    const { error } = await api.deleteAdminUser(pendingDeleteUser.id);
+    if (error) {
+      toast.error(error);
+      setPendingDeleteUser(null);
+      return;
+    }
     toast.success("User deleted");
     setSelectedUser(null);
+    setPendingDeleteUser(null);
     fetchData();
   };
 
   // ── Login gate ──
   if (!authenticated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <form onSubmit={handleLogin} className="w-full max-w-sm space-y-5 rounded-xl border border-border bg-card p-8 shadow-lg">
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <form onSubmit={handleLogin} className="w-full max-w-sm space-y-5 rounded-xl border border-border bg-card p-6 shadow-lg sm:p-8">
           <div className="text-center">
             <Lock className="mx-auto h-10 w-10 text-primary mb-3" />
             <h1 className="text-xl font-bold text-foreground">Admin Dashboard</h1>
@@ -485,17 +509,17 @@ const Admin = () => {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobile top bar with nav dropdown */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-4 backdrop-blur lg:hidden">
-          <div className="flex items-center gap-2">
+        <header className="sticky top-0 z-30 flex min-h-14 flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur lg:hidden">
+          <div className="flex min-w-0 items-center gap-2">
             <Logo linked={false} />
             <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">Admin</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <ThemeToggle />
             <select
               value={section}
               onChange={(e) => setSection(e.target.value as SectionKey)}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 max-w-[55vw] rounded-md border border-input bg-background px-2 text-sm sm:max-w-none"
             >
               {NAV.map((n) =>
                 isNavGroup(n) ? (
@@ -580,7 +604,7 @@ const Admin = () => {
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By user</h3>
             <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Charges</th><th className="px-4 py-3">Balance</th><th className="px-4 py-3">Stripe</th></tr>
                 </thead>
@@ -599,7 +623,7 @@ const Admin = () => {
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Recent billed calls</h3>
             <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[640px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Direction</th><th className="px-4 py-3">Duration</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Time</th></tr>
                 </thead>
@@ -689,47 +713,47 @@ const Admin = () => {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
-            <div className="space-y-1">
+          <div className="grid grid-cols-2 items-end gap-3 rounded-xl border border-border bg-card p-4 sm:flex sm:flex-wrap">
+            <div className="min-w-0 space-y-1">
               <Label className="text-xs">Code</Label>
               <Input
-                className="w-40 font-mono uppercase"
+                className="w-full font-mono uppercase sm:w-40"
                 placeholder="LAUNCH20"
                 value={newCode.code}
                 onChange={(e) => setNewCode({ ...newCode, code: e.target.value.toUpperCase() })}
               />
             </div>
-            <div className="space-y-1">
+            <div className="min-w-0 space-y-1">
               <Label className="text-xs">Credit ($)</Label>
               <Input
-                type="number" min={1} className="w-28"
+                type="number" min={1} className="w-full sm:w-28"
                 value={newCode.amount}
                 onChange={(e) => setNewCode({ ...newCode, amount: parseFloat(e.target.value) || 0 })}
               />
             </div>
-            <div className="space-y-1">
+            <div className="min-w-0 space-y-1">
               <Label className="text-xs">Credit expires (days)</Label>
               <Input
-                type="number" min={0} className="w-36" placeholder="never"
+                type="number" min={0} className="w-full sm:w-36" placeholder="never"
                 value={newCode.expiry_days}
                 onChange={(e) => setNewCode({ ...newCode, expiry_days: e.target.value })}
               />
             </div>
-            <div className="space-y-1">
+            <div className="min-w-0 space-y-1">
               <Label className="text-xs">Max redemptions</Label>
               <Input
-                type="number" min={1} className="w-36" placeholder="unlimited"
+                type="number" min={1} className="w-full sm:w-36" placeholder="unlimited"
                 value={newCode.max_redemptions}
                 onChange={(e) => setNewCode({ ...newCode, max_redemptions: e.target.value })}
               />
             </div>
-            <Button onClick={createCode} disabled={creatingCode || !newCode.code.trim()}>
+            <Button className="col-span-2" onClick={createCode} disabled={creatingCode || !newCode.code.trim()}>
               <Plus className="mr-1 h-4 w-4" /> {creatingCode ? "Creating…" : "Create code"}
             </Button>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Code</th>
@@ -832,8 +856,8 @@ const Admin = () => {
           <MiniStat label="Pending" value={String(referrals.length - verifiedCount)} />
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Referrer</th>
@@ -879,11 +903,11 @@ const Admin = () => {
             </div>
             <div className="mt-6 rounded-xl border border-border bg-card p-5">
               <h3 className="mb-4 font-semibold text-foreground">Usage revenue (last 30 days)</h3>
-              <div className="h-64 w-full">
+              <div className="h-64 w-full [&_.recharts-surface]:overflow-visible">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={revenue.timeseries}>
+                  <LineChart data={revenue.timeseries} margin={{ top: 5, right: 24, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} minTickGap={20} tickMargin={6} />
                     <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
                     <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
                     <Line type="monotone" dataKey="revenue" name="Revenue ($)" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
@@ -903,7 +927,7 @@ const Admin = () => {
         <SectionHeader title="Agent Report" subtitle="Every agent's call performance across the platform." />
         {!agentReportLoaded ? <ReportLoading /> : (
           <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr><th className="px-4 py-3">Agent</th><th className="px-4 py-3">Owner</th><th className="px-4 py-3">Total Calls</th><th className="px-4 py-3">Completed</th><th className="px-4 py-3">Qualified</th></tr>
               </thead>
@@ -939,11 +963,11 @@ const Admin = () => {
             </div>
             <div className="mt-6 rounded-xl border border-border bg-card p-5">
               <h3 className="mb-4 font-semibold text-foreground">Sign-ups (last 30 days)</h3>
-              <div className="h-64 w-full">
+              <div className="h-64 w-full [&_.recharts-surface]:overflow-visible">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={userReport.signups}>
+                  <LineChart data={userReport.signups} margin={{ top: 5, right: 24, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                    <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} minTickGap={20} tickMargin={6} />
                     <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
                     <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
                     <Line type="monotone" dataKey="signups" name="Sign-ups" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
@@ -953,7 +977,7 @@ const Admin = () => {
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Top users by activity</h3>
             <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[420px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Conversations</th><th className="px-4 py-3">Agents</th></tr>
                 </thead>
@@ -1005,11 +1029,11 @@ const Admin = () => {
         <div className="mt-6 rounded-xl border border-border bg-card p-5">
           <h3 className="mb-4 font-semibold text-foreground">Sign-ups (last 30 days)</h3>
           {userReport ? (
-            <div className="h-56 w-full">
+            <div className="h-56 w-full [&_.recharts-surface]:overflow-visible">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={userReport.signups}>
+                <LineChart data={userReport.signups} margin={{ top: 5, right: 24, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                  <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} minTickGap={20} tickMargin={6} />
                   <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} allowDecimals={false} />
                   <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
                   <Line type="monotone" dataKey="signups" name="Sign-ups" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
@@ -1047,12 +1071,12 @@ const Admin = () => {
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Agent</th>
                   <th className="px-4 py-3">Owner</th>
-                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Industry</th>
                   <th className="px-4 py-3">Voice</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">VAPI</th>
@@ -1129,7 +1153,7 @@ const Admin = () => {
           <ReportLoading />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[600px] text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Owner</th>
@@ -1184,14 +1208,14 @@ const Admin = () => {
         {/* Per-owner drill-down: all numbers of the clicked user */}
         <Dialog open={!!activeGroup} onOpenChange={(o) => { if (!o) setNumbersModalOwner(null); }}>
           <DialogContent className="max-w-2xl">
-            <DialogHeader>
+            <DialogHeader className="px-6 sm:pl-0">
               <DialogTitle>Numbers owned by {activeGroup?.owner_name || activeGroup?.owner_email || ""}</DialogTitle>
               <DialogDescription>
                 {activeGroup?.owner_email} · {activeGroup?.numbers.length || 0} number(s)
               </DialogDescription>
             </DialogHeader>
-            <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-border">
-              <table className="w-full text-sm">
+            <div className="max-h-[60vh] overflow-auto rounded-lg border border-border">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2">Number</th>
@@ -1231,7 +1255,7 @@ const Admin = () => {
   function renderUsers() {
     return (
       <div>
-        <div className="mb-6 flex items-start justify-between">
+        <div className="mb-6 flex flex-col gap-0 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
           <SectionHeader title="Users" subtitle="Manage users, balances and rates." />
           <Button onClick={() => setAddUserOpen(true)}>
             <Plus className="mr-1.5 h-4 w-4" /> Add User
@@ -1250,20 +1274,20 @@ const Admin = () => {
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
+                <Label>Full Name</Label>
+                <Input
+                  value={addUserForm.full_name}
+                  onChange={(e) => setAddUserForm((f) => ({ ...f, full_name: e.target.value }))}
+                  placeholder="Jane Doe"
+                />
+              </div>
+              <div className="space-y-2">
                 <Label>Email *</Label>
                 <Input
                   type="email"
                   value={addUserForm.email}
                   onChange={(e) => setAddUserForm((f) => ({ ...f, email: e.target.value }))}
                   placeholder="user@company.com"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Full Name</Label>
-                <Input
-                  value={addUserForm.full_name}
-                  onChange={(e) => setAddUserForm((f) => ({ ...f, full_name: e.target.value }))}
-                  placeholder="Jane Doe"
                 />
               </div>
               <div className="space-y-2">
@@ -1276,7 +1300,7 @@ const Admin = () => {
                 />
               </div>
             </div>
-            <DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
               <Button variant="outline" onClick={() => setAddUserOpen(false)}>Cancel</Button>
               <Button onClick={handleAddUser} disabled={addUserSaving}>
                 {addUserSaving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
@@ -1297,7 +1321,7 @@ const Admin = () => {
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[780px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">User</th>
@@ -1335,15 +1359,22 @@ const Admin = () => {
 
                   {selectedUser === u.id && (
                     <tr className="border-t border-border bg-muted/20">
-                      <td colSpan={7} className="px-6 py-4">
+                      <td colSpan={7} className="px-4 py-4 sm:px-6">
+                        {/* Phones: keep the panel within the visible part of the horizontally-scrolling table */}
+                        <div className="max-w-[calc(100vw-66px)] sm:max-w-none">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                           {/* Toggle Access */}
                           <div className="space-y-2">
                             <div className="text-xs font-semibold text-muted-foreground uppercase">Access</div>
                             <Button
                               size="sm"
-                              variant={u.is_active ? "destructive" : "default"}
-                              onClick={(e) => { e.stopPropagation(); handleToggleAccess(u.id); }}
+                              variant={u.is_active ? "outline" : "default"}
+                              className={u.is_active ? "border-destructive/40 text-destructive hover:bg-destructive/10" : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (u.is_active) setPendingDisable({ id: u.id, label: u.full_name || u.email });
+                                else handleToggleAccess(u.id);
+                              }}
                             >
                               {u.is_active ? <><ToggleRight className="mr-1 h-4 w-4" /> Disable</> : <><ToggleLeft className="mr-1 h-4 w-4" /> Enable</>}
                             </Button>
@@ -1374,17 +1405,20 @@ const Admin = () => {
                           {/* Status */}
                           <div className="space-y-2">
                             <div className="text-xs font-semibold text-muted-foreground uppercase">Status</div>
-                            <select
+                            <Select
                               value={u.status}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => handleUpdateBilling(u.id, { status: e.target.value })}
-                              className="h-8 rounded border border-input bg-background px-2 text-sm"
+                              onValueChange={(v) => handleUpdateBilling(u.id, { status: v })}
                             >
-                              <option value="trial">Trial</option>
-                              <option value="active">Active</option>
-                              <option value="past_due">Past Due</option>
-                              <option value="canceled">Canceled</option>
-                            </select>
+                              <SelectTrigger onClick={(e) => e.stopPropagation()} className="h-8 w-full text-sm sm:w-40">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="trial">Trial</SelectItem>
+                                <SelectItem value="active">Active</SelectItem>
+                                <SelectItem value="past_due">Past Due</SelectItem>
+                                <SelectItem value="canceled">Canceled</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
 
@@ -1436,12 +1470,12 @@ const Admin = () => {
                           )}
                         </div>
 
-                        <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+                        <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-xs text-muted-foreground">
                             Joined: {new Date(u.created_at).toLocaleDateString()}
                             {u.stripe_customer_id && <> &middot; Stripe: {u.stripe_customer_id}</>}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <Button
                               size="sm"
                               variant="outline"
@@ -1458,6 +1492,7 @@ const Admin = () => {
                             </Button>
                           </div>
                         </div>
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -1469,6 +1504,48 @@ const Admin = () => {
             <div className="py-8 text-center text-sm text-muted-foreground">No users found</div>
           )}
         </div>
+
+        <AlertDialog open={!!pendingDisable} onOpenChange={(o) => { if (!o) setPendingDisable(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader className="text-center sm:text-center">
+              <AlertDialogTitle>Disable this account?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {pendingDisable && `"${pendingDisable.label}" `}will immediately lose access. No calls, campaigns or agent
+                creation until re-enabled.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="sm:justify-center">
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDisable}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Disable
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={!!pendingDeleteUser} onOpenChange={(o) => { if (!o) setPendingDeleteUser(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader className="text-center sm:text-center">
+              <AlertDialogTitle>Permanently delete this user?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {pendingDeleteUser && `"${pendingDeleteUser.label}" `}and ALL their data (agents, contacts, calls, numbers)
+                will be permanently deleted. This can't be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="sm:justify-center">
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDeleteUser}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     );
   }

@@ -142,9 +142,9 @@ const CallCosts = () => {
                     <button
                       type="button"
                       onClick={() => toggleCallSort(key)}
-                      className="flex w-full items-center justify-between gap-1 hover:text-foreground"
+                      className="flex w-full items-center justify-between gap-2 hover:text-foreground lg:gap-1"
                     >
-                      <span>{label}</span>
+                      <span className="whitespace-nowrap lg:whitespace-normal">{label}</span>
                       {callSortKey === key ? (
                         callSortDir === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />
                       ) : (
@@ -224,7 +224,7 @@ const CallCosts = () => {
                     </th>
                   ) : (
                     <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <div className="relative">
+                      <div className={`relative lg:min-w-0 ${key === "contact" ? "min-w-[11rem]" : "min-w-[7rem]"}`}>
                         <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           value={callFilters[key]}
@@ -258,7 +258,7 @@ const CallCosts = () => {
                       {call.contact_name || call.phone || "Unknown"}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <Badge variant="outline" className="capitalize">{call.direction}</Badge>
+                      <Badge variant="outline" className="whitespace-nowrap capitalize">{call.direction}</Badge>
                     </td>
                     <td className="px-4 py-3 text-center text-foreground">
                       {formatDuration(call.duration_seconds)}
@@ -267,7 +267,7 @@ const CallCosts = () => {
                       ${(call.call_cost || 0).toFixed(4)}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <Badge variant={call.status === "Completed" ? "default" : "secondary"}>
+                      <Badge variant={call.status === "Completed" ? "default" : "secondary"} className="whitespace-nowrap">
                         {call.status}
                       </Badge>
                     </td>

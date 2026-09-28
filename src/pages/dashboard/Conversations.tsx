@@ -411,7 +411,7 @@ const Conversations = () => {
                   <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => openDetail(c)}
-                      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                       aria-label="View"
                       title="View"
                     >
@@ -450,7 +450,7 @@ const Conversations = () => {
               <button
                 type="button"
                 onClick={() => load()}
-                className="rounded-md p-1.5 hover:bg-muted hover:text-foreground"
+                className="rounded-md p-2.5 sm:p-1.5 hover:bg-muted hover:text-foreground"
                 aria-label="Refresh"
                 title="Refresh"
               >
@@ -560,7 +560,7 @@ function PageNumbers({
   const iconBtn = "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center justify-center gap-1">
       <button type="button" className={iconBtn} disabled={page <= 1} onClick={() => onChange(1)} aria-label="First page" title="First page">
         <ChevronFirst className="h-4 w-4" />
       </button>

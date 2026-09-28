@@ -199,6 +199,16 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const rfRef = useRef<ReactFlowInstance | null>(null);
   const { screenToFlowPosition } = useReactFlow();
 
+  // The fitView prop only fits the localStorage-seeded first paint; refit once the server
+  // flow's nodes are measured, or a fresh device opens zoomed onto a single node.
+  const fittedAfterLoadRef = useRef(false);
+  useEffect(() => {
+    if (loadingFlow || fittedAfterLoadRef.current || !nodes.length) return;
+    if (!nodes.every((n) => n.width && n.height)) return;
+    fittedAfterLoadRef.current = true;
+    rfRef.current?.fitView({ padding: 0.2, maxZoom: 1 });
+  }, [loadingFlow, nodes]);
+
   const base = v2 ? "/dashboard/automation-v2" : "/dashboard/automation";
 
   const onConnect = useCallback(
@@ -301,11 +311,11 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   return (
     <div className="-mx-4 -my-6 flex h-[calc(100vh-4rem)] flex-col bg-background sm:-mx-6 lg:-mx-8">
       {/* Top bar */}
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-5 py-3">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 border-b border-border bg-card px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
           <Link
             to={base}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+            className="shrink-0 rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted"
             aria-label="Back"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -313,28 +323,28 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="h-9 w-72 font-medium"
+            className="h-9 min-w-0 flex-1 font-medium sm:w-72 sm:flex-initial"
           />
-          <button className="hidden md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
+          <button className="hidden shrink-0 whitespace-nowrap md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
             <FileText className="h-4 w-4" /> Description
           </button>
-          <button className="hidden md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
+          <button className="hidden shrink-0 whitespace-nowrap md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
             <SettingsIcon className="h-4 w-4" /> Settings
           </button>
-          {loadingFlow && <span className="text-xs text-muted-foreground">Loading…</span>}
-          {!loadingFlow && savingHint && <span className="text-xs text-muted-foreground">{savingHint}</span>}
+          {loadingFlow && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">Loading…</span>}
+          {!loadingFlow && savingHint && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{savingHint}</span>}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="relative flex items-center justify-end gap-2 sm:shrink-0">
+          <div className="sm:relative">
             <button
               onClick={() => setHistoryOpen((v) => !v)}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+              className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted"
               aria-label="History"
             >
               <History className="h-4 w-4" />
             </button>
             {historyOpen && (
-              <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-2 shadow-lg">
+              <div className="absolute right-0 top-full z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-card p-2 shadow-lg">
                 <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Saved Versions {versionsLoading && <span className="ml-1 normal-case font-normal">  loading…</span>}
                 </div>
@@ -395,7 +405,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-6 border-b border-border bg-card px-5">
+      <div className="flex items-center gap-6 overflow-x-auto border-b border-border bg-card px-4 sm:px-5">
         {([["design", "Design"], ["statistics", "Runs"]] as const).map(([t, label]) => (
           <button
             key={t}
@@ -412,8 +422,13 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
 
       {/* Body */}
       {tab === "design" ? (
-        <div className="relative flex flex-1 overflow-hidden">
-          <div ref={wrapperRef} className="flex-1" onDrop={onDrop} onDragOver={onDragOver}>
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
+          <div
+            ref={wrapperRef}
+            className="min-h-[240px] w-full flex-1 lg:min-h-0 lg:w-auto"
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+          >
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -426,6 +441,8 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
               snapToGrid
               snapGrid={[20, 20]}
               fitView
+              fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+              minZoom={0.2}
               proOptions={{ hideAttribution: true }}
               defaultEdgeOptions={{
                 type: "smoothstep",
@@ -437,12 +454,12 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             >
               <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="hsl(var(--border))" />
               <Controls
-                className="!rounded-md !border !border-border !bg-card !shadow-sm [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground"
+                className="!rounded-md !border !border-border !bg-card !shadow-sm [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground [&_svg]:!fill-current max-lg:[&_button]:!h-6 max-lg:[&_button]:!w-6"
                 showInteractive={false}
                 position="bottom-left"
               />
               <MiniMap
-                className="!rounded-md !border !border-border !bg-card"
+                className="!rounded-md !border !border-border !bg-card max-sm:!hidden"
                 nodeColor={() => "hsl(var(--primary))"}
                 maskColor="hsl(var(--background) / 0.8)"
                 pannable
@@ -477,7 +494,7 @@ function Palette() {
   };
 
   return (
-    <aside className="w-[220px] shrink-0 overflow-y-auto border-l border-border bg-card p-4">
+    <aside className="w-full max-h-[35vh] shrink-0 overflow-y-auto border-t border-border bg-card p-4 lg:h-auto lg:w-[220px] lg:max-h-none lg:border-l lg:border-t-0">
       {PALETTE_GROUPS.map((group) => (
         <div key={group.title} className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-foreground">{group.title}</h3>
@@ -614,7 +631,7 @@ function RunsTab({ flowId }: { flowId: string }) {
           <button
             type="button"
             onClick={() => { setLoading(true); fetchRuns(); }}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
             title="Refresh"
           >
             <RefreshCw className="h-4 w-4" />
@@ -631,56 +648,58 @@ function RunsTab({ flowId }: { flowId: string }) {
             that matches its trigger to see a run appear here.
           </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2.5">Status</th>
-                <th className="px-4 py-2.5">Contact / Phone</th>
-                <th className="px-4 py-2.5">Started</th>
-                <th className="px-4 py-2.5">Duration</th>
-                <th className="px-4 py-2.5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => (
-                <Fragment key={r.id}>
-                  <tr
-                    className="cursor-pointer border-t border-border hover:bg-muted/20"
-                    onClick={() => setExpanded((id) => (id === r.id ? null : r.id))}
-                  >
-                    <td className="px-4 py-2.5"><RunStatusBadge status={r.status} /></td>
-                    <td className="px-4 py-2.5 text-foreground">
-                      {r.input_data?.contact_name || r.input_data?.phone || "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
-                      {new Date(r.created_at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{runDurationLabel(r)}</td>
-                    <td className="px-4 py-2.5 text-right text-muted-foreground">
-                      {expanded === r.id ? "Hide" : "Details"}
-                    </td>
-                  </tr>
-                  {expanded === r.id && (
-                    <tr className="border-t border-border bg-muted/10">
-                      <td colSpan={5} className="px-4 py-3">
-                        {r.status === "failed" && r.output_data?.error ? (
-                          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                            {r.output_data.error}
-                          </div>
-                        ) : r.status === "success" ? (
-                          <div className="text-xs text-muted-foreground">
-                            Ran {r.output_data?.nodes_executed ?? "—"} node(s) successfully.
-                          </div>
-                        ) : (
-                          <div className="text-xs text-muted-foreground">Still in progress…</div>
-                        )}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2.5">Status</th>
+                  <th className="px-4 py-2.5">Contact / Phone</th>
+                  <th className="px-4 py-2.5">Started</th>
+                  <th className="px-4 py-2.5">Duration</th>
+                  <th className="px-4 py-2.5"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => (
+                  <Fragment key={r.id}>
+                    <tr
+                      className="cursor-pointer border-t border-border hover:bg-muted/20"
+                      onClick={() => setExpanded((id) => (id === r.id ? null : r.id))}
+                    >
+                      <td className="px-4 py-2.5"><RunStatusBadge status={r.status} /></td>
+                      <td className="px-4 py-2.5 text-foreground">
+                        {r.input_data?.contact_name || r.input_data?.phone || "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
+                        {new Date(r.created_at).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{runDurationLabel(r)}</td>
+                      <td className="px-4 py-2.5 text-right text-muted-foreground">
+                        {expanded === r.id ? "Hide" : "Details"}
                       </td>
                     </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
+                    {expanded === r.id && (
+                      <tr className="border-t border-border bg-muted/10">
+                        <td colSpan={5} className="px-4 py-3">
+                          {r.status === "failed" && r.output_data?.error ? (
+                            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                              {r.output_data.error}
+                            </div>
+                          ) : r.status === "success" ? (
+                            <div className="text-xs text-muted-foreground">
+                              Ran {r.output_data?.nodes_executed ?? "—"} node(s) successfully.
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">Still in progress…</div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

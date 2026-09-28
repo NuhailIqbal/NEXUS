@@ -159,7 +159,7 @@ const DashboardLayout = () => {
         onSignOut={handleSignOut}
       />
 
-      <div className="flex flex-1 flex-col lg:pl-72">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-72">
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur sm:px-6">
           <button
             onClick={() => setMobileOpen(true)}
@@ -174,15 +174,15 @@ const DashboardLayout = () => {
             <NotificationBell />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 rounded-md p-1 pr-2 outline-none transition-colors hover:bg-muted">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+                <button className="flex min-w-0 items-center gap-2 rounded-md p-1 pr-2 outline-none transition-colors hover:bg-muted">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
                     {profile.avatar}
                   </div>
-                  <div className="hidden text-left text-sm leading-tight sm:block">
-                    <div className="font-medium text-foreground">{profile.name}</div>
-                    <div className="text-xs text-muted-foreground">{profile.role}</div>
+                  <div className="hidden min-w-0 text-left text-sm leading-tight sm:block">
+                    <div className="truncate font-medium text-foreground md:max-w-[10rem] lg:max-w-[14rem]">{profile.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">{profile.role}</div>
                   </div>
-                  <ChevronDown className="hidden h-4 w-4 text-muted-foreground sm:block" />
+                  <ChevronDown className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">

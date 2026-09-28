@@ -119,7 +119,7 @@ const OutboundLogs = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="text-2xl font-bold text-foreground">{logs.length}</div>
           <div className="text-xs text-muted-foreground">Total Calls</div>
@@ -144,12 +144,12 @@ const OutboundLogs = () => {
           No outbound calls recorded yet.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-3">Called</th>
-                <th className="px-4 py-3">Agent</th>
+                <th className="min-w-[10rem] px-4 py-3 md:min-w-0">Called</th>
+                <th className="min-w-[11rem] px-4 py-3 md:min-w-0">Agent</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Duration</th>
                 <th className="px-4 py-3">Time</th>
@@ -166,7 +166,7 @@ const OutboundLogs = () => {
                     {c.agent_id ? agents.get(c.agent_id)?.name ?? " " : " "}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
+                    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}
@@ -177,7 +177,7 @@ const OutboundLogs = () => {
                   <td className="px-4 py-3">
                     <button
                       onClick={() => openDetail(c)}
-                      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+                      className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
                       title="View details"
                     >
                       <FileText className="h-4 w-4" />
@@ -193,8 +193,8 @@ const OutboundLogs = () => {
       {/* Detail Modal */}
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
         <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+          <DialogHeader className="text-left">
+            <DialogTitle className="flex items-center gap-2 pr-6">
               <PhoneOutgoing className="h-5 w-5 text-primary" />
               Call Details
             </DialogTitle>
@@ -204,7 +204,7 @@ const OutboundLogs = () => {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-border p-3">
                 <div className="text-xs text-muted-foreground">Status</div>
                 <div className="mt-1 font-medium">{detail?.status}</div>
@@ -213,7 +213,7 @@ const OutboundLogs = () => {
                 <div className="text-xs text-muted-foreground">Duration</div>
                 <div className="mt-1 font-medium">{detail?.duration || (detail?.duration_seconds ? `${detail.duration_seconds}s` : "—")}</div>
               </div>
-              <div className="rounded-lg border border-border p-3">
+              <div className="col-span-2 rounded-lg border border-border p-3 sm:col-span-1">
                 <div className="text-xs text-muted-foreground">Agent</div>
                 <div className="mt-1 font-medium">{detail?.agent_id ? agents.get(detail.agent_id)?.name ?? " " : " "}</div>
               </div>
@@ -260,7 +260,7 @@ const OutboundLogs = () => {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDetail(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>

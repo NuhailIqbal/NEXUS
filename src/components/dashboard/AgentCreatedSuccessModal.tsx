@@ -91,8 +91,8 @@ export function AgentCreatedSuccessModal({
           </h2>
 
           {agentName && (
-            <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-sm font-medium text-primary">
-              <Sparkles className="h-3.5 w-3.5" />
+            <p className="mt-2 inline-flex max-w-full items-center gap-1.5 break-words rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-sm font-medium text-primary">
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
               {agentName}
             </p>
           )}

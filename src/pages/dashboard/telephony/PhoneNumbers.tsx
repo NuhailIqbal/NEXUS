@@ -25,6 +25,13 @@ import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
+// User-facing provider labels are kept generic so we don't expose the underlying
+// carrier (and the price it implies) to end users. Raw values are left untouched.
+const PROVIDER_LABELS: Record<string, string> = {
+  twilio: "Standard",
+};
+const providerLabel = (p: string) => PROVIDER_LABELS[(p || "").toLowerCase()] ?? p;
+
 type Num = {
   id: string;
   number: string;
@@ -223,15 +230,15 @@ const PhoneNumbers = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Phone Numbers</h1>
           <p className="text-sm text-muted-foreground">Every number across inbound and outbound use, in one place.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus className="mr-2 h-4 w-4" />Buy Number</Button>
+        <Button onClick={() => setOpen(true)} className="w-full sm:w-auto"><Plus className="mr-2 h-4 w-4" />Buy Number</Button>
       </div>
 
-      <div className="flex items-center gap-6 border-b border-border">
+      <div className="flex items-center gap-4 overflow-x-auto border-b border-border sm:gap-6">
         {([
           { key: "all", label: "All" },
           { key: "inbound", label: "Inbound" },
@@ -242,7 +249,7 @@ const PhoneNumbers = () => {
             key={t.key}
             type="button"
             onClick={() => setTab(t.key)}
-            className={`relative py-3 text-sm font-medium ${tab === t.key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            className={`relative shrink-0 whitespace-nowrap py-3 text-sm font-medium ${tab === t.key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             {t.label}
             {tab === t.key && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
@@ -250,14 +257,14 @@ const PhoneNumbers = () => {
         ))}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-3">Number</th>
               <th className="px-4 py-3">Used In</th>
               <th className="px-4 py-3">Provider</th>
-              <th className="px-4 py-3">Assigned Agent</th>
+              <th className="min-w-[12rem] px-4 py-3 xl:min-w-0">Assigned Agent</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Purchased</th>
               <th className="px-4 py-3">Expires</th>
@@ -277,29 +284,29 @@ const PhoneNumbers = () => {
               visibleNumbers.map((n) => (
                 <tr key={n.id} className="border-t border-border bg-card/30">
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2 font-mono text-foreground">
-                      <Phone className="h-4 w-4 text-primary" /> {n.number}
+                    <div className="flex items-center gap-2 whitespace-nowrap font-mono text-foreground">
+                      <Phone className="h-4 w-4 shrink-0 text-primary" /> {n.number}
                     </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1.5">
                       {n.agent_id && (
-                        <span className="rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Inbound</span>
+                        <span className="whitespace-nowrap rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Inbound</span>
                       )}
                       {outboundIds.has(n.id) && (
-                        <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
+                        <span className="whitespace-nowrap rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
                       )}
                       {!n.agent_id && !outboundIds.has(n.id) && (
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3">{n.provider}</td>
+                  <td className="px-4 py-3">{providerLabel(n.provider)}</td>
                   <td className="px-4 py-3 text-muted-foreground">{agentsById.get(n.agent_id) || (n.agent_id ? "Unknown agent" : "—")}</td>
                   <td className="px-4 py-3">
                     <NumberStatus num={n} />
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className="whitespace-nowrap px-4 py-3 text-muted-foreground xl:whitespace-normal">
                     {n.created_at ? format(new Date(n.created_at), "MMM d, yyyy") : "—"}
                   </td>
                   <td className="px-4 py-3">
@@ -310,8 +317,8 @@ const PhoneNumbers = () => {
                       const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
                       return (
                         <>
-                          <div className="text-foreground">{format(e.date, "MMM d, yyyy")}</div>
-                          <div className={`text-xs ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
+                          <div className="whitespace-nowrap text-foreground xl:whitespace-normal">{format(e.date, "MMM d, yyyy")}</div>
+                          <div className={`whitespace-nowrap text-xs xl:whitespace-normal ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
                             {expired ? "expired" : `${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"} left`}
                           </div>
                         </>
@@ -386,7 +393,7 @@ const PhoneNumbers = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Provider</Label>
                 <Input value={settingsForm.provider} onChange={(e) => setSettingsForm((f) => ({ ...f, provider: e.target.value }))} />
@@ -403,7 +410,7 @@ const PhoneNumbers = () => {
               </div>
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>
             <Button onClick={saveSettings}>Save</Button>
           </DialogFooter>
@@ -438,7 +445,7 @@ function NumberStatus({ num }: { num: Num }) {
     const m = Math.floor(remaining / 60);
     const s = remaining % 60;
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-xs font-medium text-yellow-500">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-yellow-500/40 bg-yellow-500/10 px-2.5 py-0.5 text-xs font-medium text-yellow-500">
         <Clock className="h-3 w-3 animate-pulse" />
         Activating {m}:{String(s).padStart(2, "0")}
       </span>
@@ -446,7 +453,7 @@ function NumberStatus({ num }: { num: Num }) {
   }
 
   if (num.suspended_for_balance) {
-    return <Badge variant="destructive">Suspended — add funds</Badge>;
+    return <Badge variant="destructive" className="whitespace-nowrap xl:whitespace-normal">Suspended — add funds</Badge>;
   }
 
   return <Badge variant={num.status === "Active" ? "default" : "secondary"}>{num.status}</Badge>;
@@ -517,7 +524,7 @@ function TestCallDialog({
               type="button"
               onClick={backspace}
               disabled={!to || isBusy}
-              className="shrink-0 rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              className="shrink-0 rounded-full p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
               aria-label="Backspace"
             >
               <Delete className="h-4 w-4" />
@@ -556,7 +563,7 @@ function TestCallDialog({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>

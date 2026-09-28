@@ -196,7 +196,7 @@ export function LiveVoiceModal({
 
         {!agent ? null : (
           <>
-            <div className="grid grid-cols-3 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm sm:grid-cols-3">
               <div><span className="text-muted-foreground">Voice: </span><span className="font-medium">{agent.voice ?? " "}</span></div>
               <div><span className="text-muted-foreground">Language: </span><span className="font-medium">{agent.language ?? " "}</span></div>
               <div><span className="text-muted-foreground">Status: </span><span className="font-medium">{agent.status ?? " "}</span></div>

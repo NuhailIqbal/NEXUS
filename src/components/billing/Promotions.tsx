@@ -48,6 +48,7 @@ const Promotions = () => {
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             autoComplete="off"
             spellCheck={false}
+            className="min-w-0"
           />
           <Button type="submit" disabled={applying || !code.trim()}>
             {applying ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Applying…</> : "Apply"}
@@ -76,19 +77,19 @@ const Promotions = () => {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-3">Code</th>
-                    <th className="px-4 py-3">Credit</th>
-                    <th className="px-4 py-3">Applied</th>
+                    <th className="px-3 py-3 sm:px-4">Code</th>
+                    <th className="px-3 py-3 sm:px-4">Credit</th>
+                    <th className="px-3 py-3 sm:px-4">Applied</th>
                   </tr>
                 </thead>
                 <tbody>
                   {applied.map((p) => (
                     <tr key={p.id} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3 font-medium text-foreground">{p.code}</td>
-                      <td className="px-4 py-3 font-medium text-green-500">
+                      <td className="px-3 py-3 sm:px-4 font-medium text-foreground">{p.code}</td>
+                      <td className="px-3 py-3 sm:px-4 font-medium text-green-500">
                         +${p.amount.toFixed(2)}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">
+                      <td className="px-3 py-3 sm:px-4 text-muted-foreground">
                         {new Date(p.created_at).toLocaleDateString()}
                       </td>
                     </tr>

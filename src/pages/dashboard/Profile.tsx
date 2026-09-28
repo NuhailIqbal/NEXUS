@@ -144,7 +144,7 @@ const Profile = () => {
 
       {/* Profile Form */}
       <section className="rounded-xl border border-border bg-card p-6">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-semibold text-foreground">Your profile</h2>
           {!loading && !editingProfile && (
             <Button variant="outline" size="sm" onClick={() => setEditingProfile(true)}>
@@ -166,7 +166,7 @@ const Profile = () => {
                 <div className="truncate text-sm text-muted-foreground">{user?.email ?? "—"}</div>
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <InfoTile icon={Mail} label="Email" value={user?.email ?? "—"} />
               <InfoTile icon={Building2} label="Company" value={companyName || "Not set"} />
               <InfoTile icon={PhoneIcon} label="Phone" value={phone || "Not set"} />
@@ -205,7 +205,7 @@ const Profile = () => {
 
       {/* Team Members */}
       <section>
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-semibold text-foreground">Team Members</h2>
           {isOwner && (
             <Button variant="outline" onClick={() => setShowInvite(!showInvite)}>
@@ -253,60 +253,62 @@ const Profile = () => {
 
         {/* Members Table */}
         <div className="overflow-hidden rounded-xl border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3">Status</th>
-                {isOwner && <th className="px-4 py-3">Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {team.map((m) => (
-                <tr key={m.id} className="border-t border-border bg-card/30">
-                  <td className="px-4 py-3 font-medium text-foreground">{m.member_email}</td>
-                  <td className="px-4 py-3">
-                    {isOwner ? (
-                      <Select value={m.role} onValueChange={(v) => handleRoleChange(m.id, v)}>
-                        <SelectTrigger className="h-8 w-32 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="member">Member</SelectItem>
-                          <SelectItem value="viewer">Viewer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Badge variant="outline" className="capitalize">{m.role}</Badge>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant={m.status === "Active" ? "default" : "secondary"}>{m.status}</Badge>
-                  </td>
-                  {isOwner && (
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => handleRemove(m.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-              {team.length === 0 && !loading && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <td colSpan={isOwner ? 4 : 3} className="px-4 py-8 text-center text-muted-foreground">
-                    No team members yet. {isOwner && "Click \"Add Collaborator\" to invite someone."}
-                  </td>
+                  <th className="px-4 py-3">Email</th>
+                  <th className="px-4 py-3">Role</th>
+                  <th className="px-4 py-3">Status</th>
+                  {isOwner && <th className="px-4 py-3">Actions</th>}
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {team.map((m) => (
+                  <tr key={m.id} className="border-t border-border bg-card/30">
+                    <td className="px-4 py-3 font-medium text-foreground">{m.member_email}</td>
+                    <td className="px-4 py-3">
+                      {isOwner ? (
+                        <Select value={m.role} onValueChange={(v) => handleRoleChange(m.id, v)}>
+                          <SelectTrigger className="h-8 w-32 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="member">Member</SelectItem>
+                            <SelectItem value="viewer">Viewer</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Badge variant="outline" className="capitalize">{m.role}</Badge>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant={m.status === "Active" ? "default" : "secondary"}>{m.status}</Badge>
+                    </td>
+                    {isOwner && (
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => handleRemove(m.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+                {team.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={isOwner ? 4 : 3} className="px-4 py-8 text-center text-muted-foreground">
+                      No team members yet. {isOwner && "Click \"Add Collaborator\" to invite someone."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {!isOwner && (
@@ -323,13 +325,13 @@ const Profile = () => {
 
 function InfoTile({ icon: Icon, label, value }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
+    <div className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
         <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="truncate text-sm font-medium text-foreground">{value}</div>
+        <div className="break-words text-sm font-medium text-foreground sm:truncate">{value}</div>
       </div>
     </div>
   );

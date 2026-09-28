@@ -41,11 +41,11 @@ type CheckItem = {
 
 function StatCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: string | number; color: string }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
-      <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${color}`}>
+    <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4 lg:flex-col lg:items-start lg:gap-3 xl:flex-row xl:items-center xl:gap-4">
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${color}`}>
         <Icon className="h-5 w-5" />
       </div>
-      <div>
+      <div className="min-w-0">
         <div className="text-2xl font-bold text-foreground">{value}</div>
         <div className="text-xs text-muted-foreground">{label}</div>
       </div>
@@ -209,18 +209,18 @@ const Outbound = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Outbound Campaigns</h1>
           <p className="text-sm text-muted-foreground">AI powered outbound calling automated, intelligent, scalable.</p>
         </div>
-        <Button onClick={() => setOpen(true)}>
+        <Button onClick={() => setOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" /> New Campaign
         </Button>
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
         <StatCard icon={Radio}        label="Total Campaigns"  value={campaigns.length}  color="bg-primary/10 text-primary" />
         <StatCard icon={TrendingUp}   label="Active Now"       value={activeCampaigns}   color="bg-green-500/10 text-green-600" />
         <StatCard icon={Users}        label="Total Contacts"   value={totalContacts.toLocaleString()} color="bg-blue-500/10 text-blue-600" />
@@ -264,22 +264,22 @@ const Outbound = () => {
                 className={`rounded-xl border bg-card p-5 transition-shadow hover:shadow-md ${showRunning ? "border-primary/30 shadow-sm shadow-primary/10" : "border-border"}`}
               >
                 {/* Top row */}
-                <div className="flex items-start justify-between">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${showRunning ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${showRunning ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                     <PhoneOutgoing className="h-5 w-5" />
                   </div>
-                  <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusCls}`}>{effectiveStatus}</span>
+                  <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusCls}`}>{effectiveStatus}</span>
                 </div>
 
                 {/* Name + agent */}
-                <h3 className="mt-4 font-semibold text-foreground">{c.name}</h3>
+                <h3 className="mt-4 break-words font-semibold text-foreground">{c.name}</h3>
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Bot className="h-3 w-3" />
-                  <span>{agentsById.get(c.agent_id) ?? "Unassigned"}</span>
+                  <Bot className="h-3 w-3 shrink-0" />
+                  <span className="min-w-0">{agentsById.get(c.agent_id) ?? "Unassigned"}</span>
                 </div>
                 {phoneNumbersById.get(c.phone_number_id ?? "") && (
                   <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Phone className="h-3 w-3" />
+                    <Phone className="h-3 w-3 shrink-0" />
                     <span>{phoneNumbersById.get(c.phone_number_id!)}</span>
                   </div>
                 )}
@@ -299,7 +299,7 @@ const Outbound = () => {
                 </div>
 
                 {/* Actions */}
-                <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                   <Button
                     size="sm"
                     variant={isActive ? "outline" : "default"}
@@ -338,7 +338,7 @@ const Outbound = () => {
       {/* Pre-flight Dialog */}
       <Dialog open={!!preflightTarget} onOpenChange={(o) => { if (!o) setPreflightTarget(null); }}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader className="text-left">
             <DialogTitle className="flex items-center gap-2 text-base">
               <AlertTriangle className="h-4 w-4 text-yellow-500" />
               Pre-launch Checks
@@ -363,7 +363,7 @@ const Outbound = () => {
               </div>
             ))}
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setPreflightTarget(null)}>Cancel</Button>
             <Button
               onClick={launchCampaign}
@@ -414,7 +414,7 @@ const Outbound = () => {
               </Select>
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>
             <Button onClick={saveSettings}>Save Changes</Button>
           </DialogFooter>

@@ -112,7 +112,7 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
         );
       case "delay":
         return (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Duration"><Input type="number" value={config.duration ?? "1"} onChange={(e) => set("duration", e.target.value)} /></Field>
             <Field label="Unit">
               <select value={config.unit ?? "minutes"} onChange={(e) => set("unit", e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
@@ -236,7 +236,7 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
   };
 
   return (
-    <div className="absolute inset-y-0 right-0 z-30 flex w-[360px] flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right-5 duration-200">
+    <div className="fixed inset-0 z-30 flex flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right-5 duration-200 lg:absolute lg:inset-y-0 lg:inset-x-auto lg:right-0 lg:w-[360px]">
       <div className="flex items-center justify-between border-b border-border p-4">
         <div className="flex items-center gap-2">
           <div className={`flex h-8 w-8 items-center justify-center rounded-md ${p.iconBg}`}>
@@ -247,7 +247,7 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
             <div className="text-sm font-semibold">Edit node</div>
           </div>
         </div>
-        <button onClick={onClose} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close">
+        <button onClick={onClose} className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close">
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -257,14 +257,14 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
         {renderFields()}
       </div>
 
-      <div className="flex items-center justify-between gap-2 border-t border-border p-3">
-        <Button variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={() => onDelete(node.id)}>
+      <div className="flex flex-col-reverse gap-2 border-t border-border p-3 sm:flex-row sm:items-center sm:justify-between">
+        <Button variant="ghost" className="w-full text-destructive hover:bg-destructive/10 sm:w-auto" onClick={() => onDelete(node.id)}>
           <Trash2 className="mr-1.5 h-4 w-4" /> Delete
         </Button>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={onClose}>Cancel</Button>
           <Button
-            className="bg-primary text-primary-foreground"
+            className="flex-1 bg-primary text-primary-foreground sm:flex-none"
             onClick={() => onSave(node.id, { ...node.data, label: label || node.data.label, config })}
           >
             <Save className="mr-1.5 h-4 w-4" /> Save

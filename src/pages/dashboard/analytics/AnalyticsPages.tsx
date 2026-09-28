@@ -107,7 +107,7 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
       </div>
 
       <div className="rounded-xl border border-border bg-card p-5">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="font-semibold text-foreground">Trends (last 14 days)</h3>
           {!loading && !hasData && (
             <span className="text-xs text-muted-foreground">No call data yet chart will populate after your first calls.</span>
@@ -125,9 +125,9 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={series}>
+              <LineChart data={series} margin={{ top: 5, right: 24, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+                <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} minTickGap={20} tickMargin={6} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
                 <Tooltip
                   contentStyle={{
@@ -137,8 +137,8 @@ const AnalyticsChart = ({ title, subtitle, variant }: Props) => {
                     color: "hsl(var(--foreground))",
                   }}
                 />
-                <Legend />
-                <Line type="monotone" dataKey="calls"        name="Calls"            stroke="hsl(var(--primary))"    strokeWidth={2} dot={false} />
+                <Legend wrapperStyle={{ paddingTop: 16, fontSize: 12 }} />
+                <Line type="monotone" dataKey="calls"       name="Calls"            stroke="hsl(var(--primary))"    strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="completed"    name="Completed"        stroke="hsl(var(--neon-cyan))"  strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="duration_min" name="Duration (min)"   stroke="hsl(var(--warning))"    strokeWidth={2} dot={false} />
               </LineChart>
@@ -162,12 +162,12 @@ function ChannelBreakdown({ channels }: { channels: ChannelMap }) {
       <h3 className="mb-4 font-semibold text-foreground">By Channel</h3>
       <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
+          <BarChart data={data} margin={{ top: 5, right: 24, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-            <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
+            <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} minTickGap={8} tickMargin={6} />
             <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
             <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
-            <Legend />
+            <Legend wrapperStyle={{ paddingTop: 16, fontSize: 12 }} />
             <Bar dataKey="total"     name="Total"     fill="hsl(var(--primary))" />
             <Bar dataKey="completed" name="Completed" fill="hsl(var(--neon-cyan))" />
             <Bar dataKey="failed"    name="Failed"    fill="hsl(var(--destructive))" />
@@ -183,33 +183,35 @@ function CampaignBreakdown({ campaigns }: { campaigns: CampaignRow[] }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <h3 className="mb-4 font-semibold text-foreground">Campaigns</h3>
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr><th className="py-2">Name</th><th>Status</th><th>Contacts</th><th>Completed</th><th>Qualified</th><th>Progress</th></tr>
-        </thead>
-        <tbody>
-          {campaigns.map((c) => {
-            const pct = c.contacts_count > 0 ? Math.round((c.completed_count / c.contacts_count) * 100) : 0;
-            return (
-              <tr key={c.id} className="border-t border-border">
-                <td className="py-2 font-medium">{c.name}</td>
-                <td>{c.status}</td>
-                <td>{c.contacts_count.toLocaleString()}</td>
-                <td>{c.completed_count.toLocaleString()}</td>
-                <td className="font-medium text-success">{(c.qualified_count ?? 0).toLocaleString()}</td>
-                <td>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-24 rounded-full bg-muted">
-                      <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px] text-sm">
+          <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr><th className="py-2">Name</th><th>Status</th><th>Contacts</th><th>Completed</th><th>Qualified</th><th>Progress</th></tr>
+          </thead>
+          <tbody>
+            {campaigns.map((c) => {
+              const pct = c.contacts_count > 0 ? Math.round((c.completed_count / c.contacts_count) * 100) : 0;
+              return (
+                <tr key={c.id} className="border-t border-border">
+                  <td className="py-2 font-medium">{c.name}</td>
+                  <td>{c.status}</td>
+                  <td>{c.contacts_count.toLocaleString()}</td>
+                  <td>{c.completed_count.toLocaleString()}</td>
+                  <td className="font-medium text-success">{(c.qualified_count ?? 0).toLocaleString()}</td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-24 rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs text-muted-foreground">{pct}%</span>
                     </div>
-                    <span className="text-xs text-muted-foreground">{pct}%</span>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -219,22 +221,24 @@ function AgentBreakdown({ agents }: { agents: AgentRow[] }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <h3 className="mb-4 font-semibold text-foreground">By Agent</h3>
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr><th className="py-2">Agent</th><th>Total</th><th>Completed</th><th>Failed</th><th>Qualified</th></tr>
-        </thead>
-        <tbody>
-          {agents.map((a) => (
-            <tr key={a.id} className="border-t border-border">
-              <td className="py-2 font-medium">{a.name}</td>
-              <td>{a.total_calls.toLocaleString()}</td>
-              <td>{a.completed.toLocaleString()}</td>
-              <td>{a.failed.toLocaleString()}</td>
-              <td className="font-medium text-success">{(a.qualified ?? 0).toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr><th className="py-2">Agent</th><th>Total</th><th>Completed</th><th>Failed</th><th>Qualified</th></tr>
+          </thead>
+          <tbody>
+            {agents.map((a) => (
+              <tr key={a.id} className="border-t border-border">
+                <td className="py-2 font-medium">{a.name}</td>
+                <td>{a.total_calls.toLocaleString()}</td>
+                <td>{a.completed.toLocaleString()}</td>
+                <td>{a.failed.toLocaleString()}</td>
+                <td className="font-medium text-success">{(a.qualified ?? 0).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -175,7 +175,7 @@ const Integrations = () => {
               <div className="flex items-center gap-0.5 ml-2">
                 <button
                   onClick={() => openTest(i)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-primary sm:p-1.5"
                   aria-label="Test"
                   title="Test connection"
                 >
@@ -183,7 +183,7 @@ const Integrations = () => {
                 </button>
                 <button
                   onClick={() => openSettings(i)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:p-1.5"
                   aria-label="Settings"
                   title="Settings"
                 >
@@ -191,7 +191,7 @@ const Integrations = () => {
                 </button>
                 <button
                   onClick={() => handleDelete(i)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-destructive sm:p-1.5"
                   aria-label="Delete"
                   title="Delete"
                 >
@@ -214,7 +214,7 @@ const Integrations = () => {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Integrations</h1>
           <p className="text-sm text-muted-foreground">Connect telephony providers, email services, and your CRM.</p>
@@ -366,7 +366,7 @@ const Integrations = () => {
                   onChange={(e) => setSettingsCreds((c) => ({ ...c, apiKey: e.target.value }))}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="cred-username">Username / SID</Label>
                   <Input

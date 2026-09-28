@@ -75,44 +75,46 @@ const Automation = ({ v2 = false }: { v2?: boolean }) => {
       <SmartFilters value={search} onChange={setSearch} placeholder="Search flows..." />
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 text-left font-semibold">ID</th>
-              <th className="px-4 py-3 text-left font-semibold">Name</th>
-              <th className="px-4 py-3 text-left font-semibold">Description</th>
-              <th className="px-4 py-3 text-left font-semibold">Status</th>
-              <th className="px-4 py-3 text-left font-semibold">Modified</th>
-              <th className="px-4 py-3 text-right font-semibold">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {filtered.map((f) => (
-              <tr key={f.id} className="hover:bg-muted/40">
-                <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{f.id.slice(0, 8)}</td>
-                <td className="px-4 py-3 font-medium">{f.name}</td>
-                <td className="px-4 py-3 text-muted-foreground">{f.description}</td>
-                <td className="px-4 py-3"><StatusBadge status={f.status} /></td>
-                <td className="px-4 py-3 text-muted-foreground">{new Date(f.updated_at).toLocaleDateString()}</td>
-                <td className="px-4 py-3">
-                  <div className="flex justify-end gap-1">
-                    <Link
-                      to={`${base}/${f.id}?name=${encodeURIComponent(f.name)}`}
-                      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
-                      aria-label="Edit flow"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Link>
-                    <button onClick={() => remove(f)} className="rounded-md p-1.5 text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></button>
-                  </div>
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[700px] text-sm">
+            <thead className="bg-muted/50 text-xs uppercase tracking-wider text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3 text-left font-semibold">ID</th>
+                <th className="px-4 py-3 text-left font-semibold">Name</th>
+                <th className="px-4 py-3 text-left font-semibold">Description</th>
+                <th className="px-4 py-3 text-left font-semibold">Status</th>
+                <th className="px-4 py-3 text-left font-semibold">Modified</th>
+                <th className="px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No flows yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.map((f) => (
+                <tr key={f.id} className="hover:bg-muted/40">
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-muted-foreground">{f.id.slice(0, 8)}</td>
+                  <td className="px-4 py-3 font-medium">{f.name}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{f.description}</td>
+                  <td className="px-4 py-3"><StatusBadge status={f.status} /></td>
+                  <td className="px-4 py-3 text-muted-foreground">{new Date(f.updated_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-1">
+                      <Link
+                        to={`${base}/${f.id}?name=${encodeURIComponent(f.name)}`}
+                        className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted"
+                        aria-label="Edit flow"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Link>
+                      <button onClick={() => remove(f)} className="rounded-md p-2.5 sm:p-1.5 text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No flows yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

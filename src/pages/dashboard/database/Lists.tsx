@@ -110,7 +110,7 @@ const Lists = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Lists</h1>
           <p className="text-sm text-muted-foreground">Group contacts for campaigns and flows.</p>
@@ -160,7 +160,7 @@ const Lists = () => {
             <DialogDescription>List details</DialogDescription>
           </DialogHeader>
           {viewTarget && (
-            <dl className="grid grid-cols-3 gap-3 text-sm">
+            <dl className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-3 sm:gap-3">
               <dt className="text-muted-foreground">Contacts</dt>
               <dd className="col-span-2 font-medium">{viewTarget.count.toLocaleString()}</dd>
               <dt className="text-muted-foreground">Created</dt>

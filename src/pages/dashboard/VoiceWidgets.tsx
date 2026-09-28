@@ -178,7 +178,7 @@ const VoiceWidgets = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Voice Widgets</h1>
           <p className="text-sm text-muted-foreground">Embeddable voice agents for your website.</p>
@@ -288,7 +288,7 @@ const VoiceWidgets = () => {
               <Label>Agent</Label>
               <Input value={settingsForm.agent ?? ""} onChange={(e) => setSettingsForm((f) => ({ ...f, agent: e.target.value }))} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Position</Label>
                 <Select value={settingsForm.position ?? "Bottom Right"} onValueChange={(v) => setSettingsForm((f) => ({ ...f, position: v }))}>

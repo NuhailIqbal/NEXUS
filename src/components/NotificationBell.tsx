@@ -68,7 +68,7 @@ const NotificationBell = () => {
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
+      <PopoverContent align="end" className="ml-4 w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] p-0 sm:w-80">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold text-foreground">Notifications</span>
           <button onClick={() => navigate("/dashboard/billing")} className="text-xs font-medium text-primary hover:underline">

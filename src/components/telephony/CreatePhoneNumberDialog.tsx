@@ -25,6 +25,12 @@ export type PhoneNumberData = {
 
 const PROVIDERS = ["Twilio"];
 
+// User-facing labels are kept generic so we don't expose the underlying carrier
+// (and the price it implies) to end users. Internal value stays "Twilio".
+const PROVIDER_LABELS: Record<string, string> = {
+  Twilio: "Standard",
+};
+
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
     active: false,
@@ -95,7 +101,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
                 <SelectValue placeholder="Please select your phone number provider" />
               </SelectTrigger>
               <SelectContent>
-                {PROVIDERS.map((p) => (<SelectItem key={p} value={p}>{p}</SelectItem>))}
+                {PROVIDERS.map((p) => (<SelectItem key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</SelectItem>))}
               </SelectContent>
             </Select>
           </div>
@@ -104,7 +110,6 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
             <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
               covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
-              <span className="mt-1 block text-[11px]">The number is provisioned once payment is settled.</span>
             </div>
           )}
 
@@ -136,11 +141,11 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
           <ToggleRow label="Active" checked={data.active} onChange={(v) => setData({ ...data, active: v })} />
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-border px-6 py-4 bg-muted/20">
-          <Button variant="outline" onClick={() => close(false)}>
+        <div className="flex flex-col-reverse gap-2 border-t border-border px-6 py-4 bg-muted/20 sm:flex-row sm:items-center sm:justify-end">
+          <Button variant="outline" onClick={() => close(false)} className="w-full sm:w-auto">
             <X className="mr-1 h-4 w-4" /> Cancel
           </Button>
-          <Button onClick={create} className="bg-primary text-primary-foreground hover:opacity-90">
+          <Button onClick={create} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
             <Plus className="mr-1 h-4 w-4" /> Create
           </Button>
         </div>

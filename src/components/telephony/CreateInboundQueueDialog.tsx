@@ -157,16 +157,16 @@ export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props
           {step === 3 && <StepReview data={data} setData={setData} />}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border px-6 py-4 bg-muted/20">
-          <Button variant="outline" onClick={back} disabled={step === 0}>
+        <div className="flex flex-col-reverse gap-2 border-t border-border px-6 py-4 bg-muted/20 sm:flex-row sm:items-center sm:justify-between">
+          <Button variant="outline" onClick={back} disabled={step === 0} className="w-full sm:w-auto">
             <ChevronLeft className="mr-1 h-4 w-4" /> Previous
           </Button>
           {step < 3 ? (
-            <Button onClick={next} className="bg-primary text-primary-foreground hover:opacity-90">
+            <Button onClick={next} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
               Next <ChevronRight className="ml-1 h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={launch} className="bg-primary text-primary-foreground hover:opacity-90">
+            <Button onClick={launch} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
               <PhoneIncoming className="mr-2 h-4 w-4" /> Launch Queue
             </Button>
           )}
@@ -315,7 +315,7 @@ function StepReview({ data, setData }: { data: InboundQueueData; setData: React.
   return (
     <>
       <Section icon={<PhoneIncoming className="h-4 w-4" />} title="Queue Summary">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SummaryItem label="Queue Name" value={data.name || " "} />
           <SummaryItem label="Phone Number" value={data.inboundNumber} />
           <SummaryItem label="AI Agent" value={data.aiAgent} />

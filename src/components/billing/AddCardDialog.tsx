@@ -64,7 +64,7 @@ function CardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => vo
           }
         />
       )}
-      <DialogFooter>
+      <DialogFooter className="gap-2 sm:gap-0">
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>

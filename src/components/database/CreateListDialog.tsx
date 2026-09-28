@@ -54,7 +54,7 @@ export function CreateListDialog({ open, onOpenChange, onCreate }: Props) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-border p-4">
+        <div className="flex flex-col-reverse gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-end">
           <Button variant="outline" onClick={() => close(false)}>
             <X className="mr-1 h-4 w-4" /> Cancel
           </Button>

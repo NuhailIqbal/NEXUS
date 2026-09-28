@@ -248,7 +248,7 @@ const AIVoices = () => {
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {all.map((v) => (
-          <div key={v.id} className="rounded-xl border border-border bg-card p-5 card-interactive">
+          <div key={v.id} className="flex flex-col rounded-xl border border-border bg-card p-5 card-interactive">
             <div className="flex items-start justify-between">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Mic className="h-5 w-5" />
@@ -256,7 +256,7 @@ const AIVoices = () => {
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => toggleFavorite(v)}
-                  className="rounded-md p-1 hover:bg-muted"
+                  className="rounded-md p-2 hover:bg-muted sm:p-1"
                   aria-label="Toggle favorite"
                   title={v.favorite ? "Unfavorite" : "Favorite"}
                 >
@@ -273,10 +273,10 @@ const AIVoices = () => {
             {v.description && (
               <p className="mt-1 text-xs italic text-muted-foreground/80">{v.description}</p>
             )}
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-auto flex items-center gap-2 pt-4">
               <button
                 onClick={() => openPreview(v)}
-                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted sm:py-1.5"
               >
                 <Play className="h-3 w-3" /> Preview
               </button>

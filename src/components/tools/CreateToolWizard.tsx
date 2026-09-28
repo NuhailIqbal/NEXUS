@@ -159,21 +159,21 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-3xl gap-0 p-0 overflow-hidden max-h-[90vh] flex flex-col"
+        className="max-w-3xl gap-0 p-0 overflow-hidden max-h-[90vh] flex flex-col [&>button:last-child]:hidden"
         onInteractOutside={(e) => e.preventDefault()}
       >
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Settings2 className="h-5 w-5" />
+        <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground sm:h-10 sm:w-10">
+              <Settings2 className="h-4 w-4 sm:h-5 sm:w-5" />
             </div>
-            <h2 className="text-xl font-semibold">
+            <h2 className="truncate text-lg font-semibold sm:text-xl">
               {mode === "edit" ? "Edit Tool" : "Create New Tool"}
             </h2>
           </div>
           <button
             onClick={() => onOpenChange(false)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+            className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted"
           >
             <X className="h-5 w-5" />
           </button>
@@ -181,14 +181,14 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
 
         <Stepper currentStep={step} />
 
-        <div className="flex-1 overflow-y-auto bg-background px-6 py-6">
+        <div className="flex-1 overflow-y-auto bg-background px-4 py-4 sm:px-6 sm:py-6">
           {step === 1 && <StepGeneral data={data} setData={setData} />}
           {step === 2 && <StepParameters data={data} setData={setData} />}
           {step === 3 && <StepPlatform data={data} setData={setData} />}
           {step === 4 && <StepReview data={data} />}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border bg-background px-6 py-4">
+        <div className="flex items-center justify-between border-t border-border bg-background px-4 py-3 sm:px-6 sm:py-4">
           <div>
             {step > 1 && (
               <Button variant="outline" onClick={() => setStep((s) => s - 1)}>
@@ -216,28 +216,28 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
 
 function Stepper({ currentStep }: { currentStep: number }) {
   return (
-    <div className="bg-muted/40 px-6 py-5">
+    <div className="bg-muted/40 px-3 py-4 sm:px-6 sm:py-5">
       <div className="flex items-center justify-between">
         {STEPS.map((s, i) => {
           const isDone = currentStep > s.id;
           const isActive = currentStep === s.id;
           const Icon = s.icon;
           return (
-            <div key={s.id} className="flex flex-1 items-center">
-              <div className="flex flex-col items-center">
+            <div key={s.id} className="flex min-w-0 flex-1 items-center">
+              <div className="flex min-w-0 flex-col items-center">
                 <div
                   className={cn(
-                    "flex h-10 w-10 items-center justify-center rounded-full transition-colors",
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors sm:h-10 sm:w-10",
                     isDone && "bg-primary text-primary-foreground",
                     isActive && "bg-primary text-primary-foreground ring-4 ring-primary/20",
                     !isDone && !isActive && "bg-muted text-muted-foreground",
                   )}
                 >
-                  {isDone ? <Check className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
+                  {isDone ? <Check className="h-4 w-4 sm:h-5 sm:w-5" /> : <Icon className="h-4 w-4 sm:h-5 sm:w-5" />}
                 </div>
                 <span
                   className={cn(
-                    "mt-2 text-xs font-medium",
+                    "mt-1.5 max-w-[60px] text-center text-[10px] font-medium leading-tight sm:mt-2 sm:max-w-none sm:text-xs",
                     (isActive || isDone) ? "text-foreground" : "text-muted-foreground",
                   )}
                 >
@@ -247,7 +247,7 @@ function Stepper({ currentStep }: { currentStep: number }) {
               {i < STEPS.length - 1 && (
                 <div
                   className={cn(
-                    "mx-2 mb-6 h-0.5 flex-1 transition-colors",
+                    "mx-1 mb-5 h-0.5 flex-1 transition-colors sm:mx-2 sm:mb-6",
                     currentStep > s.id ? "bg-primary" : "bg-border",
                   )}
                 />
@@ -295,10 +295,10 @@ function SectionHeader({
 }) {
   return (
     <div className="flex items-start gap-3">
-      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <Icon className="h-4 w-4" />
       </div>
-      <div>
+      <div className="min-w-0">
         <h3 className="font-semibold">{title}</h3>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </div>
@@ -414,7 +414,7 @@ function StepParameters({
 
       <SectionHeader icon={Sliders} title="Parameters to Collect" description="Define what information the AI agent needs to gather from the client." />
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Button type="button" onClick={buildWithAI} className="bg-primary text-primary-foreground hover:opacity-90">
           <Sparkles className="mr-2 h-4 w-4" /> Build with AI
         </Button>
@@ -458,18 +458,18 @@ function ParamCard({
 
   return (
     <div className="rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between gap-2 px-4 py-3">
         <button
           type="button"
           onClick={() => onChange({ expanded: !param.expanded })}
-          className="flex flex-1 items-center gap-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          <ChevronDown className={cn("h-4 w-4 transition-transform", !param.expanded && "-rotate-90")} />
-          <span className="font-medium">{param.name || "Unnamed Parameter"}</span>
+          <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", !param.expanded && "-rotate-90")} />
+          <span className="truncate font-medium">{param.name || "Unnamed Parameter"}</span>
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Badge variant="secondary">{param.type}</Badge>
-          <button type="button" onClick={onRemove} className="rounded-md p-1.5 text-destructive hover:bg-destructive/10">
+          <button type="button" onClick={onRemove} className="rounded-md p-2 text-destructive hover:bg-destructive/10 sm:p-1.5">
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
@@ -477,7 +477,7 @@ function ParamCard({
 
       {param.expanded && (
         <div className="space-y-4 border-t border-border px-4 py-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-2">
               <Label>Parameter Name</Label>
               <Input
@@ -511,7 +511,7 @@ function ParamCard({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-2">
               <Label>Default Value</Label>
               <Input placeholder="Value if not provided" value={param.defaultValue} onChange={(e) => onChange({ defaultValue: e.target.value })} />
@@ -529,6 +529,7 @@ function ParamCard({
             <p className="text-xs text-muted-foreground">Restrict this parameter to specific allowed values</p>
             <div className="flex gap-2">
               <Input
+                className="min-w-0 flex-1"
                 placeholder="Add allowed value..."
                 value={enumInput}
                 onChange={(e) => setEnumInput(e.target.value)}
@@ -539,7 +540,7 @@ function ParamCard({
                   }
                 }}
               />
-              <Button type="button" variant="outline" onClick={addEnum}>Add</Button>
+              <Button type="button" variant="outline" className="shrink-0" onClick={addEnum}>Add</Button>
             </div>
             {param.enumValues.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
@@ -576,7 +577,7 @@ function StepPlatform({
         Define how the tool reaches your backend endpoint, headers, and request body.
       </InfoBox>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-4 rounded-lg border border-border bg-card p-4">
           <SectionHeader icon={Globe} title="Request Configuration" description="Where should we send the request?" />
           <div className="grid grid-cols-[100px_1fr] gap-2">
@@ -591,7 +592,7 @@ function StepPlatform({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <Label>API URL <span className="text-destructive">*</span></Label>
               <Input placeholder="https://api.example.com/check-payment" value={data.apiUrl} onChange={(e) => setData((d) => ({ ...d, apiUrl: e.target.value }))} />
             </div>
@@ -612,7 +613,7 @@ function StepPlatform({
         </div>
 
         <div className="space-y-4 rounded-lg border border-border bg-card p-4">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <SectionHeader icon={Sliders} title="HTTP Headers" description="Add authentication tokens or custom headers" />
             <Button type="button" size="sm" variant="outline" onClick={addHeader}>
               <Plus className="mr-1 h-3 w-3" /> Add Header
@@ -628,9 +629,9 @@ function StepPlatform({
             <div className="space-y-2">
               {data.headers.map((h) => (
                 <div key={h.id} className="flex gap-2">
-                  <Input placeholder="Header name" value={h.key} onChange={(e) => setData((d) => ({ ...d, headers: d.headers.map((x) => x.id === h.id ? { ...x, key: e.target.value } : x) }))} />
-                  <Input placeholder="Value" value={h.value} onChange={(e) => setData((d) => ({ ...d, headers: d.headers.map((x) => x.id === h.id ? { ...x, value: e.target.value } : x) }))} />
-                  <button type="button" onClick={() => setData((d) => ({ ...d, headers: d.headers.filter((x) => x.id !== h.id) }))} className="rounded-md p-2 text-destructive hover:bg-destructive/10">
+                  <Input className="min-w-0 flex-1" placeholder="Header name" value={h.key} onChange={(e) => setData((d) => ({ ...d, headers: d.headers.map((x) => x.id === h.id ? { ...x, key: e.target.value } : x) }))} />
+                  <Input className="min-w-0 flex-1" placeholder="Value" value={h.value} onChange={(e) => setData((d) => ({ ...d, headers: d.headers.map((x) => x.id === h.id ? { ...x, value: e.target.value } : x) }))} />
+                  <button type="button" onClick={() => setData((d) => ({ ...d, headers: d.headers.filter((x) => x.id !== h.id) }))} className="shrink-0 rounded-md p-2 text-destructive hover:bg-destructive/10">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -659,9 +660,9 @@ function StepPlatform({
             <div className="space-y-2 p-3">
               {data.bodyProperties.map((b) => (
                 <div key={b.id} className="flex gap-2">
-                  <Input placeholder="Property name" value={b.key} onChange={(e) => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.map((x) => x.id === b.id ? { ...x, key: e.target.value } : x) }))} />
-                  <Input placeholder="Value or {{variable}}" value={b.value} onChange={(e) => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.map((x) => x.id === b.id ? { ...x, value: e.target.value } : x) }))} />
-                  <button type="button" onClick={() => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.filter((x) => x.id !== b.id) }))} className="rounded-md p-2 text-destructive hover:bg-destructive/10">
+                  <Input className="min-w-0 flex-1" placeholder="Property name" value={b.key} onChange={(e) => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.map((x) => x.id === b.id ? { ...x, key: e.target.value } : x) }))} />
+                  <Input className="min-w-0 flex-1" placeholder="Value or {{variable}}" value={b.value} onChange={(e) => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.map((x) => x.id === b.id ? { ...x, value: e.target.value } : x) }))} />
+                  <button type="button" onClick={() => setData((d) => ({ ...d, bodyProperties: d.bodyProperties.filter((x) => x.id !== b.id) }))} className="shrink-0 rounded-md p-2 text-destructive hover:bg-destructive/10">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -681,13 +682,13 @@ function StepReview({ data }: { data: ToolWizardData }) {
 
       <div className="space-y-3 rounded-lg border border-border bg-card p-4">
         <h4 className="font-semibold">General</h4>
-        <div className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
+        <div className="grid grid-cols-[100px_1fr] gap-y-2 text-sm sm:grid-cols-[140px_1fr]">
           <span className="text-muted-foreground">Name</span>
-          <span className="font-mono">{data.name}</span>
+          <span className="break-all font-mono">{data.name}</span>
           <span className="text-muted-foreground">Status</span>
           <span>{data.active ? "Active" : "Inactive"}</span>
           <span className="text-muted-foreground">Description</span>
-          <span>{data.description}</span>
+          <span className="min-w-0 break-words">{data.description}</span>
         </div>
       </div>
 
@@ -698,9 +699,9 @@ function StepReview({ data }: { data: ToolWizardData }) {
         ) : (
           <ul className="space-y-2 text-sm">
             {data.parameters.map((p) => (
-              <li key={p.id} className="flex items-center gap-2">
+              <li key={p.id} className="flex flex-wrap items-center gap-2">
                 <Badge variant="secondary">{p.type}</Badge>
-                <span className="font-mono">{p.name}</span>
+                <span className="break-all font-mono">{p.name}</span>
                 {p.required && <Badge variant="outline" className="text-destructive">required</Badge>}
                 <span className="text-muted-foreground">  {p.description}</span>
               </li>
@@ -711,9 +712,9 @@ function StepReview({ data }: { data: ToolWizardData }) {
 
       <div className="space-y-3 rounded-lg border border-border bg-card p-4">
         <h4 className="font-semibold">Platform</h4>
-        <div className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
+        <div className="grid grid-cols-[100px_1fr] gap-y-2 text-sm sm:grid-cols-[140px_1fr]">
           <span className="text-muted-foreground">Endpoint</span>
-          <span className="font-mono">
+          <span className="break-all font-mono">
             <Badge variant="secondary" className="mr-2">{data.method}</Badge>
             {data.apiUrl}
           </span>

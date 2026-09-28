@@ -55,13 +55,13 @@ const Referrals = () => {
       </div>
 
       <div className="flex max-w-xl gap-2">
-        <Input readOnly value={link} className="font-mono text-sm" />
+        <Input readOnly value={link} className="min-w-0 text-ellipsis font-mono text-sm" />
         <Button type="button" onClick={copyLink} className="gap-2">
           <Copy className="h-4 w-4" /> Copy
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-xl">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 max-w-xl">
         <div className="rounded-xl border border-border bg-card/40 p-5">
           <div className="flex items-center gap-2 text-muted-foreground text-sm"><Users2 className="h-4 w-4" /> Invited</div>
           <div className="mt-2 text-2xl font-bold text-foreground">{stats?.invited_count ?? 0}</div>
@@ -85,21 +85,21 @@ const Referrals = () => {
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-3">Referee</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Invited</th>
+                    <th className="px-3 py-3 sm:px-4">Referee</th>
+                    <th className="px-3 py-3 sm:px-4">Status</th>
+                    <th className="px-3 py-3 sm:px-4">Invited</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stats.referrals.map((r) => (
                     <tr key={r.id} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3 text-foreground">{r.referee_email}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-3 text-foreground sm:px-4">{r.referee_email}</td>
+                      <td className="px-3 py-3 sm:px-4">
                         <span className={r.status === "verified" ? "text-green-500 font-medium" : "text-muted-foreground"}>
                           {r.status === "verified" ? "Verified" : "Pending"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{new Date(r.created_at).toLocaleDateString()}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-muted-foreground sm:px-4">{new Date(r.created_at).toLocaleDateString()}</td>
                     </tr>
                   ))}
                 </tbody>

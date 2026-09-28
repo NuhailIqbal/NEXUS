@@ -183,7 +183,7 @@ const Contacts = () => {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground">All people across your lists.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <input
             ref={fileRef}
             type="file"
@@ -247,7 +247,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
               )}
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setShowImportInfo(false)}>Cancel</Button>
             <Button
               onClick={() => {
@@ -266,17 +266,17 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search…"
-          className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+          className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-base outline-none focus:ring-2 focus:ring-ring md:text-sm"
         />
       </div>
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
-              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3 max-lg:min-w-[11rem]">Name</th>
               <th className="px-4 py-3">Phone</th>
               <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">List</th>
+              <th className="px-4 py-3 max-lg:min-w-[12rem]">List</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Created</th>
               <th className="px-4 py-3 w-32">Actions</th>
@@ -294,7 +294,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
                     {c.status}
                   </Badge>
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">{c.createdAt}</td>
+                <td className="px-4 py-3 text-muted-foreground max-lg:whitespace-nowrap">{c.createdAt}</td>
                 <td className="px-4 py-3">
                   <RowActions
                     onView={() => setViewTarget(c)}
@@ -336,7 +336,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
             <DialogDescription>Contact details</DialogDescription>
           </DialogHeader>
           {viewTarget && (
-            <dl className="grid grid-cols-3 gap-3 text-sm">
+            <dl className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-3 sm:gap-3">
               <dt className="text-muted-foreground">Phone</dt>
               <dd className="col-span-2 font-medium">{viewTarget.phone || " "}</dd>
               <dt className="text-muted-foreground">Email</dt>
@@ -367,7 +367,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
               <Label>Name</Label>
               <Input value={editForm.name ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Phone</Label>
                 <Input value={editForm.phone ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))} />
@@ -377,7 +377,7 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
                 <Input value={editForm.email ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>List</Label>
                 <select

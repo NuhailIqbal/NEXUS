@@ -122,30 +122,30 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
         <DialogOverlay />
         <DialogPrimitive.Content
           className={cn(
-            "fixed left-[50%] top-[50%] z-50 grid w-full max-w-3xl translate-x-[-50%] translate-y-[-50%] gap-0 border border-border bg-background p-0 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:rounded-lg max-h-[90vh] overflow-hidden",
+            "fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-2rem)] max-w-3xl translate-x-[-50%] translate-y-[-50%] gap-0 border border-border bg-background p-0 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 rounded-lg max-h-[90vh] overflow-hidden",
           )}
         >
           <DialogPrimitive.Title className="sr-only">{STEPS[step]}</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">Create voice widget wizard</DialogPrimitive.Description>
 
-          <div className="flex items-start justify-between border-b border-border px-6 pt-5 pb-4">
-            <div className="flex-1">
+          <div className="flex items-start justify-between border-b border-border px-4 pt-4 pb-3 sm:px-6 sm:pt-5 sm:pb-4">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <Phone className="h-5 w-5" />
-                <h2 className="text-lg font-semibold">{STEPS[step]}</h2>
+                <Phone className="h-5 w-5 shrink-0" />
+                <h2 className="truncate text-base font-semibold sm:text-lg">{STEPS[step]}</h2>
               </div>
-              <div className="mt-3 flex gap-1.5">
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {STEPS.map((_, i) => (
-                  <div key={i} className={cn("h-1.5 w-12 rounded-full transition-colors", i <= step ? "bg-primary" : "bg-muted")} />
+                  <div key={i} className={cn("h-1.5 w-8 rounded-full transition-colors sm:w-12", i <= step ? "bg-primary" : "bg-muted")} />
                 ))}
               </div>
             </div>
-            <button onClick={() => handleClose(false)} className="rounded-sm opacity-70 hover:opacity-100">
+            <button onClick={() => handleClose(false)} className="shrink-0 rounded-sm opacity-70 hover:opacity-100">
               <X className="h-5 w-5" />
             </button>
           </div>
 
-          <div className="overflow-y-auto px-6 py-5" style={{ maxHeight: "60vh" }}>
+          <div className="overflow-y-auto px-4 py-4 sm:px-6 sm:py-5" style={{ maxHeight: "60vh" }}>
             {step === 0 && (
               <div className="space-y-4">
                 <div>
@@ -166,17 +166,17 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                           key={a.id}
                           onClick={() => setAgentId(a.id)}
                           className={cn(
-                            "flex w-full items-center justify-between rounded-lg border p-3 text-left transition-colors",
+                            "flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors",
                             active ? "border-primary bg-primary/5" : "border-border hover:border-primary/40",
                           )}
                         >
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                               <Phone className="h-5 w-5 text-primary" />
                             </div>
-                            <span className="font-medium">{a.name}</span>
+                            <span className="min-w-0 break-words font-medium">{a.name}</span>
                           </div>
-                          {active && <CheckCircle2 className="h-5 w-5 text-primary" />}
+                          {active && <CheckCircle2 className="h-5 w-5 shrink-0 text-primary" />}
                         </button>
                       );
                     })}
@@ -197,14 +197,14 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
 
                 <div className="grid grid-cols-3 rounded-lg border border-border bg-muted/30 p-1">
                   {(["basic", "appearance", "behavior"] as const).map((t) => (
-                    <button key={t} onClick={() => setTab(t)} className={cn("rounded-md py-2 text-sm font-medium transition-colors capitalize", tab === t ? "bg-background shadow-sm" : "text-muted-foreground")}>
+                    <button key={t} onClick={() => setTab(t)} className={cn("rounded-md px-1 py-1.5 text-[11px] leading-tight transition-colors capitalize sm:py-2 sm:text-sm font-medium", tab === t ? "bg-background shadow-sm" : "text-muted-foreground")}>
                       {t === "basic" ? "Basic Settings" : t}
                     </button>
                   ))}
                 </div>
 
                 {tab === "basic" && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <Label>Widget Name <span className="text-destructive">*</span></Label>
                       <Input className="mt-1.5" placeholder="e.g., Main Website Calls" value={widgetName} onChange={(e) => setWidgetName(e.target.value)} />
@@ -228,14 +228,14 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                       <Label>Max Calls</Label>
                       <Input className="mt-1.5" type="number" value={maxCalls} onChange={(e) => setMaxCalls(Number(e.target.value))} />
                     </div>
-                    <div className="col-span-2 flex items-center justify-between border-t border-border pt-3">
+                    <div className="flex items-center justify-between gap-3 border-t border-border pt-3 sm:col-span-2">
                       <div>
                         <p className="font-medium text-sm">Record Calls</p>
                         <p className="text-xs text-muted-foreground">Record calls for quality assurance</p>
                       </div>
                       <Switch checked={recordCalls} onCheckedChange={setRecordCalls} />
                     </div>
-                    <div className="col-span-2 flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-3 sm:col-span-2">
                       <div>
                         <p className="font-medium text-sm">Show Live Transcription</p>
                         <p className="text-xs text-muted-foreground">Display real-time call transcription</p>
@@ -246,7 +246,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                 )}
 
                 {tab === "appearance" && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <Label>Position</Label>
                       <select className="mt-1.5 flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={position} onChange={(e) => setPosition(e.target.value)}>
@@ -265,7 +265,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
 
                 {tab === "behavior" && (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between border border-border rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-3 border border-border rounded-lg p-3">
                       <div>
                         <p className="font-medium text-sm">Auto Open</p>
                         <p className="text-xs text-muted-foreground">Open the widget automatically on page load</p>
@@ -285,7 +285,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                 </div>
                 <div>
                   <p className="text-sm font-semibold mb-2">Live Preview</p>
-                  <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-10">
+                  <div className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 sm:p-10">
                     <div className="flex flex-col items-center justify-center min-h-[200px]">
                       <Globe className="h-10 w-10 text-primary/60" />
                       <p className="mt-2 text-sm text-muted-foreground">Your website preview</p>
@@ -297,7 +297,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                 </div>
                 <div className="rounded-lg border border-border p-4">
                   <p className="text-sm font-semibold mb-3">Test Configuration</p>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                     <div><span className="text-muted-foreground">Agent:</span> <span className="font-medium">{selectedAgent?.name}</span></div>
                     <div><span className="text-muted-foreground">Call Type:</span> <span className="font-medium">{callType}</span></div>
                     <div><span className="text-muted-foreground">Position:</span> <span className="font-medium">{position}</span></div>
@@ -318,16 +318,16 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
                   <p className="mt-1 text-sm text-muted-foreground">Review and create your voice widget.</p>
                 </div>
                 <div className="mx-auto max-w-md rounded-lg border border-border p-4 text-left text-sm space-y-2">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Widget Name</span><span className="font-medium">{widgetName}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Agent</span><span className="font-medium">{selectedAgent?.name}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Position</span><span className="font-medium">{position}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span className="font-medium">{status}</span></div>
+                  <div className="flex flex-wrap justify-between gap-x-2 gap-y-1"><span className="text-muted-foreground">Widget Name</span><span className="break-all font-medium">{widgetName}</span></div>
+                  <div className="flex flex-wrap justify-between gap-x-2 gap-y-1"><span className="text-muted-foreground">Agent</span><span className="break-all font-medium">{selectedAgent?.name}</span></div>
+                  <div className="flex flex-wrap justify-between gap-x-2 gap-y-1"><span className="text-muted-foreground">Position</span><span className="font-medium">{position}</span></div>
+                  <div className="flex flex-wrap justify-between gap-x-2 gap-y-1"><span className="text-muted-foreground">Status</span><span className="font-medium">{status}</span></div>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-border px-6 py-4">
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 sm:px-6 sm:py-4">
             {step === 0 ? (
               <Button variant="outline" onClick={() => handleClose(false)}>Cancel</Button>
             ) : (

@@ -1,7 +1,7 @@
 import { LifeBuoy, MessageSquare, Mail } from "lucide-react";
 const faqs = [
-  { q: "How do I create my first AI agent?", a: "Go to AI Agents and click + Create Agent. Pick a voice, language, and category, write a system prompt and first message, then save — your agent syncs to Vapi automatically and is ready to take or make calls." },
-  { q: "How do I get a phone number?", a: "Go to Outbound > Phone Numbers and click Buy a Number. Choose an area code, complete checkout, and the number is provisioned to your account and ready to assign to an agent for inbound or outbound calling." },
+  { q: "How do I create my first AI agent?", a: "Go to AI Agents and click Add New Agent. The guided setup walks you through the agent's name, goal, industry, language and voice, its knowledge, and its system prompt and greeting, then lets you test it with a live voice call in your browser before you save." },
+  { q: "How do I get a phone number?", a: "Go to Phone Numbers and click Buy Number. Choose whether it's for inbound, outbound or both, optionally assign an agent, and confirm. A US local number is provisioned to your account for $3/month, paid from your balance or by card if your balance is too low." },
   { q: "How does billing work?", a: "Nexus is pay-as-you-go — no subscription. Calls are billed per minute at the rate shown on your Billing page, deducted from your credit balance. Add funds manually or turn on auto recharge so you're never interrupted mid-campaign." },
   { q: "How do I import my contacts?", a: "Go to Database > Contacts and click Import CSV, or add contacts one by one. Organize them into Lists so you can target a specific group when launching an outbound campaign." },
   { q: "How do outbound campaigns work?", a: "Under Outbound > Campaigns, create a campaign by picking an agent, a contact list, and a phone number to call from. Start, pause, or resume it anytime, and track qualified leads and completed calls as it runs." },

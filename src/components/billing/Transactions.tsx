@@ -126,9 +126,9 @@ const Transactions = () => {
                     <button
                       type="button"
                       onClick={() => toggleTxnSort(key)}
-                      className="flex w-full items-center justify-between gap-1 hover:text-foreground"
+                      className="flex w-full items-center justify-between gap-2 hover:text-foreground lg:gap-1"
                     >
-                      <span>{label}</span>
+                      <span className="whitespace-nowrap lg:whitespace-normal">{label}</span>
                       {txnSortKey === key ? (
                         txnSortDir === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />
                       ) : (
@@ -191,7 +191,7 @@ const Transactions = () => {
                     </th>
                   ) : (
                     <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <div className="relative">
+                      <div className={`relative lg:min-w-0 ${key === "description" ? "min-w-[14rem]" : "min-w-[7.5rem]"}`}>
                         <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           value={txnFilters[key]}
@@ -224,7 +224,7 @@ const Transactions = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <Badge variant="outline">{TXN_LABELS[t.kind] || t.kind}</Badge>
+                        <Badge variant="outline" className="whitespace-nowrap">{TXN_LABELS[t.kind] || t.kind}</Badge>
                       </td>
                       <td className="px-4 py-3 text-center text-muted-foreground">{t.description || "—"}</td>
                       <td className={`px-4 py-3 text-center font-medium ${credit ? "text-green-500" : "text-destructive"}`}>

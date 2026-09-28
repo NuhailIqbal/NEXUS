@@ -19,20 +19,20 @@ const BillingLayout = () => (
       </p>
     </div>
 
-    <div className="flex items-center gap-6 border-b border-border">
+    <div className="flex items-center gap-4 overflow-x-auto shadow-[inset_0_-1px_0_0_hsl(var(--border))] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-sm:pr-6 max-sm:[mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)] sm:gap-6">
       {TABS.map((t) => (
         <NavLink
           key={t.to}
           to={t.to}
           end={t.end}
           className={({ isActive }) =>
-            `relative py-3 text-sm font-medium ${isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`
+            `relative shrink-0 whitespace-nowrap py-3 text-sm font-medium ${isActive ? "text-foreground [scroll-initial-target:nearest]" : "text-muted-foreground hover:text-foreground"}`
           }
         >
           {({ isActive }) => (
             <>
               {t.label}
-              {isActive && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
+              {isActive && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" />}
             </>
           )}
         </NavLink>

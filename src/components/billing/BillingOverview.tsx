@@ -73,7 +73,7 @@ const BillingOverview = () => {
     <div className="space-y-6">
       {/* Pay as you go — hero balance card */}
       <div className="overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/10 via-background to-background p-6 sm:p-8">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <div className="flex items-center gap-2">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15">
@@ -81,7 +81,7 @@ const BillingOverview = () => {
               </div>
               <span className="text-sm font-medium text-muted-foreground">Pay as you go · Credit balance</span>
             </div>
-            <div className="mt-3 text-5xl font-bold tracking-tight text-foreground">
+            <div className="mt-3 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
               ${(billing?.balance ?? 0).toFixed(2)}
             </div>
             <div className="mt-2 text-sm text-muted-foreground">
@@ -93,11 +93,11 @@ const BillingOverview = () => {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap gap-2 sm:shrink-0">
-            <Button onClick={() => setShowTopup(true)}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:shrink-0">
+            <Button className="w-full sm:w-auto" onClick={() => setShowTopup(true)}>
               <Plus className="mr-2 h-4 w-4" /> Add to credit balance
             </Button>
-            <Button variant="outline" onClick={() => setShowAutoRecharge(true)}>
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setShowAutoRecharge(true)}>
               <RefreshCw className="mr-2 h-4 w-4" /> Auto recharge settings
             </Button>
           </div>

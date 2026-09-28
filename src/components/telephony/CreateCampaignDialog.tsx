@@ -142,16 +142,16 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
           {!loading && step === 2 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border bg-card px-6 py-4">
-          <Button variant="outline" onClick={back} disabled={step === 0}>
+        <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <Button variant="outline" onClick={back} disabled={step === 0} className="w-full sm:w-auto">
             <ChevronLeft className="mr-1 h-4 w-4" /> Previous
           </Button>
           {step < STEPS.length - 1 ? (
-            <Button onClick={next} className="bg-primary text-primary-foreground hover:opacity-90">
+            <Button onClick={next} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
               Next <ChevronRight className="ml-1 h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={launch} className="bg-primary text-primary-foreground hover:opacity-90">
+            <Button onClick={launch} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
               <Rocket className="mr-1.5 h-4 w-4" /> Launch Campaign
             </Button>
           )}

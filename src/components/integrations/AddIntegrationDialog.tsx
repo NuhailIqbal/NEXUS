@@ -112,7 +112,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
                 <div className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold ${done || active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                   {done ? <Check className="h-4 w-4" /> : n}
                 </div>
-                {i < 2 && <div className={`mx-1 h-1 w-24 rounded ${step > n ? "bg-primary" : "bg-muted"}`} />}
+                {i < 2 && <div className={`mx-1 h-1 w-10 rounded sm:w-24 ${step > n ? "bg-primary" : "bg-muted"}`} />}
               </div>
             );
           })}
@@ -214,7 +214,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-border p-4">
+        <div className="flex flex-col-reverse gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           {step === 3 ? (
             <Button className="ml-auto bg-primary text-primary-foreground" onClick={() => close(false)}>Done</Button>
           ) : (

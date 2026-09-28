@@ -203,7 +203,7 @@ const Tools = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tools</h1>
           <p className="text-sm text-muted-foreground">Custom API actions your agents can call during live calls.</p>
@@ -222,8 +222,8 @@ const Tools = () => {
           No tools yet. Click "Add Tool" to create one.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Name</th>
@@ -267,28 +267,28 @@ const Tools = () => {
                     <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => openTest(t)}
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+                        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-primary sm:p-1.5"
                         title="Test tool"
                       >
                         <PlayCircle className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => openSettings(t)}
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:p-1.5"
                         title="Settings"
                       >
                         <SettingsIcon className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => { setEditing(t); setOpen(true); }}
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:p-1.5"
                         title="Edit in wizard"
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => handleDelete(t)}
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-destructive sm:p-1.5"
                         title="Delete"
                       >
                         <Trash2 className="h-4 w-4" />

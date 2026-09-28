@@ -41,7 +41,7 @@ export function AddFundsDialog({ open, onOpenChange, defaultAmount = 50 }: Props
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {TOPUP_PRESETS.map((amt) => (
               <Button
                 key={amt}
@@ -67,7 +67,7 @@ export function AddFundsDialog({ open, onOpenChange, defaultAmount = 50 }: Props
             </p>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={pay} disabled={submitting || amount < TOPUP_MIN}>
             {submitting ? (

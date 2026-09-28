@@ -134,7 +134,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-border p-4">
+        <div className="flex flex-col-reverse gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           {step === 1 ? <span /> : (
             <Button variant="outline" onClick={() => setStep(1)}>
               <ChevronLeft className="mr-1 h-4 w-4" /> Previous

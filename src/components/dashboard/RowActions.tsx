@@ -18,7 +18,7 @@ export function RowActions({ onTest, onSettings, onView, onDelete, extra }: Prop
           onClick={onView}
           title="View"
           aria-label="View"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex h-9 w-9 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:h-auto sm:w-auto sm:p-1.5"
         >
           <Eye className="h-4 w-4" />
         </button>
@@ -28,7 +28,7 @@ export function RowActions({ onTest, onSettings, onView, onDelete, extra }: Prop
           onClick={onTest}
           title="Test"
           aria-label="Test"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+          className="flex h-9 w-9 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-muted hover:text-primary sm:h-auto sm:w-auto sm:p-1.5"
         >
           <PlayCircle className="h-4 w-4" />
         </button>
@@ -38,7 +38,7 @@ export function RowActions({ onTest, onSettings, onView, onDelete, extra }: Prop
           onClick={onSettings}
           title="Settings"
           aria-label="Settings"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex h-9 w-9 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-muted hover:text-foreground sm:h-auto sm:w-auto sm:p-1.5"
         >
           <SettingsIcon className="h-4 w-4" />
         </button>
@@ -48,7 +48,7 @@ export function RowActions({ onTest, onSettings, onView, onDelete, extra }: Prop
           onClick={onDelete}
           title="Delete"
           aria-label="Delete"
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+          className="flex h-9 w-9 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-muted hover:text-destructive sm:h-auto sm:w-auto sm:p-1.5"
         >
           <Trash2 className="h-4 w-4" />
         </button>
