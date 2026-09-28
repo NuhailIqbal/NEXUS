@@ -1,4 +1,3 @@
-import Navbar from "@/components/Navbar";
 import HeroSection from "@/components/HeroSection";
 import PlatformModules from "@/components/PlatformModules";
 import AIWorkforce from "@/components/AIWorkforce";
@@ -6,11 +5,10 @@ import DeploymentTimeline from "@/components/DeploymentTimeline";
 import LiveOpsCenter from "@/components/LiveOpsCenter";
 import PerformanceStats from "@/components/PerformanceStats";
 import Comparison from "@/components/Comparison";
-import Footer from "@/components/Footer";
+import { MarketingPage } from "@/components/marketing/MarketingPrimitives";
 
 const Index = () => (
-  <div className="min-h-screen bg-background">
-    <Navbar />
+  <MarketingPage>
     <HeroSection />
     <PlatformModules />
     <AIWorkforce />
@@ -18,8 +16,7 @@ const Index = () => (
     <LiveOpsCenter />
     <PerformanceStats />
     <Comparison />
-    <Footer />
-  </div>
+  </MarketingPage>
 );
 
 export default Index;

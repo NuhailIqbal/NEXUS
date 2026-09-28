@@ -8,7 +8,7 @@ const rotatingWords = [
   "Outbound Campaigns",
   "Inbound Reception",
   "Lead Qualification",
-  "Appointment Booking",
+  "After-Hours Answering",
   "Follow-Up Calls",
 ];
 

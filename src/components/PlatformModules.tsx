@@ -1,4 +1,5 @@
-import { Bot, PhoneOutgoing, PhoneIncoming, FileAudio, Users, CreditCard } from "lucide-react";
+import { Bot, PhoneOutgoing, PhoneIncoming, FileAudio, Workflow, CreditCard } from "lucide-react";
+import { VOICE_COUNT, CAMPAIGN_BATCH_SIZE, TYPICAL_RATE_PER_MINUTE } from "@/lib/marketing-facts";
 
 // Each module below is a real section of the dashboard — the feature chips and the
 // stat are things the platform actually does today, not aspirational copy.
@@ -8,20 +9,20 @@ const modules = [
     tag: "Build in minutes",
     title: "AI Voice Agents",
     description:
-      "A guided setup walks you through the agent's goal, industry, voice and knowledge, then lets you test it before it ever dials out.",
-    features: ["Knowledge upload", "Custom system prompt", "Voice selection", "Test before launch"],
-    stat: "13",
-    statLabel: "built-in voices",
+      "A guided setup walks you through the agent's goal, industry, voice and knowledge, then lets you talk to it in your browser before it ever dials out.",
+    features: ["Website auto-fill", "Prompt studio", "English & Urdu", "Live test call"],
+    stat: String(VOICE_COUNT),
+    statLabel: "production voices",
   },
   {
     icon: PhoneOutgoing,
     tag: "Dial at scale",
     title: "Outbound Campaigns",
     description:
-      "Point an agent at a contact list and launch. Calls are placed in batches and every attempt is logged with its outcome.",
-    features: ["CSV contact import", "List targeting", "Campaign analytics", "Full call logs"],
-    stat: "CSV",
-    statLabel: "list import",
+      "Import a contact list from CSV, point an agent at it and launch. Calls go out in concurrent batches, with optional do-not-call screening.",
+    features: ["CSV contact import", "DNC screening", "Campaign analytics", "Full call logs"],
+    stat: String(CAMPAIGN_BATCH_SIZE),
+    statLabel: "calls at a time",
   },
   {
     icon: PhoneIncoming,
@@ -44,14 +45,14 @@ const modules = [
     statLabel: "call recorded",
   },
   {
-    icon: Users,
-    tag: "Your data",
-    title: "Contacts & Lists",
+    icon: Workflow,
+    tag: "Hands-free follow-up",
+    title: "Post-Call Automation",
     description:
-      "Import your contacts from CSV, group them into lists for targeting, and add your own fields to track whatever matters to you.",
-    features: ["CSV import", "Lists & segments", "Custom fields", "Consent tracking"],
-    stat: "Custom",
-    statLabel: "fields per contact",
+      "Drag-and-drop flows that run the moment a call ends: text the caller, have an agent call back, update the contact, or post to a webhook.",
+    features: ["SMS follow-up", "Call-back action", "Webhooks", "Version history"],
+    stat: "0",
+    statLabel: "code required",
   },
   {
     icon: CreditCard,
@@ -60,7 +61,7 @@ const modules = [
     description:
       "Provision a phone number, top up a balance, and see the exact cost of every single call. No plans, no monthly commitment.",
     features: ["Phone numbers", "Wallet balance", "Auto recharge", "Per-call costs"],
-    stat: "~$0.35",
+    stat: `~${TYPICAL_RATE_PER_MINUTE}`,
     statLabel: "per minute",
   },
 ];

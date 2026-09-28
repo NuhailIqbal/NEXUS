@@ -1,10 +1,11 @@
 import { Mic, Languages, Clock, FileAudio } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { VOICE_COUNT, LANGUAGE_OPTIONS } from "@/lib/marketing-facts";
 
 const stats = [
-  { label: "Built-in voices", value: "13", icon: Mic },
-  { label: "Languages", value: "5", icon: Languages },
+  { label: "Production voices", value: String(VOICE_COUNT), icon: Mic },
+  { label: "Language modes", value: String(LANGUAGE_OPTIONS.length), icon: Languages },
   { label: "Always answering", value: "24/7", icon: Clock },
   { label: "Call recorded", value: "Every", icon: FileAudio },
 ];
@@ -25,9 +26,15 @@ const voices = [
   { name: "Sagar", accent: "Indian American", note: "Steady, professional" },
   { name: "Neil", accent: "Indian American", note: "Clear, professional" },
   { name: "Naina", accent: "Indian American", note: "Calm, collected" },
+  { name: "Zara", accent: "Pakistani (Urdu)", note: "Warm, professional" },
+  { name: "Ali", accent: "Pakistani (Urdu)", note: "Steady, professional" },
 ];
 
-const languages = ["🇺🇸 English (US)", "🇬🇧 English (UK)", "🇪🇸 Spanish", "🇫🇷 French", "🇩🇪 German", "🇮🇹 Italian"];
+const languages = [
+  { name: "English", note: "Every voice, every accent" },
+  { name: "Urdu", note: "Replies in Roman Urdu" },
+  { name: "Multilingual", note: "Detects the caller's language and answers in kind" },
+];
 
 const included = [
   "Call recording on every call",
@@ -37,7 +44,7 @@ const included = [
 ];
 
 const AIWorkforce = () => (
-  <section id="technology" className="py-24 relative">
+  <section id="technology" className="py-24 relative overflow-hidden">
     <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full bg-primary/3 blur-[150px] pointer-events-none" />
     <div className="container mx-auto px-4 relative z-10">
       <div className="text-center mb-16">
@@ -46,8 +53,9 @@ const AIWorkforce = () => (
           Pick a voice that <span className="text-gradient">sounds human</span>
         </h2>
         <p className="text-muted-foreground mt-4 max-w-2xl mx-auto">
-          Thirteen production voices across American, Canadian and Indian-American accents. Preview
-          any of them in the dashboard before you assign one to an agent.
+          {VOICE_COUNT} production voices across American, Canadian, Indian-American and Asian-American
+          English, plus Pakistani Urdu. Preview any of them in the dashboard before you assign one to
+          an agent.
         </p>
       </div>
 
@@ -64,7 +72,7 @@ const AIWorkforce = () => (
 
       <div className="grid lg:grid-cols-2 gap-6 mb-12">
         {/* Real voice roster */}
-        <div className="surface-card p-6">
+        <div className="surface-card p-6 min-w-0">
           <h3 className="text-lg font-bold mb-4 text-foreground">Voice roster</h3>
           <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
             {voices.map((v) => (
@@ -83,13 +91,14 @@ const AIWorkforce = () => (
         </div>
 
         <div className="flex flex-col gap-6">
-          <div className="surface-card p-6">
+          <div className="surface-card p-6 min-w-0">
             <h3 className="text-lg font-bold mb-4 text-foreground">Languages</h3>
-            <div className="flex flex-wrap gap-2">
+            <div className="space-y-2">
               {languages.map((lang) => (
-                <span key={lang} className="px-3 py-1.5 rounded-full bg-secondary text-xs font-medium text-secondary-foreground">
-                  {lang}
-                </span>
+                <div key={lang.name} className="flex items-center justify-between gap-3 rounded-lg bg-secondary/50 px-3 py-2.5">
+                  <span className="text-sm font-semibold text-foreground">{lang.name}</span>
+                  <span className="text-xs text-muted-foreground text-right">{lang.note}</span>
+                </div>
               ))}
             </div>
             <p className="mt-4 text-xs text-muted-foreground">

@@ -3,18 +3,17 @@ import { Link } from "react-router-dom";
 import Logo from "@/components/Logo";
 
 const platformLinks: { label: string; to: string }[] = [
-  { label: "AI Voice Agents", to: "/features" },
-  { label: "Outbound Campaigns", to: "/use-cases" },
-  { label: "AI Receptionist", to: "/use-cases" },
-  { label: "Recordings & Transcripts", to: "/features" },
-  { label: "Technology", to: "/technology" },
-  { label: "Live Call Transfer", to: "/features" },
+  { label: "Agent Builder", to: "/features#build" },
+  { label: "Campaigns & Receptionist", to: "/features#call" },
+  { label: "Recordings & Transcripts", to: "/features#review" },
+  { label: "Post-Call Automation", to: "/features#automate" },
+  { label: "How It Works", to: "/technology" },
+  { label: "Pricing", to: "/pricing" },
 ];
 
 const companyLinks: { label: string; to: string }[] = [
   { label: "About", to: "/about" },
-  { label: "Pricing", to: "/pricing" },
-  { label: "Contact", to: "/request-access" },
+  { label: "Use Cases", to: "/use-cases" },
   { label: "For Agencies", to: "/advertisers" },
   { label: "For Inbound Teams", to: "/publishers" },
 ];
@@ -63,8 +62,8 @@ const Footer = () => (
         <div>
           <h4 className="text-sm font-bold text-foreground mb-4">Contact</h4>
           <div className="space-y-3">
-            <a href="mailto:info@edmnexus.ai" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              <Mail size={14} className="text-primary" /> info@edmnexus.ai
+            <a href="mailto:edmnexusai@gmail.com" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <Mail size={14} className="text-primary" /> edmnexusai@gmail.com
             </a>
           </div>
         </div>

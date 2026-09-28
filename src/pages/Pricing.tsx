@@ -1,54 +1,126 @@
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
-import { Button } from "@/components/ui/button";
-import { Check, ArrowRight, Gift } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Check, Gift, Phone, Wallet, RefreshCw, Ticket, X } from "lucide-react";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import {
+  MarketingPage,
+  PageHero,
+  Section,
+  CtaBanner,
+  PrimaryCta,
+} from "@/components/marketing/MarketingPrimitives";
+import {
+  VOICE_COUNT,
+  LANGUAGE_OPTIONS,
+  TYPICAL_RATE_PER_MINUTE,
+  PHONE_NUMBER_MONTHLY,
+  SIGNUP_CREDIT,
+  SIGNUP_CREDIT_EXPIRY_DAYS,
+  TOP_UP_MIN,
+  TOP_UP_MAX,
+} from "@/lib/marketing-facts";
 
 const included = [
   "Unlimited AI agents",
-  "13 production voices, 5 languages",
-  "Outbound campaigns with CSV import",
+  `${VOICE_COUNT} production voices, English, Urdu & multilingual`,
+  "Outbound campaigns with CSV import and DNC screening",
   "24/7 AI receptionist for inbound calls",
-  "Call recording, transcripts, and AI summaries on every call",
-  "Live transfer to a human",
-  "Contacts, lists, and custom fields",
-  "Itemized cost on every single call",
+  "Recording, transcript and AI summary on every call",
+  "Live transfer to your team",
+  "Post-call automation: SMS, call-backs, webhooks",
+  "Analytics, team roles and unlimited teammates",
+];
+
+const extras = [
+  {
+    icon: Phone,
+    title: "Phone numbers",
+    value: `${PHONE_NUMBER_MONTHLY}/mo`,
+    desc: "Per US local number, renewed monthly from your balance.",
+  },
+  {
+    icon: Wallet,
+    title: "Add funds",
+    value: `${TOP_UP_MIN}–${TOP_UP_MAX}`,
+    desc: "Top up by card whenever you like, straight from the dashboard.",
+  },
+  {
+    icon: RefreshCw,
+    title: "Auto recharge",
+    value: "Optional",
+    desc: "Pick a threshold and amount, and a saved card tops you up automatically.",
+  },
+  {
+    icon: Ticket,
+    title: "Promo codes",
+    value: "Redeemable",
+    desc: "Have a code? Redeem it from the Billing page for extra credit.",
+  },
+];
+
+const neverPay = ["Monthly subscription", "Per-seat licenses", "Setup or onboarding fees", "Agents sitting idle", "Annual contracts"];
+
+const example = [
+  { label: "Call duration", value: "2 min 30 sec" },
+  { label: "Typical rate", value: `~${TYPICAL_RATE_PER_MINUTE} / min` },
+  { label: "Charged to balance", value: "~$0.88", strong: true },
+];
+
+const faqs = [
+  {
+    q: "How is the per-minute cost worked out?",
+    a: `Each call is charged at its actual cost: the voice AI and phone carrier cost of that specific call, times a flat platform rate. For most calls this comes to about ${TYPICAL_RATE_PER_MINUTE} a minute. The exact charge for every call is itemized on your Billing page under Call Costs.`,
+  },
+  {
+    q: "What do I get when I sign up?",
+    a: `Every new account gets ${SIGNUP_CREDIT} of free credit as soon as you verify your email address. It's valid for ${SIGNUP_CREDIT_EXPIRY_DAYS} days and it's spent before any funds you add yourself. No card is needed to sign up.`,
+  },
+  {
+    q: "Do I pay anything when my agents aren't on a call?",
+    a: `No. Agents, teammates, analytics and automations cost nothing on their own. The only recurring charge is ${PHONE_NUMBER_MONTHLY} per month for each phone number you keep.`,
+  },
+  {
+    q: "What happens if my balance runs out?",
+    a: "You'll get alerts as your balance drops to $10, $5 and $1. At $0, new outbound calls can't start, and your inbound numbers play a short 'temporarily unavailable' message instead of the agent. Everything restores automatically as soon as you top up, and auto recharge prevents it from happening at all.",
+  },
+  {
+    q: "How are phone numbers billed?",
+    a: `Each number costs ${PHONE_NUMBER_MONTHLY} a month. The first month is taken from your balance, or through card checkout if your balance is too low, and it renews monthly from your balance after that. Release a number any time to stop paying for it.`,
+  },
+  {
+    q: "Is there a discount for high volume?",
+    a: "Yes, we can set a custom rate for accounts running a lot of calls. Get in touch and tell us about your volume.",
+  },
 ];
 
 const Pricing = () => (
-  <div className="min-h-screen bg-background">
-    <Navbar />
-    <section className="relative pt-32 pb-20 overflow-hidden">
-      <div className="absolute inset-0 grid-pattern opacity-20 pointer-events-none" />
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-primary/5 blur-[150px] pointer-events-none" />
+  <MarketingPage>
+    <PageHero
+      eyebrow="PRICING"
+      title="One rate."
+      highlight="No plans to pick."
+      description="Every feature is available to every account from day one. You top up a balance and only pay for the minutes your agents actually spend on calls."
+    />
 
-      <div className="container mx-auto px-4 relative z-10">
-        <div className="text-center mb-16">
-          <div className="badge-pill mx-auto mb-6 animate-slide-up">
-            <span className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-            PRICING
-          </div>
-          <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            One rate. <span className="text-gradient">No plans to pick.</span>
-          </h1>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            Every feature is available to every account from day one. You only pay for the minutes
-            your agents are actually on a call.
-          </p>
-        </div>
-
-        <div className="max-w-lg mx-auto animate-slide-up" style={{ animationDelay: "0.3s" }}>
-          <div className="glow-border rounded-2xl p-8 bg-card">
-            <div className="text-center mb-6">
-              <div className="text-5xl font-black text-gradient mb-2">~$0.35</div>
-              <p className="text-sm text-muted-foreground">per minute, billed at the call's actual cost</p>
+    <section className="pb-8">
+      <div className="container mx-auto px-4">
+        <div className="grid lg:grid-cols-5 gap-6 max-w-6xl mx-auto">
+          {/* Main rate card */}
+          <div className="lg:col-span-3 glow-border rounded-2xl p-6 md:p-8 bg-card">
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.2em] text-primary mb-2">Pay as you go</div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-5xl md:text-6xl font-black text-gradient">~{TYPICAL_RATE_PER_MINUTE}</span>
+                  <span className="text-muted-foreground">/ minute</span>
+                </div>
+                <p className="text-sm text-muted-foreground mt-2">Billed at each call's actual cost. Connected minutes only.</p>
+              </div>
             </div>
 
-            <div className="flex items-center justify-center gap-2 mb-6 px-4 py-2 rounded-lg bg-primary/10 text-sm text-primary">
-              <Gift size={16} /> New accounts start with $20 in free credit
+            <div className="flex items-center gap-2 mb-6 px-4 py-2.5 rounded-lg bg-primary/10 text-sm text-primary">
+              <Gift size={16} className="shrink-0" /> {SIGNUP_CREDIT} free credit when you verify your email
             </div>
 
-            <ul className="space-y-3 mb-8">
+            <ul className="grid sm:grid-cols-2 gap-x-6 gap-y-3 mb-8">
               {included.map((f) => (
                 <li key={f} className="flex items-start gap-2 text-sm text-muted-foreground">
                   <Check size={16} className="text-primary mt-0.5 shrink-0" />
@@ -57,29 +129,94 @@ const Pricing = () => (
               ))}
             </ul>
 
-            <Link to="/register">
-              <Button className="w-full gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-                Start with $20 free credit <ArrowRight size={16} />
-              </Button>
-            </Link>
-
-            <p className="text-xs text-muted-foreground text-center mt-4">
-              Phone numbers are $3/month each, charged from the same balance. No card required to
-              sign up.
-            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <PrimaryCta />
+              <span className="text-xs text-muted-foreground">No card required to sign up.</span>
+            </div>
           </div>
-        </div>
 
-        <div className="text-center mt-12 animate-slide-up" style={{ animationDelay: "0.4s" }}>
-          <p className="text-sm text-muted-foreground">
-            Running a high volume of calls?{" "}
-            <Link to="/request-access" className="text-primary hover:underline">Contact us</Link> about a custom rate.
-          </p>
+          {/* Extras */}
+          <div className="lg:col-span-2 grid sm:grid-cols-2 lg:grid-cols-1 gap-4">
+            {extras.map((e) => (
+              <div key={e.title} className="surface-card p-5 flex items-start gap-4">
+                <div className="w-10 h-10 shrink-0 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+                  <e.icon size={18} className="text-primary" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="font-semibold text-foreground">{e.title}</span>
+                    <span className="text-sm font-bold text-primary">{e.value}</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">{e.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </section>
-    <Footer />
-  </div>
+
+    <Section eyebrow="No surprises" title="What a call" highlight="actually costs">
+      <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <div className="surface-card p-6">
+          <h3 className="font-bold text-foreground mb-1">Worked example</h3>
+          <p className="text-xs text-muted-foreground mb-4">A typical two-and-a-half minute call.</p>
+          <div className="space-y-2">
+            {example.map((row) => (
+              <div
+                key={row.label}
+                className={`flex items-center justify-between rounded-lg px-3 py-2.5 text-sm ${
+                  row.strong ? "bg-primary/10 font-semibold text-foreground" : "bg-secondary/50 text-muted-foreground"
+                }`}
+              >
+                <span>{row.label}</span>
+                <span className={row.strong ? "text-primary" : "text-foreground"}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-4">
+            The exact figure varies slightly per call, and you can see every charge in Call Costs.
+          </p>
+        </div>
+
+        <div className="surface-card p-6">
+          <h3 className="font-bold text-foreground mb-4">What you'll never pay for</h3>
+          <ul className="space-y-3">
+            {neverPay.map((n) => (
+              <li key={n} className="flex items-center gap-3 text-sm text-foreground">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-secondary">
+                  <X size={13} className="text-muted-foreground" />
+                </span>
+                {n}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground mt-5 pt-4 border-t border-border">
+            Supports {LANGUAGE_OPTIONS.length} language modes at the same rate. No premium surcharge for Urdu or multilingual agents.
+          </p>
+        </div>
+      </div>
+    </Section>
+
+    <Section eyebrow="FAQ" title="Billing" highlight="questions" className="bg-secondary/20">
+      <div className="max-w-3xl mx-auto">
+        <Accordion type="single" collapsible className="space-y-3">
+          {faqs.map((f, i) => (
+            <AccordionItem key={f.q} value={`faq-${i}`} className="rounded-xl border border-border bg-card px-5">
+              <AccordionTrigger className="text-left text-sm md:text-base font-semibold hover:no-underline">{f.q}</AccordionTrigger>
+              <AccordionContent className="text-sm text-muted-foreground leading-relaxed">{f.a}</AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
+        <p className="text-sm text-muted-foreground text-center mt-8">
+          Running a high volume of calls?{" "}
+          <a href="mailto:edmnexusai@gmail.com" className="text-primary hover:underline">Email us</a> about a custom rate.
+        </p>
+      </div>
+    </Section>
+
+    <CtaBanner />
+  </MarketingPage>
 );
 
 export default Pricing;

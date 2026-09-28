@@ -30,14 +30,14 @@ const useCases = [
   {
     icon: Headphones,
     title: "Support triage",
-    desc: "Answer the questions that come up constantly using an uploaded knowledge base, and pass anything unusual to a human.",
-    tag: "Inbound agent + knowledge upload",
+    desc: "Answer the questions that come up constantly from the knowledge you give the agent, and pass anything unusual to a human.",
+    tag: "Inbound agent + knowledge + live transfer",
   },
   {
     icon: PackageCheck,
     title: "Status and follow-up calls",
-    desc: "Place routine update calls such as order status, document chasing, and post-service check-ins, and keep a transcript of each one.",
-    tag: "Outbound campaign + transcripts",
+    desc: "Place routine update calls such as order status, document chasing, and post-service check-ins, then send a follow-up text or update the contact automatically.",
+    tag: "Outbound campaign + automation",
   },
 ];
 

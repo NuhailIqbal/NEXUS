@@ -13,13 +13,13 @@ const steps = [
   {
     step: "Step 2",
     title: "Build your agent",
-    desc: "A guided setup asks what the agent should achieve, which industry it's for, and which voice to use. Upload a document or paste your FAQs as its knowledge.",
+    desc: "A guided setup asks what the agent should achieve, which industry it's for, and which voice to use. Paste your website to auto-fill its goal, add your FAQs as knowledge, then talk to it live in your browser.",
     icon: Bot,
   },
   {
     step: "Step 3",
     title: "Get a phone number",
-    desc: "Provision a number in the area code you want, then assign your agent to it. $3 per month, charged from your balance.",
+    desc: "Buy a US local number from the dashboard, then assign your agent to it. $3 per month, charged from your balance.",
     icon: Phone,
   },
   {

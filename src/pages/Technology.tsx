@@ -1,103 +1,188 @@
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
-import { Mic, Ear, MessageSquare, FileAudio, Lock, Wallet, PhoneCall, Cpu, Activity } from "lucide-react";
+import {
+  PhoneCall,
+  Ear,
+  BrainCircuit,
+  AudioLines,
+  ClipboardCheck,
+  Languages,
+  PhoneForwarded,
+  RefreshCw,
+  Workflow,
+  KeyRound,
+  UserCog,
+  CreditCard,
+  ShieldCheck,
+  Lock,
+  Wallet,
+} from "lucide-react";
+import {
+  MarketingPage,
+  PageHero,
+  Section,
+  IconCard,
+  StatStrip,
+  CtaBanner,
+} from "@/components/marketing/MarketingPrimitives";
+import { VOICE_COUNT, LANGUAGE_OPTIONS } from "@/lib/marketing-facts";
 
-const techStack = [
-  { icon: Ear, label: "Speech Recognition", desc: "Call audio is transcribed to text in real time as the conversation happens" },
-  { icon: MessageSquare, label: "Conversational AI", desc: "A language model drives the agent's side of the conversation, guided by the instructions and knowledge you give it" },
-  { icon: Mic, label: "Natural Voice Output", desc: "Text responses are converted back to speech using one of 13 production voices" },
-  { icon: FileAudio, label: "Recording & Transcription", desc: "Every call is recorded and transcribed automatically, with an AI summary generated afterward" },
-  { icon: Lock, label: "Security", desc: "Encrypted in transit, per-account access control, and payment card details handled entirely by our payment processor" },
-  { icon: Wallet, label: "Usage-Based Billing", desc: "Each call's actual cost is calculated and deducted from your balance individually" },
-];
-
+// The live path of a single call, in order.
 const pipeline = [
   {
     icon: PhoneCall,
-    title: "The call connects",
-    desc: "A phone number rings in, or an outbound call is placed to a contact from your list.",
+    title: "Connect",
+    desc: "A caller rings your number, or a campaign dials a contact from your list.",
   },
   {
-    icon: Cpu,
-    title: "The agent listens and responds",
-    desc: "Speech is transcribed, the agent decides what to say using its configured goal and knowledge, and a voice speaks the reply, in a continuous back-and-forth for the length of the call.",
+    icon: Ear,
+    title: "Listen",
+    desc: "The caller's speech is transcribed to text in real time, as they talk.",
   },
   {
-    icon: Activity,
-    title: "The call is wrapped up",
-    desc: "Once the call ends, the recording, transcript, and summary are generated and the exact cost of that call is calculated and charged to your balance.",
+    icon: BrainCircuit,
+    title: "Think",
+    desc: "A language model decides the reply from your prompt, knowledge and goal, or transfers the call.",
+  },
+  {
+    icon: AudioLines,
+    title: "Speak",
+    desc: "The reply is spoken in the agent's voice, in a continuous back-and-forth.",
+  },
+  {
+    icon: ClipboardCheck,
+    title: "Wrap up",
+    desc: "Recording, transcript, summary and cost are saved, and your automations fire.",
   },
 ];
 
-const facts = [
-  { value: "13", label: "Production Voices" },
-  { value: "5", label: "Languages Supported" },
-  { value: "Every", label: "Call Recorded" },
-  { value: "24/7", label: "Inbound Availability" },
+const underTheHood = [
+  {
+    icon: Languages,
+    title: "Language-aware speech",
+    desc: "Each agent's transcriber and voice follow the language you pick. Urdu and multilingual agents use a speech model built for mixed-language callers.",
+    badge: LANGUAGE_OPTIONS.join(" · "),
+  },
+  {
+    icon: AudioLines,
+    title: "Natural voice output",
+    desc: `${VOICE_COUNT} production voices across English accents and Pakistani Urdu, each previewable in the dashboard before you assign it.`,
+    badge: `${VOICE_COUNT} voices`,
+  },
+  {
+    icon: PhoneForwarded,
+    title: "Built-in transfer tool",
+    desc: "When you add a transfer number, the agent gets a transfer tool it can use mid-conversation, telling the caller to hold while it connects them.",
+    badge: "Mid-call",
+  },
+  {
+    icon: RefreshCw,
+    title: "Automatic call sync",
+    desc: "Call results stream into your dashboard as calls end, and a background sync keeps pulling in anything that arrived late, so no call goes missing.",
+    badge: "Self-healing",
+  },
+  {
+    icon: Workflow,
+    title: "Post-call automation engine",
+    desc: "The moment a call ends, matching flows run their conditions and actions: texts, call-backs, webhooks and contact updates.",
+    badge: "Event-driven",
+  },
+  {
+    icon: Wallet,
+    title: "Per-call cost metering",
+    desc: "Each call's real voice and carrier cost is metered and deducted from your balance individually, so every charge is itemized.",
+    badge: "Metered",
+  },
+];
+
+const security = [
+  { icon: Lock, title: "Encrypted in transit", desc: "Traffic between your browser, our servers and our providers is encrypted." },
+  { icon: KeyRound, title: "Hashed passwords, verified emails", desc: "Passwords are stored only as one-way hashes, and accounts must verify their email before signing in." },
+  { icon: UserCog, title: "Server-enforced roles", desc: "Owner, Member and Viewer permissions are checked on every request, not just hidden in the UI." },
+  { icon: CreditCard, title: "Cards never touch our servers", desc: "Card details go straight to our payment processor. We only keep the brand and last four digits." },
+  { icon: ShieldCheck, title: "Fail-safe DNC screening", desc: "With screening on, a number that can't be checked is skipped rather than dialed." },
+  { icon: Wallet, title: "Balance protection", desc: "Outbound calls need a positive balance, so a campaign can't quietly run up a bill you didn't fund." },
 ];
 
 const Technology = () => (
-  <div className="min-h-screen bg-background">
-    <Navbar />
-    <section className="relative pt-32 pb-20 overflow-hidden">
-      <div className="absolute inset-0 grid-pattern opacity-20 pointer-events-none" />
-      <div className="absolute top-1/4 right-1/4 w-[500px] h-[500px] rounded-full bg-accent/5 blur-[150px] pointer-events-none" />
+  <MarketingPage>
+    <PageHero
+      eyebrow="HOW IT WORKS"
+      title="What happens on"
+      highlight="every call"
+      description="A plain look at the pipeline behind each call your agent makes or answers, and what we do to keep it reliable."
+    />
 
-      <div className="container mx-auto px-4 relative z-10">
-        <div className="text-center mb-16">
-          <div className="badge-pill mx-auto mb-6 animate-slide-up">
-            <span className="w-2 h-2 rounded-full bg-primary animate-pulse-glow" />
-            HOW IT WORKS
-          </div>
-          <h1 className="text-4xl md:text-6xl font-black mb-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            What happens on <span className="text-gradient">every call</span>
-          </h1>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto animate-slide-up" style={{ animationDelay: "0.2s" }}>
-            A plain look at the pipeline behind each call your agent makes or answers.
-          </p>
-        </div>
-
-        {/* Pipeline */}
-        <div className="glow-border rounded-2xl p-8 mb-16 animate-slide-up" style={{ animationDelay: "0.3s" }}>
-          <div className="grid md:grid-cols-3 gap-8">
-            {pipeline.map((step) => (
-              <div key={step.title} className="text-center">
-                <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
-                  <step.icon size={28} className="text-primary" />
+    {/* Pipeline */}
+    <section className="pb-6">
+      <div className="container mx-auto px-4">
+        <div className="glow-border rounded-2xl p-6 md:p-10 bg-card">
+          <ol className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
+            {pipeline.map((step, i) => (
+              <li key={step.title} className="relative text-center">
+                {i < pipeline.length - 1 && (
+                  <div className="hidden lg:block absolute top-7 left-[calc(50%+2.25rem)] right-[calc(-50%+2.25rem)] h-px bg-gradient-to-r from-primary/50 to-primary/10" />
+                )}
+                <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-4">
+                  <step.icon size={24} className="text-primary" />
                 </div>
-                <h3 className="text-lg font-bold text-foreground mb-2">{step.title}</h3>
+                <div className="text-[11px] font-mono text-primary mb-1">STEP {i + 1}</div>
+                <h3 className="font-bold text-foreground mb-2">{step.title}</h3>
                 <p className="text-sm text-muted-foreground">{step.desc}</p>
-              </div>
+              </li>
             ))}
-          </div>
-        </div>
-
-        {/* Tech Stack */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
-          {techStack.map((t, i) => (
-            <div key={t.label} className="surface-card p-6 animate-slide-up" style={{ animationDelay: `${0.05 * i}s` }}>
-              <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
-                <t.icon size={20} className="text-primary" />
-              </div>
-              <h3 className="font-bold text-foreground mb-1">{t.label}</h3>
-              <p className="text-sm text-muted-foreground">{t.desc}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Facts */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {facts.map((f, i) => (
-            <div key={f.label} className="text-center p-4 rounded-xl border border-border bg-card animate-slide-up" style={{ animationDelay: `${0.05 * i}s` }}>
-              <div className="text-2xl font-black text-gradient mb-1">{f.value}</div>
-              <div className="text-xs text-muted-foreground">{f.label}</div>
-            </div>
-          ))}
+          </ol>
         </div>
       </div>
     </section>
-    <Footer />
-  </div>
+
+    <Section
+      eyebrow="Under the hood"
+      title="The parts that"
+      highlight="make it work"
+      description="Speech in, reasoning, speech out, then everything that happens after the caller hangs up."
+    >
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {underTheHood.map((t) => (
+          <IconCard key={t.title} {...t} />
+        ))}
+      </div>
+    </Section>
+
+    <Section
+      eyebrow="Security & safeguards"
+      title="Built to be"
+      highlight="trusted with your calls"
+      className="bg-secondary/20"
+    >
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {security.map((s) => (
+          <div key={s.title} className="flex gap-4 rounded-xl border border-border bg-card p-5">
+            <s.icon size={20} className="text-primary shrink-0 mt-0.5" />
+            <div>
+              <div className="font-semibold text-foreground text-sm">{s.title}</div>
+              <p className="text-sm text-muted-foreground mt-1">{s.desc}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground text-center mt-8 max-w-2xl mx-auto">
+        We don't currently hold SOC 2, ISO 27001 or HIPAA certification, and the platform isn't
+        intended for protected health information. See our privacy policy for details.
+      </p>
+    </Section>
+
+    <Section>
+      <StatStrip
+        stats={[
+          { value: String(VOICE_COUNT), label: "Production voices" },
+          { value: String(LANGUAGE_OPTIONS.length), label: "Language modes" },
+          { value: "Every", label: "Call recorded" },
+          { value: "24/7", label: "Inbound availability" },
+        ]}
+      />
+    </Section>
+
+    <CtaBanner />
+  </MarketingPage>
 );
 
 export default Technology;

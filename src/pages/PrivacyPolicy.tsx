@@ -1,5 +1,4 @@
-import Navbar from "@/components/Navbar";
-import Footer from "@/components/Footer";
+import { MarketingPage } from "@/components/marketing/MarketingPrimitives";
 import { Link } from "react-router-dom";
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
@@ -11,14 +10,45 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
-const PrivacyPolicy = () => (
-  <div className="min-h-screen bg-background">
-    <Navbar />
+const TOC = [
+  { id: "intro", title: "Introduction and Scope" },
+  { id: "collect", title: "Information We Collect" },
+  { id: "recording", title: "Call Recording and Transcription" },
+  { id: "use", title: "How We Use Information" },
+  { id: "subprocessors", title: "Disclosure to Service Providers" },
+  { id: "retention", title: "Data Retention" },
+  { id: "rights", title: "Your Rights and Choices" },
+  { id: "security", title: "Data Security" },
+  { id: "cookies", title: "Cookies and Local Storage" },
+  { id: "children", title: "Children's Privacy" },
+  { id: "contact", title: "Contact Information" },
+  { id: "changes", title: "Changes to This Policy" },
+];
 
+const PrivacyPolicy = () => (
+  <MarketingPage>
     <section className="relative pt-32 pb-20 overflow-hidden">
       <div className="absolute inset-0 grid-pattern opacity-20 pointer-events-none" />
       <div className="container mx-auto px-4 relative z-10 max-w-3xl">
+        <div className="badge-pill mb-6">
+          <span className="w-2 h-2 rounded-full bg-primary" />
+          LEGAL
+        </div>
         <h1 className="text-4xl md:text-5xl font-bold">Privacy Policy</h1>
+        <p className="mt-3 text-sm text-muted-foreground">Last updated: September 28, 2026</p>
+
+        <nav aria-label="Contents" className="mt-10 rounded-xl border border-border bg-card p-5 md:p-6">
+          <div className="text-xs font-bold uppercase tracking-[0.2em] text-primary mb-3">Contents</div>
+          <ol className="grid sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            {TOC.map((item, i) => (
+              <li key={item.id}>
+                <a href={`#${item.id}`} className="text-muted-foreground hover:text-foreground transition-colors">
+                  {i + 1}. {item.title}
+                </a>
+              </li>
+            ))}
+          </ol>
+        </nav>
 
         <div className="mt-12 space-y-10">
           <Section id="intro" title="1. Introduction and Scope">
@@ -57,13 +87,26 @@ const PrivacyPolicy = () => (
             </p>
             <p>
               <strong className="text-foreground">Contact Data.</strong> Names, telephone numbers,
-              email addresses, list assignments, and any custom fields configured by the Customer,
-              including a consent-tracking field where used.
+              email addresses, list assignments, and contact status, as uploaded or entered by the
+              Customer, together with any updates made by automations the Customer configures.
+            </p>
+            <p>
+              <strong className="text-foreground">Agent Configuration.</strong> The instructions,
+              greeting, knowledge text, and files a Customer provides for an AI voice agent, the
+              transfer number it is given, and any website address the Customer submits for the
+              Service to analyze when suggesting an agent's setup.
+            </p>
+            <p>
+              <strong className="text-foreground">Team and Referral Information.</strong> The names
+              and email addresses of teammates a Customer invites, and the role assigned to each.
+              Where a person signs up through a Customer's referral link, the Company records that
+              referral and whether the referred account has been verified.
             </p>
             <p>
               <strong className="text-foreground">Call Data.</strong> For each call placed or
               received by a Customer's AI voice agent, the Company records the telephone numbers
-              involved, the time and duration of the call, its outcome, its cost, an{" "}
+              involved, the time and duration of the call, its outcome, whether it was transferred
+              and to which number, its cost, an{" "}
               <strong className="text-foreground">audio recording</strong>, a{" "}
               <strong className="text-foreground">written transcript</strong>, and an
               AI-generated summary. See Section 3.
@@ -98,8 +141,14 @@ const PrivacyPolicy = () => (
               one practical means of satisfying this obligation.
             </p>
             <p>
-              Customers may review or delete individual call records from the dashboard at any
-              time.
+              The Service offers optional do-not-call and litigation screening for outbound calls.
+              Screening is provided as an aid only and does not relieve the Customer of its own
+              compliance obligations.
+            </p>
+            <p>
+              Customers may review individual call records, recordings, and transcripts from the
+              dashboard at any time, and may request deletion of call records using the contact
+              details in Section 11.
             </p>
           </Section>
 
@@ -107,7 +156,10 @@ const PrivacyPolicy = () => (
             <p>
               The Company uses the information described above to: operate Customer accounts and
               place and receive calls; generate recordings, transcripts, and summaries for
-              Customer review; calculate call costs and process billing; deliver service
+              Customer review; screen telephone numbers against do-not-call and litigation lists
+              where the Customer enables screening; run the automations a Customer configures,
+              such as sending SMS messages, placing follow-up calls, and delivering webhooks;
+              calculate call costs and process billing; deliver service
               communications, including email verification and low-balance notifications; provide
               customer support; detect and prevent misuse of the Service; and comply with
               applicable legal obligations.
@@ -123,14 +175,22 @@ const PrivacyPolicy = () => (
             <p>
               The Company engages a limited number of trusted third-party service providers to
               operate the Service, including providers of voice and telephony infrastructure,
-              speech transcription, cloud computing and hosting, payment processing, and
-              transactional email delivery. These providers receive only the information necessary
+              SMS delivery, speech transcription and voice synthesis, AI language models (used to
+              conduct agent conversations, analyze submitted websites, and summarize calls),
+              do-not-call and litigation screening, cloud computing and hosting, payment
+              processing, and transactional email delivery. These providers receive only the information necessary
               to perform their function and are contractually bound to use it solely for that
               purpose.
             </p>
             <p>
               Payment card information is collected and stored exclusively by the Company's
               payment processor and is never transmitted to or held on Company servers.
+            </p>
+            <p>
+              Where a Customer configures an automation to send data to a webhook or other
+              destination of its choosing, the Company transmits that data on the Customer's
+              instruction. The handling of data at that destination is governed by the Customer
+              and the destination's operator, not by the Company.
             </p>
             <p>
               Each provider processes data under its own terms of service and privacy policy and
@@ -145,8 +205,8 @@ const PrivacyPolicy = () => (
             <p>
               Account, billing, and call records are retained for as long as the associated
               account remains active, for the Customer's own reference and for the Company's tax
-              and accounting purposes. Customers may delete individual contacts and call records
-              at any time through the dashboard.
+              and accounting purposes. Customers may delete contacts and lists at any time through
+              the dashboard, and may request deletion of call records as described in Section 3.
             </p>
             <p>
               Upon account closure, the Company deletes Customer data except where retention of
@@ -198,9 +258,15 @@ const PrivacyPolicy = () => (
 
           <Section id="cookies" title="9. Cookies and Local Storage">
             <p>
-              The Service uses browser local storage to retain an authentication token and a
-              display theme preference, both of which are strictly necessary for the Service to
-              function. The Company does not use advertising or cross-site tracking cookies.
+              The Service uses browser local storage to retain an authentication token, which is
+              strictly necessary for the Service to function, and interface preferences such as the
+              display theme and favorited voices. The Company does not use advertising or
+              cross-site tracking cookies.
+            </p>
+            <p>
+              The registration page may use Google reCAPTCHA to protect against automated sign-ups.
+              reCAPTCHA is subject to Google's own privacy policy and terms and may set its own
+              cookies.
             </p>
           </Section>
 
@@ -221,8 +287,8 @@ const PrivacyPolicy = () => (
             </p>
             <p className="text-foreground">
               Email:{" "}
-              <a href="mailto:info@edmnexus.ai" className="text-primary hover:underline">
-                info@edmnexus.ai
+              <a href="mailto:edmnexusai@gmail.com" className="text-primary hover:underline">
+                edmnexusai@gmail.com
               </a>
             </p>
             <p className="text-xs text-muted-foreground/80 italic">
@@ -243,13 +309,12 @@ const PrivacyPolicy = () => (
 
         <div className="mt-14 border-t border-border pt-6 text-sm text-muted-foreground">
           Questions about the product instead?{" "}
-          <Link to="/request-access" className="text-primary hover:underline">Get in touch</Link>.
+          <Link to="/about" className="text-primary hover:underline">Get in touch</Link>.
         </div>
       </div>
     </section>
 
-    <Footer />
-  </div>
+  </MarketingPage>
 );
 
 export default PrivacyPolicy;
