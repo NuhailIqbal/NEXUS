@@ -15,16 +15,16 @@ import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuc
 import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
 import { IndustryCombobox } from "@/components/dashboard/IndustryCombobox";
 
-type StepKey = "setup" | "knowledge" | "prompt" | "testing";
+export type StepKey = "setup" | "knowledge" | "prompt" | "testing";
 
-const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
+export const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "setup", title: "Complete Setup", description: "Basic agent configuration and tools", icon: Bot },
   { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
   { key: "prompt", title: "Prompt Studio", description: "Craft the agent's instructions", icon: FileText },
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
 ];
 
-type FormState = {
+export type FormState = {
   agentName: string;
   website: string;
   mainGoal: string;
@@ -40,9 +40,9 @@ type FormState = {
   testMessage: string;
 };
 
-const KNOWLEDGE_TEXT_LIMIT = 8000;
-const KNOWLEDGE_FILE_MAX_MB = 10;
-const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
+export const KNOWLEDGE_TEXT_LIMIT = 8000;
+export const KNOWLEDGE_FILE_MAX_MB = 10;
+export const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
 
 const CreateAIAgent = () => {
   const navigate = useNavigate();
@@ -157,12 +157,12 @@ const CreateAIAgent = () => {
 
   return (
     <div className="-mx-4 -my-6 min-h-[calc(100vh-4rem)] bg-muted/30 sm:-mx-6 lg:-mx-8">
-      <div className="sticky top-16 z-20 flex items-center justify-between border-b border-border bg-background px-6 py-4">
-        <div>
-          <h1 className="bg-gradient-to-r from-primary to-emerald-400 bg-clip-text text-2xl font-bold text-transparent">
+      <div className="sticky top-16 z-20 flex items-start justify-between gap-3 border-b border-border bg-background px-4 py-3 sm:items-center sm:px-6 sm:py-4">
+        <div className="min-w-0">
+          <h1 className="bg-gradient-to-r from-primary to-emerald-400 bg-clip-text text-xl font-bold text-transparent sm:text-2xl">
             Create AI Agent
           </h1>
-          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground sm:gap-2 sm:text-sm">
             <Link to="/dashboard/ai-agents" className="hover:text-primary">AI Agents</Link>
             <span>/</span>
             <span>Create AI Agent</span>
@@ -172,14 +172,14 @@ const CreateAIAgent = () => {
         </div>
         <button
           onClick={close}
-          className="rounded-md p-2 text-muted-foreground hover:bg-muted"
+          className="shrink-0 rounded-md p-2 text-muted-foreground hover:bg-muted"
           aria-label="Close"
         >
           <X className="h-5 w-5" />
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[280px_1fr]">
+      <div className="grid grid-cols-1 gap-4 p-4 sm:gap-6 sm:p-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
           <div>
             <h2 className="text-base font-semibold">Setup Progress</h2>
@@ -192,7 +192,7 @@ const CreateAIAgent = () => {
             </div>
           </div>
 
-          <ul className="space-y-2">
+          <ul className="grid grid-cols-4 gap-2 lg:grid-cols-1">
             {STEPS.map((s, i) => {
               const isActive = i === stepIndex;
               const isDone = completed[s.key];
@@ -201,7 +201,7 @@ const CreateAIAgent = () => {
                   <button
                     onClick={() => goToStep(i)}
                     className={cn(
-                      "flex w-full items-start gap-3 rounded-xl border p-3 text-left transition",
+                      "flex h-full w-full flex-col items-center gap-1.5 rounded-xl border px-1.5 py-2.5 text-center transition sm:p-3 lg:flex-row lg:items-start lg:gap-3 lg:text-left",
                       isActive
                         ? "border-primary/40 bg-primary/5"
                         : "border-transparent hover:bg-muted",
@@ -219,12 +219,12 @@ const CreateAIAgent = () => {
                     >
                       {isDone ? <Check className="h-3 w-3" /> : <span className="text-[10px]">{i + 1}</span>}
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <div className={cn("text-sm font-medium", isActive ? "text-foreground" : "text-muted-foreground")}>
+                    <div className="min-w-0 lg:flex-1">
+                      <div className={cn("text-xs font-medium leading-tight sm:text-sm", isActive ? "text-foreground" : "text-muted-foreground")}>
                         {s.title}
                       </div>
                       {isActive && (
-                        <div className="mt-0.5 text-xs text-muted-foreground">{s.description}</div>
+                        <div className="mt-0.5 hidden text-xs text-muted-foreground lg:block">{s.description}</div>
                       )}
                     </div>
                   </button>
@@ -234,7 +234,7 @@ const CreateAIAgent = () => {
           </ul>
         </aside>
 
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <section className="rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-6">
           <div className="mb-6">
             <h2 className="text-xl font-bold">
               {currentStep.title} <span className="ml-1 text-sm font-normal text-muted-foreground">Step {stepIndex + 1} of {STEPS.length}</span>
@@ -242,7 +242,7 @@ const CreateAIAgent = () => {
             <p className="text-sm text-muted-foreground">{currentStep.description}</p>
           </div>
 
-          <div className="rounded-xl border border-border bg-background p-6">
+          <div className="rounded-xl border border-border bg-background p-3 sm:p-6">
             {currentStep.key === "setup" && <StepSetup form={form} update={update} />}
             {currentStep.key === "knowledge" && <StepKnowledge form={form} update={update} />}
             {currentStep.key === "prompt" && <StepPrompt form={form} update={update} />}
@@ -279,9 +279,18 @@ export default CreateAIAgent;
 
 /* ---------------- Step Components ---------------- */
 
-function StepSetup({
-  form, update,
-}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+export function StepSetup({
+  form, update, statusValue, onStatusChange, compact,
+}: {
+  form: FormState;
+  update: <K extends keyof FormState>(k: K, v: FormState[K]) => void;
+  // Only set when editing an existing agent — a brand new agent is always created Active,
+  // so Create never passes these and the field stays hidden.
+  statusValue?: string;
+  onStatusChange?: (v: string) => void;
+  // Hides the centered intro block; the Edit modal already shows the step title itself.
+  compact?: boolean;
+}) {
   const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
 
@@ -297,20 +306,22 @@ function StepSetup({
   };
 
   return (
-    <div className="space-y-8">
-      <div className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Bot className="h-7 w-7" />
+    <div className={compact ? "space-y-6" : "space-y-8"}>
+      {!compact && (
+        <div className="text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <Bot className="h-7 w-7" />
+          </div>
+          <h3 className="mt-3 text-lg font-bold">Complete Agent Setup</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Configure your agent's basic information, purpose, and communication settings
+          </p>
         </div>
-        <h3 className="mt-3 text-lg font-bold">Complete Agent Setup</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Configure your agent's basic information, purpose, and communication settings
-        </p>
-      </div>
+      )}
 
       <div>
         <SectionTitle icon={<Bot className="h-4 w-4 text-primary" />}>Basic Information</SectionTitle>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
           <Field label="Agent Name" required>
             <input
               value={form.agentName}
@@ -325,13 +336,13 @@ function StepSetup({
                 value={form.website}
                 onChange={(e) => update("website", e.target.value)}
                 placeholder="example.com or https://example.com"
-                className="h-10 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                className="h-10 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
               />
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="text-primary border-primary/30"
+                className="h-10 shrink-0 text-primary border-primary/30"
                 onClick={analyzeWebsite}
                 disabled={analyzing}
               >
@@ -375,6 +386,20 @@ function StepSetup({
             </Field>
           )}
         </div>
+        {onStatusChange && (
+          <Field label="Status" className="mt-4">
+            <Select value={statusValue ?? "Active"} onValueChange={onStatusChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Active">Active</SelectItem>
+                <SelectItem value="Paused">Paused</SelectItem>
+                <SelectItem value="Inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
       </div>
 
       <div>
@@ -417,9 +442,9 @@ function StepSetup({
   );
 }
 
-function StepKnowledge({
-  form, update,
-}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+export function StepKnowledge({
+  form, update, compact,
+}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   const textLen = form.knowledgeText.length;
   const textOver = textLen > KNOWLEDGE_TEXT_LIMIT;
 
@@ -448,15 +473,17 @@ function StepKnowledge({
 
   return (
     <div className="space-y-6">
-      <div className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <BookOpen className="h-7 w-7" />
+      {!compact && (
+        <div className="text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <BookOpen className="h-7 w-7" />
+          </div>
+          <h3 className="mt-3 text-lg font-bold">Knowledge Center</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Give your agent the info it needs to answer accurately
+          </p>
         </div>
-        <h3 className="mt-3 text-lg font-bold">Knowledge Center</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Give your agent the info it needs to answer accurately
-        </p>
-      </div>
+      )}
 
       <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
         <div className="flex items-start gap-2.5">
@@ -473,7 +500,7 @@ function StepKnowledge({
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
           <span className="text-sm font-medium">Quick Text <span className="text-xs font-normal text-muted-foreground">  short content</span></span>
           <span className={cn("text-xs", textOver ? "text-destructive font-semibold" : "text-muted-foreground")}>
             {textLen.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()}
@@ -551,25 +578,27 @@ function StepKnowledge({
   );
 }
 
-function StepPrompt({
-  form, update,
-}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+export function StepPrompt({
+  form, update, compact,
+}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   return (
     <div className="space-y-6">
-      <div className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <FileText className="h-7 w-7" />
+      {!compact && (
+        <div className="text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <FileText className="h-7 w-7" />
+          </div>
+          <h3 className="mt-3 text-lg font-bold">Prompt Studio</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Define how your agent thinks and speaks
+          </p>
         </div>
-        <h3 className="mt-3 text-lg font-bold">Prompt Studio</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Define how your agent thinks and speaks
-        </p>
-      </div>
+      )}
       <Field label="System Prompt" required>
         <textarea
           value={form.systemPrompt}
           onChange={(e) => update("systemPrompt", e.target.value)}
-          rows={6}
+          rows={compact ? 14 : 6}
           placeholder="You are a friendly assistant who helps users with…"
           className="w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
         />
@@ -586,9 +615,9 @@ function StepPrompt({
   );
 }
 
-function StepTesting({
-  form, update,
-}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void }) {
+export function StepTesting({
+  form, update, compact,
+}: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   const [reply, setReply] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [voiceTestAgent, setVoiceTestAgent] = useState<VoiceAgentInfo | null>(null);
@@ -651,15 +680,17 @@ function StepTesting({
 
   return (
     <div className="space-y-6">
-      <div className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <PlayCircle className="h-7 w-7" />
+      {!compact && (
+        <div className="text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <PlayCircle className="h-7 w-7" />
+          </div>
+          <h3 className="mt-3 text-lg font-bold">Test Your Agent</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Try your agent before going live (optional, you can skip this step).
+          </p>
         </div>
-        <h3 className="mt-3 text-lg font-bold">Test Your Agent</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Try your agent before going live (optional, you can skip this step).
-        </p>
-      </div>
+      )}
 
       <div className="rounded-lg border border-border bg-muted/20 p-4 text-center">
         <h4 className="text-sm font-semibold text-foreground">Talk to your agent</h4>
@@ -708,7 +739,7 @@ function StepTesting({
   );
 }
 
-function Field({
+export function Field({
   label, required, children, className,
 }: { label: string; required?: boolean; children: React.ReactNode; className?: string }) {
   return (
@@ -721,7 +752,7 @@ function Field({
   );
 }
 
-function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+export function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 border-b border-border pb-2">
       {icon}

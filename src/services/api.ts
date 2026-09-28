@@ -85,6 +85,7 @@ export const api = {
 
   // Agents
   getAgents: () => get("/agents"),
+  getAgent: (id: string) => get(`/agents/${id}`),
   createAgent: (data: any) => post("/agents", data),
   testAgent: (data: { message: string; system_prompt?: string | null; first_message?: string | null }) => post("/agents/test", data),
   startVoiceTest: (data: { name: string; voice?: string | null; language?: string | null; system_prompt?: string | null; first_message?: string | null }) =>
