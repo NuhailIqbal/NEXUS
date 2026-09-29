@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
 
 type Props = {
@@ -16,11 +17,15 @@ type Props = {
 
 export function CreateFlowDialog({ open, onOpenChange, onCreated, basePath = "/dashboard/automation" }: Props) {
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
   const close = (next: boolean) => {
-    if (!next) setName("");
+    if (!next) {
+      setName("");
+      setDescription("");
+    }
     onOpenChange(next);
   };
 
@@ -30,6 +35,7 @@ export function CreateFlowDialog({ open, onOpenChange, onCreated, basePath = "/d
 
     const { data, error } = await api.createFlow({
       name: name.trim(),
+      description: description.trim() || null,
       status: "Active",
     });
 
@@ -55,15 +61,29 @@ export function CreateFlowDialog({ open, onOpenChange, onCreated, basePath = "/d
           <DialogDescription className="sr-only">Enter a name to create a new automation flow.</DialogDescription>
         </div>
 
-        <div className="p-6">
-          <label className="mb-2 block text-sm font-semibold">Enter new flow name</label>
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder="Name"
-          />
+        <div className="space-y-4 p-6">
+          <div>
+            <label className="mb-2 block text-sm font-semibold">Enter new flow name</label>
+            <Input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="Name"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-semibold">
+              Description <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <Textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What does this flow do?"
+              rows={3}
+              maxLength={500}
+            />
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border p-4">

@@ -36,6 +36,15 @@ import "reactflow/dist/style.css";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   NODE_TYPES,
   PALETTE_GROUPS,
@@ -114,6 +123,9 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const initialName = new URLSearchParams(location.search).get("name") ?? "Untitled Flow";
   const [name, setName] = useState(initialName);
   const [tab, setTab] = useState<"design" | "statistics">("design");
+  const [description, setDescription] = useState("");
+  const [descOpen, setDescOpen] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
 
   const initial = useMemo(() => loadGraph(flowId), [flowId]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>(initial.nodes);
@@ -167,6 +179,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
         return;
       }
       if (data.name) setName(data.name);
+      setDescription(data.description ?? "");
       const def = data.definition;
       if (def && Array.isArray(def.nodes)) {
         setNodes(def.nodes);
@@ -277,6 +290,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       if (flowId && flowId !== "new") {
         const { error } = await api.updateFlow(flowId, {
           name,
+          description,
           definition: { nodes, edges, trigger: deriveTrigger(nodes) },
         });
         if (error && !silent) {
@@ -295,8 +309,26 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
         }
       }
     },
-    [flowId, name, nodes, edges],
+    [flowId, name, description, nodes, edges],
   );
+
+  const openDescription = () => {
+    setDescDraft(description);
+    setDescOpen(true);
+  };
+
+  const saveDescription = async () => {
+    const next = descDraft.trim();
+    setDescription(next);
+    setDescOpen(false);
+    if (flowId && flowId !== "new") {
+      const { error } = await api.updateFlow(flowId, { description: next });
+      if (error) toast.error(`Could not save description: ${error}`);
+      else toast.success("Description saved");
+    } else {
+      toast.success("Description updated");
+    }
+  };
 
   // Auto-save every 30s (skip while initial server fetch is in flight)
   useEffect(() => {
@@ -325,8 +357,14 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             onChange={(e) => setName(e.target.value)}
             className="h-9 min-w-0 flex-1 font-medium sm:w-72 sm:flex-initial"
           />
-          <button className="hidden shrink-0 whitespace-nowrap md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
+          <button
+            type="button"
+            onClick={openDescription}
+            title={description || "Add a description"}
+            className="hidden shrink-0 whitespace-nowrap md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted"
+          >
             <FileText className="h-4 w-4" /> Description
+            {description && <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="Has description" />}
           </button>
           <button className="hidden shrink-0 whitespace-nowrap md:inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted">
             <SettingsIcon className="h-4 w-4" /> Settings
@@ -403,6 +441,27 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
           </Button>
         </div>
       </div>
+
+      <Dialog open={descOpen} onOpenChange={setDescOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Flow description</DialogTitle>
+            <DialogDescription>Describe what this flow does so your team knows at a glance.</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            autoFocus
+            value={descDraft}
+            onChange={(e) => setDescDraft(e.target.value)}
+            placeholder="e.g. Texts the caller after an inbound call and updates their contact"
+            rows={5}
+            maxLength={500}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDescOpen(false)}>Cancel</Button>
+            <Button onClick={saveDescription} disabled={loadingFlow}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Tabs */}
       <div className="flex items-center gap-6 overflow-x-auto border-b border-border bg-card px-4 sm:px-5">
