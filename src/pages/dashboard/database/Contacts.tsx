@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Plus, Search, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -19,6 +19,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { AddContactDialog } from "@/components/database/AddContactDialog";
 import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
@@ -37,9 +40,29 @@ type Contact = {
 
 type ListRow = { id: string; name: string };
 
+type ColumnKey = "name" | "phone" | "email" | "list" | "status" | "createdAt";
+
+const COLUMNS: { key: ColumnKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "phone", label: "Phone" },
+  { key: "email", label: "Email" },
+  { key: "list", label: "List" },
+  { key: "status", label: "Status" },
+  { key: "createdAt", label: "Created" },
+];
+
+const STATUS_OPTIONS = ["Active", "Inactive", "Pending"];
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
 const Contacts = () => {
-  const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({
+    name: "", phone: "", email: "", list: "", status: "", createdAt: "",
+  });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [lists, setLists] = useState<ListRow[]>([]);
 
@@ -82,9 +105,43 @@ const Contacts = () => {
     fetchContacts();
   }, [fetchContacts]);
 
-  const filtered = contacts.filter((c) =>
-    c.name.toLowerCase().includes(q.toLowerCase()) ||
-    c.email.toLowerCase().includes(q.toLowerCase()),
+  const toggleSort = (key: ColumnKey) => {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortKey(null);
+  };
+  const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
+
+  const filtered = useMemo(() => {
+    return contacts.filter((c) =>
+      COLUMNS.every(({ key }) => {
+        if (key === "status") {
+          if (!filters.status) return true;
+          return c.status === filters.status;
+        }
+        const q = filters[key].trim().toLowerCase();
+        return !q || String(c[key] ?? "").toLowerCase().includes(q);
+      })
+    );
+  }, [contacts, filters]);
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return filtered;
+    return [...filtered].sort((a, b) => {
+      const av = String(a[sortKey] ?? "").toLowerCase();
+      const bv = String(b[sortKey] ?? "").toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [filtered, sortKey, sortDir]);
+
+  useEffect(() => { setPage(1); }, [filters, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const visibleContacts = useMemo(
+    () => sorted.slice((page - 1) * pageSize, page * pageSize),
+    [sorted, page, pageSize]
   );
 
   const handleDelete = async (c: Contact) => {
@@ -260,52 +317,84 @@ Jane Smith,+13105551002,jane@example.com`}</pre>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search…"
-          className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-base outline-none focus:ring-2 focus:ring-ring md:text-sm"
-        />
-      </div>
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3 max-lg:min-w-[11rem]">Name</th>
-              <th className="px-4 py-3">Phone</th>
-              <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3 max-lg:min-w-[12rem]">List</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Created</th>
-              <th className="px-4 py-3 w-32">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((c) => (
-              <tr key={c.id} className="border-t border-border bg-card/30">
-                <td className="px-4 py-3 font-medium text-foreground">{c.name}</td>
-                <td className="px-4 py-3 text-muted-foreground">{c.phone}</td>
-                <td className="px-4 py-3 text-muted-foreground">{c.email}</td>
-                <td className="px-4 py-3">{c.list}</td>
-                <td className="px-4 py-3">
-                  <Badge variant={c.status === "Active" ? "default" : c.status === "Pending" ? "secondary" : "outline"}>
-                    {c.status}
-                  </Badge>
-                </td>
-                <td className="px-4 py-3 text-muted-foreground max-lg:whitespace-nowrap">{c.createdAt}</td>
-                <td className="px-4 py-3">
-                  <RowActions
-                    onView={() => setViewTarget(c)}
-                    onSettings={() => openEdit(c)}
-                    onDelete={() => handleDelete(c)}
-                  />
-                </td>
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <tr className="divide-x divide-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3">
+                    <SortableColumnHeader label={label} active={sortKey === key} dir={sortDir} onClick={() => toggleSort(key)} />
+                  </th>
+                ))}
+                <th className="px-4 py-3 w-32">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+              <tr className="divide-x divide-border border-t border-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "status" ? (
+                      <TableSelectFilter
+                        value={filters.status}
+                        onChange={(v) => setFilter("status", v)}
+                        placeholder="Status"
+                        options={STATUS_OPTIONS.map((s) => ({ value: s, label: s }))}
+                      />
+                    ) : key === "list" ? (
+                      <TableSelectFilter
+                        value={filters.list}
+                        onChange={(v) => setFilter("list", v)}
+                        placeholder="List"
+                        options={lists.map((l) => ({ value: l.name, label: l.name }))}
+                      />
+                    ) : (
+                      <TableTextFilter value={filters[key]} onChange={(v) => setFilter(key, v)} placeholder={label} />
+                    )}
+                  </th>
+                ))}
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleContacts.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                    {contacts.length === 0 ? "No contacts yet." : "No contacts match your filters."}
+                  </td>
+                </tr>
+              ) : (
+                visibleContacts.map((c) => (
+                  <tr key={c.id} className="divide-x divide-border border-t border-border bg-card/30">
+                    <td className="px-4 py-3 text-center font-medium text-foreground">{c.name}</td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">{c.phone}</td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">{c.email}</td>
+                    <td className="px-4 py-3 text-center">{c.list}</td>
+                    <td className="px-4 py-3 text-center">
+                      <Badge variant={c.status === "Active" ? "default" : c.status === "Pending" ? "secondary" : "outline"}>
+                        {c.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-center text-muted-foreground whitespace-nowrap">{c.createdAt}</td>
+                    <td className="px-4 py-3 text-center">
+                      <RowActions
+                        onView={() => setViewTarget(c)}
+                        onSettings={() => openEdit(c)}
+                        onDelete={() => handleDelete(c)}
+                      />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          totalCount={sorted.length}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+        />
       </div>
 
       <AddContactDialog

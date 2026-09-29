@@ -18,6 +18,9 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { api, ADMIN_TOKEN_KEY } from "@/services/api";
 import { toast } from "sonner";
 import Logo from "@/components/Logo";
@@ -76,10 +79,12 @@ type AdminStats = {
   total_agents: number;
 };
 
+type PaymentsUserRow = { email: string; name: string; status: string; total_charges: number; balance: number; stripe_customer_id: string | null };
+type PaymentsCallRow = { email: string; phone: string; contact_name: string; direction: string; duration: string; call_cost: number; call_time: string };
 type PaymentsData = {
   summary: { total_charges: number };
-  per_user: { email: string; name: string; status: string; total_charges: number; balance: number; stripe_customer_id: string | null }[];
-  recent_calls: { email: string; phone: string; contact_name: string; direction: string; duration: string; call_cost: number; call_time: string }[];
+  per_user: PaymentsUserRow[];
+  recent_calls: PaymentsCallRow[];
 };
 
 type RevenueData = {
@@ -89,10 +94,11 @@ type RevenueData = {
 
 type AgentReportRow = { id: string; name: string; owner_email: string; total_calls: number; completed: number; qualified: number };
 
+type UserReportTopUser = { email: string; name: string; conversations: number; agents: number };
 type UsersReportData = {
   totals: { total_users: number; active_users: number; disabled_users: number };
   signups: { day: string; label: string; signups: number }[];
-  top_users: { email: string; name: string; conversations: number; agents: number }[];
+  top_users: UserReportTopUser[];
 };
 
 type PromoCode = {
@@ -175,7 +181,6 @@ const Admin = () => {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [balanceAmount, setBalanceAmount] = useState(10);
   const [editingRate, setEditingRate] = useState<string | null>(null);
@@ -191,11 +196,9 @@ const Admin = () => {
 
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
-  const [agentSearch, setAgentSearch] = useState("");
 
   const [phoneNumbers, setPhoneNumbers] = useState<AdminPhoneNumber[]>([]);
   const [phoneNumbersLoaded, setPhoneNumbersLoaded] = useState(false);
-  const [phoneSearch, setPhoneSearch] = useState("");
   const [numbersModalOwner, setNumbersModalOwner] = useState<string | null>(null);
 
   const [payments, setPayments] = useState<PaymentsData | null>(null);
@@ -215,6 +218,54 @@ const Admin = () => {
   const [creatingCode, setCreatingCode] = useState(false);
   const [referrals, setReferrals] = useState<ReferralRow[]>([]);
   const [referralsLoaded, setReferralsLoaded] = useState(false);
+
+  // Per-table sort/filter/pagination state for every admin table (each table's
+  // render fn is only invoked when its section is active, so this state must
+  // live here at the top level rather than inside those functions).
+  const [userSort, setUserSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [userFilters, setUserFilters] = useState<Record<string, string>>({});
+  const [userPage, setUserPage] = useState(1);
+  const [userPageSize, setUserPageSize] = useState(10);
+
+  const [agentSort, setAgentSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [agentFilters, setAgentFilters] = useState<Record<string, string>>({});
+  const [agentPage, setAgentPage] = useState(1);
+  const [agentPageSize, setAgentPageSize] = useState(10);
+
+  const [numberSort, setNumberSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [numberFilters, setNumberFilters] = useState<Record<string, string>>({});
+  const [numberPage, setNumberPage] = useState(1);
+  const [numberPageSize, setNumberPageSize] = useState(10);
+
+  const [payUserSort, setPayUserSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [payUserFilters, setPayUserFilters] = useState<Record<string, string>>({});
+  const [payUserPage, setPayUserPage] = useState(1);
+  const [payUserPageSize, setPayUserPageSize] = useState(10);
+
+  const [payCallSort, setPayCallSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [payCallFilters, setPayCallFilters] = useState<Record<string, string>>({});
+  const [payCallPage, setPayCallPage] = useState(1);
+  const [payCallPageSize, setPayCallPageSize] = useState(10);
+
+  const [promoSort, setPromoSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [promoFilters, setPromoFilters] = useState<Record<string, string>>({});
+  const [promoPage, setPromoPage] = useState(1);
+  const [promoPageSize, setPromoPageSize] = useState(10);
+
+  const [referralSort, setReferralSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [referralFilters, setReferralFilters] = useState<Record<string, string>>({});
+  const [referralPage, setReferralPage] = useState(1);
+  const [referralPageSize, setReferralPageSize] = useState(10);
+
+  const [agentReportSort, setAgentReportSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [agentReportFilters, setAgentReportFilters] = useState<Record<string, string>>({});
+  const [agentReportPage, setAgentReportPage] = useState(1);
+  const [agentReportPageSize, setAgentReportPageSize] = useState(10);
+
+  const [userReportSort, setUserReportSort] = useState<{ key: string | null; dir: "asc" | "desc" }>({ key: null, dir: "asc" });
+  const [userReportFilters, setUserReportFilters] = useState<Record<string, string>>({});
+  const [userReportPage, setUserReportPage] = useState(1);
+  const [userReportPageSize, setUserReportPageSize] = useState(10);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -309,11 +360,42 @@ const Admin = () => {
     }
   }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded, referralsLoaded]);
 
-  const filtered = users.filter(u =>
-    u.email.toLowerCase().includes(search.toLowerCase()) ||
-    (u.full_name || "").toLowerCase().includes(search.toLowerCase()) ||
-    (u.company_name || "").toLowerCase().includes(search.toLowerCase())
-  );
+  const USER_COLUMNS: { key: string; label: string }[] = [
+    { key: "user", label: "User" },
+    { key: "status", label: "Status" },
+    { key: "balance", label: "Balance" },
+    { key: "rate", label: "Rate" },
+    { key: "numbers", label: "Numbers" },
+    { key: "calls", label: "Calls" },
+  ];
+  const userText = (u: AdminUser, key: string): string => {
+    if (key === "user") return `${u.full_name || ""} ${u.email} ${u.company_name || ""}`;
+    if (key === "status") return u.is_active ? u.status : "Disabled";
+    if (key === "balance") return String(u.balance ?? 0);
+    if (key === "rate") return String(u.rate_per_minute ?? 0.35);
+    if (key === "numbers") return String(u.phone_numbers ?? 0);
+    if (key === "calls") return String(u.total_conversations);
+    return "";
+  };
+  const filteredUnsorted = users.filter((u) => USER_COLUMNS.every(({ key }) => {
+    if (key === "status") {
+      const v = userFilters.status;
+      return !v || userText(u, "status") === v;
+    }
+    const q = (userFilters[key] || "").trim().toLowerCase();
+    return !q || userText(u, key).toLowerCase().includes(q);
+  }));
+  const filteredSorted = !userSort.key ? filteredUnsorted : [...filteredUnsorted].sort((a, b) => {
+    const numeric = ["balance", "rate", "numbers", "calls"].includes(userSort.key!);
+    let cmp: number;
+    if (numeric) cmp = parseFloat(userText(a, userSort.key!)) - parseFloat(userText(b, userSort.key!));
+    else cmp = userText(a, userSort.key!).toLowerCase().localeCompare(userText(b, userSort.key!).toLowerCase());
+    return userSort.dir === "asc" ? cmp : -cmp;
+  });
+  const userTotalPages = Math.max(1, Math.ceil(filteredSorted.length / userPageSize));
+  const userCurPage = Math.min(userPage, userTotalPages);
+  const filtered = filteredSorted.slice((userCurPage - 1) * userPageSize, userCurPage * userPageSize);
+  const toggleUserSort = (key: string) => setUserSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
 
   const handleAddUser = async () => {
     if (!addUserForm.email.trim() || !addUserForm.password.trim()) {
@@ -594,6 +676,67 @@ const Admin = () => {
   }
 
   function renderPayments() {
+    const PAY_USER_COLUMNS: { key: string; label: string }[] = [
+      { key: "user", label: "User" }, { key: "status", label: "Status" },
+      { key: "total_charges", label: "Charges" }, { key: "balance", label: "Balance" }, { key: "stripe_customer_id", label: "Stripe" },
+    ];
+    const payUserText = (u: PaymentsUserRow, key: string): string => {
+      if (key === "user") return `${u.name || ""} ${u.email || ""}`;
+      if (key === "total_charges" || key === "balance") return String(u[key] ?? 0);
+      return u[key] || "";
+    };
+    const CALL_COLUMNS: { key: string; label: string }[] = [
+      { key: "email", label: "User" }, { key: "contact", label: "Contact" }, { key: "direction", label: "Direction" },
+      { key: "duration", label: "Duration" }, { key: "call_cost", label: "Cost" }, { key: "call_time", label: "Time" },
+    ];
+    const callText = (c: PaymentsCallRow, key: string): string => {
+      if (key === "contact") return c.contact_name || c.phone || "";
+      if (key === "call_time") return c.call_time ? new Date(c.call_time).toLocaleString() : "";
+      if (key === "call_cost") return String(c.call_cost ?? 0);
+      return c[key] || "";
+    };
+
+    let payUserRows: PaymentsUserRow[] = [];
+    let payCallRows: PaymentsCallRow[] = [];
+    let payUserTotalPages = 1, payUserCurPage = 1, payCallTotalPages = 1, payCallCurPage = 1;
+    let payUserSortedLen = 0, payCallSortedLen = 0;
+    let statusOptions: string[] = [];
+    let directionOptions: string[] = [];
+    if (payments) {
+      statusOptions = Array.from(new Set(payments.per_user.map((u) => u.status).filter(Boolean)));
+      const filteredUsers = payments.per_user.filter((u) => PAY_USER_COLUMNS.every(({ key }) => {
+        if (key === "status") return !payUserFilters.status || u.status === payUserFilters.status;
+        const q = (payUserFilters[key] || "").trim().toLowerCase();
+        return !q || payUserText(u, key).toLowerCase().includes(q);
+      }));
+      const sortedUsers = !payUserSort.key ? filteredUsers : [...filteredUsers].sort((a, b) => {
+        const numeric = ["total_charges", "balance"].includes(payUserSort.key!);
+        const cmp = numeric ? parseFloat(payUserText(a, payUserSort.key!)) - parseFloat(payUserText(b, payUserSort.key!)) : payUserText(a, payUserSort.key!).toLowerCase().localeCompare(payUserText(b, payUserSort.key!).toLowerCase());
+        return payUserSort.dir === "asc" ? cmp : -cmp;
+      });
+      payUserSortedLen = sortedUsers.length;
+      payUserTotalPages = Math.max(1, Math.ceil(sortedUsers.length / payUserPageSize));
+      payUserCurPage = Math.min(payUserPage, payUserTotalPages);
+      payUserRows = sortedUsers.slice((payUserCurPage - 1) * payUserPageSize, payUserCurPage * payUserPageSize);
+
+      directionOptions = Array.from(new Set(payments.recent_calls.map((c) => c.direction).filter(Boolean)));
+      const filteredCalls = payments.recent_calls.filter((c) => CALL_COLUMNS.every(({ key }) => {
+        if (key === "direction") return !payCallFilters.direction || c.direction === payCallFilters.direction;
+        const q = (payCallFilters[key] || "").trim().toLowerCase();
+        return !q || callText(c, key).toLowerCase().includes(q);
+      }));
+      const sortedCalls = !payCallSort.key ? filteredCalls : [...filteredCalls].sort((a, b) => {
+        const cmp = callText(a, payCallSort.key!).toLowerCase().localeCompare(callText(b, payCallSort.key!).toLowerCase());
+        return payCallSort.dir === "asc" ? cmp : -cmp;
+      });
+      payCallSortedLen = sortedCalls.length;
+      payCallTotalPages = Math.max(1, Math.ceil(sortedCalls.length / payCallPageSize));
+      payCallCurPage = Math.min(payCallPage, payCallTotalPages);
+      payCallRows = sortedCalls.slice((payCallCurPage - 1) * payCallPageSize, payCallCurPage * payCallPageSize);
+    }
+    const togglePayUserSort = (key: string) => setPayUserSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+    const togglePayCallSort = (key: string) => setPayCallSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+
     return (
       <div>
         <SectionHeader title="Payments" subtitle="Charges and recent billed calls across all users." />
@@ -603,44 +746,83 @@ const Admin = () => {
               <MiniStat label="Total Charges" value={money(payments.summary.total_charges)} />
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">By user</h3>
-            <div className="overflow-x-auto rounded-xl border border-border">
+            <div className="overflow-hidden rounded-xl border border-border">
+              <div className="overflow-x-auto">
               <table className="w-full min-w-[560px] text-sm">
-                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Charges</th><th className="px-4 py-3">Balance</th><th className="px-4 py-3">Stripe</th></tr>
+                <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    {PAY_USER_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={payUserSort.key === key} dir={payUserSort.dir} onClick={() => togglePayUserSort(key)} /></th>
+                    ))}
+                  </tr>
+                  <tr className="divide-x divide-border border-t border-border">
+                    {PAY_USER_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3 font-normal normal-case">
+                        {key === "status" ? (
+                          <TableSelectFilter value={payUserFilters.status || ""} onChange={(v) => setPayUserFilters((f) => ({ ...f, status: v }))} placeholder="Status" options={statusOptions.map((s) => ({ value: s, label: s }))} />
+                        ) : (
+                          <TableTextFilter value={payUserFilters[key] || ""} onChange={(v) => setPayUserFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                        )}
+                      </th>
+                    ))}
+                  </tr>
                 </thead>
                 <tbody>
-                  {payments.per_user.map((u, i) => (
-                    <tr key={i} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
-                      <td className="px-4 py-3">{u.status}</td>
-                      <td className="px-4 py-3 text-foreground">{money(u.total_charges)}</td>
-                      <td className="px-4 py-3 text-foreground">{money(u.balance)}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{u.stripe_customer_id || "—"}</td>
+                  {payUserRows.length === 0 ? (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No matching users.</td></tr>
+                  ) : payUserRows.map((u, i) => (
+                    <tr key={i} className="divide-x divide-border border-t border-border bg-card/30">
+                      <td className="px-4 py-3 text-center"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
+                      <td className="px-4 py-3 text-center">{u.status}</td>
+                      <td className="px-4 py-3 text-center text-foreground">{money(u.total_charges)}</td>
+                      <td className="px-4 py-3 text-center text-foreground">{money(u.balance)}</td>
+                      <td className="px-4 py-3 text-center text-xs text-muted-foreground">{u.stripe_customer_id || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
+              <TablePagination page={payUserCurPage} pageSize={payUserPageSize} totalCount={payUserSortedLen} onPageChange={setPayUserPage} onPageSizeChange={(n) => { setPayUserPageSize(n); setPayUserPage(1); }} />
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Recent billed calls</h3>
-            <div className="overflow-x-auto rounded-xl border border-border">
+            <div className="overflow-hidden rounded-xl border border-border">
+              <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
-                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Direction</th><th className="px-4 py-3">Duration</th><th className="px-4 py-3">Cost</th><th className="px-4 py-3">Time</th></tr>
+                <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    {CALL_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={payCallSort.key === key} dir={payCallSort.dir} onClick={() => togglePayCallSort(key)} /></th>
+                    ))}
+                  </tr>
+                  <tr className="divide-x divide-border border-t border-border">
+                    {CALL_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3 font-normal normal-case">
+                        {key === "direction" ? (
+                          <TableSelectFilter value={payCallFilters.direction || ""} onChange={(v) => setPayCallFilters((f) => ({ ...f, direction: v }))} placeholder="Direction" options={directionOptions.map((d) => ({ value: d, label: d }))} />
+                        ) : (
+                          <TableTextFilter value={payCallFilters[key] || ""} onChange={(v) => setPayCallFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                        )}
+                      </th>
+                    ))}
+                  </tr>
                 </thead>
                 <tbody>
-                  {payments.recent_calls.map((c, i) => (
-                    <tr key={i} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{c.email}</td>
-                      <td className="px-4 py-3">{c.contact_name || c.phone || "—"}</td>
-                      <td className="px-4 py-3 capitalize">{c.direction}</td>
-                      <td className="px-4 py-3">{c.duration || "—"}</td>
-                      <td className="px-4 py-3 text-foreground">{money(c.call_cost)}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{c.call_time ? new Date(c.call_time).toLocaleString() : "—"}</td>
+                  {payCallRows.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">{payments.recent_calls.length === 0 ? "No billed calls yet." : "No calls match your filters."}</td></tr>
+                  ) : payCallRows.map((c, i) => (
+                    <tr key={i} className="divide-x divide-border border-t border-border bg-card/30">
+                      <td className="px-4 py-3 text-center text-xs text-muted-foreground">{c.email}</td>
+                      <td className="px-4 py-3 text-center">{c.contact_name || c.phone || "—"}</td>
+                      <td className="px-4 py-3 text-center capitalize">{c.direction}</td>
+                      <td className="px-4 py-3 text-center">{c.duration || "—"}</td>
+                      <td className="px-4 py-3 text-center text-foreground">{money(c.call_cost)}</td>
+                      <td className="px-4 py-3 text-center text-xs text-muted-foreground">{c.call_time ? new Date(c.call_time).toLocaleString() : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {payments.recent_calls.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No billed calls yet.</div>}
+              </div>
+              <TablePagination page={payCallCurPage} pageSize={payCallPageSize} totalCount={payCallSortedLen} onPageChange={setPayCallPage} onPageSizeChange={(n) => { setPayCallPageSize(n); setPayCallPage(1); }} />
             </div>
           </>
         )}
@@ -752,36 +934,76 @@ const Admin = () => {
             </Button>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-border">
+          {(() => {
+            const PROMO_COLUMNS: { key: string; label: string }[] = [
+              { key: "code", label: "Code" }, { key: "amount", label: "Credit" }, { key: "redemption_count", label: "Redeemed" },
+              { key: "expiry_days", label: "Credit expiry" }, { key: "active", label: "Status" },
+            ];
+            const promoText = (c: PromoCode, key: string): string => {
+              if (key === "amount") return String(c.amount);
+              if (key === "redemption_count") return String(c.redemption_count);
+              if (key === "expiry_days") return c.expiry_days ? `${c.expiry_days} days` : "never";
+              if (key === "active") return c.active ? "Active" : "Disabled";
+              return String((c as Record<string, unknown>)[key] ?? "");
+            };
+            const filtered = promoCodes.filter((c) => PROMO_COLUMNS.every(({ key }) => {
+              if (key === "active") return !promoFilters.active || promoText(c, "active") === promoFilters.active;
+              const q = (promoFilters[key] || "").trim().toLowerCase();
+              return !q || promoText(c, key).toLowerCase().includes(q);
+            }));
+            const sorted = !promoSort.key ? filtered : [...filtered].sort((a, b) => {
+              const numeric = ["amount", "redemption_count"].includes(promoSort.key!);
+              const cmp = numeric ? parseFloat(promoText(a, promoSort.key!)) - parseFloat(promoText(b, promoSort.key!)) : promoText(a, promoSort.key!).toLowerCase().localeCompare(promoText(b, promoSort.key!).toLowerCase());
+              return promoSort.dir === "asc" ? cmp : -cmp;
+            });
+            const totalPages = Math.max(1, Math.ceil(sorted.length / promoPageSize));
+            const page = Math.min(promoPage, totalPages);
+            const rows = sorted.slice((page - 1) * promoPageSize, page * promoPageSize);
+            const toggleSort = (key: string) => setPromoSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+            return (
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">Code</th>
-                  <th className="px-4 py-3">Credit</th>
-                  <th className="px-4 py-3">Redeemed</th>
-                  <th className="px-4 py-3">Credit expiry</th>
-                  <th className="px-4 py-3">Status</th>
+              <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <tr className="divide-x divide-border">
+                  {PROMO_COLUMNS.map(({ key, label }) => (
+                    <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={promoSort.key === key} dir={promoSort.dir} onClick={() => toggleSort(key)} /></th>
+                  ))}
                   <th className="px-4 py-3">Actions</th>
+                </tr>
+                <tr className="divide-x divide-border border-t border-border">
+                  {PROMO_COLUMNS.map(({ key, label }) => (
+                    <th key={key} className="px-4 py-3 font-normal normal-case">
+                      {key === "active" ? (
+                        <TableSelectFilter value={promoFilters.active || ""} onChange={(v) => setPromoFilters((f) => ({ ...f, active: v }))} placeholder="Status" options={[{ value: "Active", label: "Active" }, { value: "Disabled", label: "Disabled" }]} />
+                      ) : (
+                        <TableTextFilter value={promoFilters[key] || ""} onChange={(v) => setPromoFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                      )}
+                    </th>
+                  ))}
+                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {promoCodes.map((c) => (
-                  <tr key={c.id} className="border-t border-border bg-card/30">
-                    <td className="px-4 py-3 font-mono font-medium text-foreground">{c.code}</td>
-                    <td className="px-4 py-3 text-foreground">${Number(c.amount).toFixed(2)}</td>
-                    <td className="px-4 py-3 text-foreground">
+                {rows.length === 0 ? (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">{promoCodes.length === 0 ? "No promo codes yet." : "No codes match your filters."}</td></tr>
+                ) : rows.map((c) => (
+                  <tr key={c.id} className="divide-x divide-border border-t border-border bg-card/30">
+                    <td className="px-4 py-3 text-center font-mono font-medium text-foreground">{c.code}</td>
+                    <td className="px-4 py-3 text-center text-foreground">${Number(c.amount).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-center text-foreground">
                       {c.redemption_count}{c.max_redemptions ? ` / ${c.max_redemptions}` : ""}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">
+                    <td className="px-4 py-3 text-center text-muted-foreground">
                       {c.expiry_days ? `${c.expiry_days} days` : "never"}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       <Badge variant={c.active ? "default" : "secondary"}>
                         {c.active ? "Active" : "Disabled"}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-2">
                         <Button size="sm" variant="outline" onClick={() => toggleCode(c)}>
                           {c.active ? "Disable" : "Enable"}
                         </Button>
@@ -798,10 +1020,11 @@ const Admin = () => {
                 ))}
               </tbody>
             </table>
-            {promoCodes.length === 0 && (
-              <div className="py-8 text-center text-sm text-muted-foreground">No promo codes yet.</div>
-            )}
+            </div>
+            <TablePagination page={page} pageSize={promoPageSize} totalCount={sorted.length} onPageChange={setPromoPage} onPageSizeChange={(n) => { setPromoPageSize(n); setPromoPage(1); }} />
           </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -856,37 +1079,76 @@ const Admin = () => {
           <MiniStat label="Pending" value={String(referrals.length - verifiedCount)} />
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-border">
+        {(() => {
+          const REFERRAL_COLUMNS: { key: string; label: string }[] = [
+            { key: "referrer_email", label: "Referrer" }, { key: "referee_email", label: "Referee" }, { key: "referral_code", label: "Code" },
+            { key: "status", label: "Status" }, { key: "created_at", label: "Invited" }, { key: "verified_at", label: "Verified" },
+          ];
+          const refText = (r: ReferralRow, key: string): string => {
+            if (key === "status") return r.status === "verified" ? "Verified" : "Pending";
+            if (key === "created_at") return r.created_at ? new Date(r.created_at).toLocaleDateString() : "";
+            if (key === "verified_at") return r.verified_at ? new Date(r.verified_at).toLocaleDateString() : "";
+            return String((r as Record<string, unknown>)[key] ?? "");
+          };
+          const filtered = referrals.filter((r) => REFERRAL_COLUMNS.every(({ key }) => {
+            if (key === "status") return !referralFilters.status || refText(r, "status") === referralFilters.status;
+            const q = (referralFilters[key] || "").trim().toLowerCase();
+            return !q || refText(r, key).toLowerCase().includes(q);
+          }));
+          const sorted = !referralSort.key ? filtered : [...filtered].sort((a, b) => {
+            const cmp = refText(a, referralSort.key!).toLowerCase().localeCompare(refText(b, referralSort.key!).toLowerCase());
+            return referralSort.dir === "asc" ? cmp : -cmp;
+          });
+          const totalPages = Math.max(1, Math.ceil(sorted.length / referralPageSize));
+          const page = Math.min(referralPage, totalPages);
+          const rows = sorted.slice((page - 1) * referralPageSize, page * referralPageSize);
+          const toggleSort = (key: string) => setReferralSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+          return (
+        <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3">Referrer</th>
-                <th className="px-4 py-3">Referee</th>
-                <th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Invited</th>
-                <th className="px-4 py-3">Verified</th>
+            <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <tr className="divide-x divide-border">
+                {REFERRAL_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={referralSort.key === key} dir={referralSort.dir} onClick={() => toggleSort(key)} /></th>
+                ))}
+              </tr>
+              <tr className="divide-x divide-border border-t border-border">
+                {REFERRAL_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "status" ? (
+                      <TableSelectFilter value={referralFilters.status || ""} onChange={(v) => setReferralFilters((f) => ({ ...f, status: v }))} placeholder="Status" options={[{ value: "Verified", label: "Verified" }, { value: "Pending", label: "Pending" }]} />
+                    ) : (
+                      <TableTextFilter value={referralFilters[key] || ""} onChange={(v) => setReferralFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {referrals.map((r) => (
-                <tr key={r.id} className="border-t border-border bg-card/30">
-                  <td className="px-4 py-3 text-foreground">{r.referrer_email || "—"}</td>
-                  <td className="px-4 py-3 text-foreground">{r.referee_email || "—"}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{r.referral_code}</td>
-                  <td className="px-4 py-3">
+              {rows.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">{referrals.length === 0 ? "No referrals yet." : "No referrals match your filters."}</td></tr>
+              ) : rows.map((r) => (
+                <tr key={r.id} className="divide-x divide-border border-t border-border bg-card/30">
+                  <td className="px-4 py-3 text-center text-foreground">{r.referrer_email || "—"}</td>
+                  <td className="px-4 py-3 text-center text-foreground">{r.referee_email || "—"}</td>
+                  <td className="px-4 py-3 text-center font-mono text-xs text-muted-foreground">{r.referral_code}</td>
+                  <td className="px-4 py-3 text-center">
                     <Badge variant={r.status === "verified" ? "default" : "secondary"}>
                       {r.status === "verified" ? "Verified" : "Pending"}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{r.verified_at ? new Date(r.verified_at).toLocaleDateString() : "—"}</td>
+                  <td className="px-4 py-3 text-center text-muted-foreground">{r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"}</td>
+                  <td className="px-4 py-3 text-center text-muted-foreground">{r.verified_at ? new Date(r.verified_at).toLocaleDateString() : "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {referrals.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No referrals yet.</div>}
+          </div>
+          <TablePagination page={page} pageSize={referralPageSize} totalCount={sorted.length} onPageChange={setReferralPage} onPageSizeChange={(n) => { setReferralPageSize(n); setReferralPage(1); }} />
         </div>
+          );
+        })()}
       </div>
     );
   }
@@ -922,28 +1184,62 @@ const Admin = () => {
   }
 
   function renderAgentReport() {
+    const AR_COLUMNS: { key: string; label: string }[] = [
+      { key: "name", label: "Agent" }, { key: "owner_email", label: "Owner" }, { key: "total_calls", label: "Total Calls" },
+      { key: "completed", label: "Completed" }, { key: "qualified", label: "Qualified" },
+    ];
+    const arText = (a: AgentReportRow, key: string): string => String((a as unknown as Record<string, unknown>)[key] ?? "");
+    const filtered = agentReport.filter((a) => AR_COLUMNS.every(({ key }) => {
+      const q = (agentReportFilters[key] || "").trim().toLowerCase();
+      return !q || arText(a, key).toLowerCase().includes(q);
+    }));
+    const sorted = !agentReportSort.key ? filtered : [...filtered].sort((a, b) => {
+      const numeric = ["total_calls", "completed", "qualified"].includes(agentReportSort.key!);
+      const cmp = numeric ? parseFloat(arText(a, agentReportSort.key!) || "0") - parseFloat(arText(b, agentReportSort.key!) || "0") : arText(a, agentReportSort.key!).toLowerCase().localeCompare(arText(b, agentReportSort.key!).toLowerCase());
+      return agentReportSort.dir === "asc" ? cmp : -cmp;
+    });
+    const totalPages = Math.max(1, Math.ceil(sorted.length / agentReportPageSize));
+    const page = Math.min(agentReportPage, totalPages);
+    const rows = sorted.slice((page - 1) * agentReportPageSize, page * agentReportPageSize);
+    const toggleSort = (key: string) => setAgentReportSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+
     return (
       <div>
         <SectionHeader title="Agent Report" subtitle="Every agent's call performance across the platform." />
         {!agentReportLoaded ? <ReportLoading /> : (
-          <div className="overflow-x-auto rounded-xl border border-border">
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr><th className="px-4 py-3">Agent</th><th className="px-4 py-3">Owner</th><th className="px-4 py-3">Total Calls</th><th className="px-4 py-3">Completed</th><th className="px-4 py-3">Qualified</th></tr>
+              <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <tr className="divide-x divide-border">
+                  {AR_COLUMNS.map(({ key, label }) => (
+                    <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={agentReportSort.key === key} dir={agentReportSort.dir} onClick={() => toggleSort(key)} /></th>
+                  ))}
+                </tr>
+                <tr className="divide-x divide-border border-t border-border">
+                  {AR_COLUMNS.map(({ key, label }) => (
+                    <th key={key} className="px-4 py-3 font-normal normal-case">
+                      <TableTextFilter value={agentReportFilters[key] || ""} onChange={(v) => setAgentReportFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                    </th>
+                  ))}
+                </tr>
               </thead>
               <tbody>
-                {agentReport.map((a) => (
-                  <tr key={a.id} className="border-t border-border bg-card/30">
-                    <td className="px-4 py-3 font-medium text-foreground">{a.name}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{a.owner_email}</td>
-                    <td className="px-4 py-3 text-foreground">{a.total_calls}</td>
-                    <td className="px-4 py-3">{a.completed}</td>
-                    <td className="px-4 py-3 font-medium text-success">{a.qualified}</td>
+                {rows.length === 0 ? (
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">{agentReport.length === 0 ? "No agents yet." : "No agents match your filters."}</td></tr>
+                ) : rows.map((a) => (
+                  <tr key={a.id} className="divide-x divide-border border-t border-border bg-card/30">
+                    <td className="px-4 py-3 text-center font-medium text-foreground">{a.name}</td>
+                    <td className="px-4 py-3 text-center text-xs text-muted-foreground">{a.owner_email}</td>
+                    <td className="px-4 py-3 text-center text-foreground">{a.total_calls}</td>
+                    <td className="px-4 py-3 text-center">{a.completed}</td>
+                    <td className="px-4 py-3 text-center font-medium text-success">{a.qualified}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {agentReport.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No agents yet.</div>}
+            </div>
+            <TablePagination page={page} pageSize={agentReportPageSize} totalCount={sorted.length} onPageChange={setAgentReportPage} onPageSizeChange={(n) => { setAgentReportPageSize(n); setAgentReportPage(1); }} />
           </div>
         )}
       </div>
@@ -976,22 +1272,62 @@ const Admin = () => {
               </div>
             </div>
             <h3 className="mb-2 mt-6 text-sm font-semibold text-foreground">Top users by activity</h3>
-            <div className="overflow-x-auto rounded-xl border border-border">
+            {(() => {
+              const UR_COLUMNS: { key: string; label: string }[] = [
+                { key: "user", label: "User" }, { key: "conversations", label: "Conversations" }, { key: "agents", label: "Agents" },
+              ];
+              const urText = (u: UserReportTopUser, key: string): string => {
+                if (key === "user") return `${u.name || ""} ${u.email || ""}`;
+                return String(u[key] ?? "");
+              };
+              const filtered = userReport.top_users.filter((u) => UR_COLUMNS.every(({ key }) => {
+                const q = (userReportFilters[key] || "").trim().toLowerCase();
+                return !q || urText(u, key).toLowerCase().includes(q);
+              }));
+              const sorted = !userReportSort.key ? filtered : [...filtered].sort((a, b) => {
+                const numeric = ["conversations", "agents"].includes(userReportSort.key!);
+                const cmp = numeric ? parseFloat(urText(a, userReportSort.key!) || "0") - parseFloat(urText(b, userReportSort.key!) || "0") : urText(a, userReportSort.key!).toLowerCase().localeCompare(urText(b, userReportSort.key!).toLowerCase());
+                return userReportSort.dir === "asc" ? cmp : -cmp;
+              });
+              const totalPages = Math.max(1, Math.ceil(sorted.length / userReportPageSize));
+              const page = Math.min(userReportPage, totalPages);
+              const rows = sorted.slice((page - 1) * userReportPageSize, page * userReportPageSize);
+              const toggleSort = (key: string) => setUserReportSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+              return (
+            <div className="overflow-hidden rounded-xl border border-border">
+              <div className="overflow-x-auto">
               <table className="w-full min-w-[420px] text-sm">
-                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="px-4 py-3">User</th><th className="px-4 py-3">Conversations</th><th className="px-4 py-3">Agents</th></tr>
+                <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    {UR_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3"><SortableColumnHeader label={label} active={userReportSort.key === key} dir={userReportSort.dir} onClick={() => toggleSort(key)} /></th>
+                    ))}
+                  </tr>
+                  <tr className="divide-x divide-border border-t border-border">
+                    {UR_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3 font-normal normal-case">
+                        <TableTextFilter value={userReportFilters[key] || ""} onChange={(v) => setUserReportFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                      </th>
+                    ))}
+                  </tr>
                 </thead>
                 <tbody>
-                  {userReport.top_users.map((u, i) => (
-                    <tr key={i} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
-                      <td className="px-4 py-3 text-foreground">{u.conversations}</td>
-                      <td className="px-4 py-3">{u.agents}</td>
+                  {rows.length === 0 ? (
+                    <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">No users match your filters.</td></tr>
+                  ) : rows.map((u, i: number) => (
+                    <tr key={i} className="divide-x divide-border border-t border-border bg-card/30">
+                      <td className="px-4 py-3 text-center"><div className="text-foreground">{u.name || "—"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
+                      <td className="px-4 py-3 text-center text-foreground">{u.conversations}</td>
+                      <td className="px-4 py-3 text-center">{u.agents}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
+              <TablePagination page={page} pageSize={userReportPageSize} totalCount={sorted.length} onPageChange={setUserReportPage} onPageSizeChange={(n) => { setUserReportPageSize(n); setUserReportPage(1); }} />
             </div>
+              );
+            })()}
           </>
         )}
       </div>
@@ -1049,62 +1385,103 @@ const Admin = () => {
   }
 
   function renderAgents() {
-    const fa = agents.filter((a) =>
-      a.name.toLowerCase().includes(agentSearch.toLowerCase()) ||
-      (a.owner_email || "").toLowerCase().includes(agentSearch.toLowerCase())
-    );
+    const AGENT_COLUMNS: { key: string; label: string }[] = [
+      { key: "name", label: "Agent" },
+      { key: "owner", label: "Owner" },
+      { key: "category", label: "Industry" },
+      { key: "voice", label: "Voice" },
+      { key: "status", label: "Status" },
+      { key: "synced", label: "VAPI" },
+      { key: "created_at", label: "Created" },
+    ];
+    const agentText = (a: AdminAgent, key: string): string => {
+      if (key === "owner") return `${a.owner_name || ""} ${a.owner_email || ""}`;
+      if (key === "synced") return a.synced ? "Synced" : "Not synced";
+      if (key === "created_at") return a.created_at ? new Date(a.created_at).toLocaleDateString() : "";
+      return String((a as Record<string, unknown>)[key] ?? "");
+    };
+    const categoryOptions = Array.from(new Set(agents.map((a) => a.category).filter(Boolean))) as string[];
+    const filtered = agents.filter((a) => AGENT_COLUMNS.every(({ key }) => {
+      if (key === "status" || key === "category" || key === "synced") {
+        const v = agentFilters[key];
+        if (!v) return true;
+        if (key === "synced") return (a.synced ? "Synced" : "Not synced") === v;
+        return (a as Record<string, unknown>)[key] === v;
+      }
+      const q = (agentFilters[key] || "").trim().toLowerCase();
+      return !q || agentText(a, key).toLowerCase().includes(q);
+    }));
+    const sorted = !agentSort.key ? filtered : [...filtered].sort((x, y) => {
+      const av = agentText(x, agentSort.key!).toLowerCase();
+      const bv = agentText(y, agentSort.key!).toLowerCase();
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return agentSort.dir === "asc" ? cmp : -cmp;
+    });
+    const totalPages = Math.max(1, Math.ceil(sorted.length / agentPageSize));
+    const page = Math.min(agentPage, totalPages);
+    const fa = sorted.slice((page - 1) * agentPageSize, page * agentPageSize);
+    const toggleSort = (key: string) => setAgentSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
+
     return (
       <div>
         <SectionHeader title="Agents" subtitle="Every AI agent created across all users." />
-        <div className="relative mb-4 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            placeholder="Search by agent name or owner email…"
-            value={agentSearch}
-            onChange={(e) => setAgentSearch(e.target.value)}
-            className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
         {!agentsLoaded ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading agents…
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full min-w-[760px] text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">Agent</th>
-                  <th className="px-4 py-3">Owner</th>
-                  <th className="px-4 py-3">Industry</th>
-                  <th className="px-4 py-3">Voice</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">VAPI</th>
-                  <th className="px-4 py-3">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fa.map((a) => (
-                  <tr key={a.id} className="border-t border-border bg-card/30">
-                    <td className="px-4 py-3 font-medium text-foreground">{a.name}</td>
-                    <td className="px-4 py-3">
-                      <div className="text-foreground">{a.owner_name || "—"}</div>
-                      <div className="text-xs text-muted-foreground">{a.owner_email}</div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{a.category || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{a.voice || "—"}</td>
-                    <td className="px-4 py-3"><Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge></td>
-                    <td className="px-4 py-3">
-                      {a.synced
-                        ? <span className="text-xs font-medium text-success">Synced</span>
-                        : <span className="text-xs text-muted-foreground">Not synced</span>}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    {AGENT_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3">
+                        <SortableColumnHeader label={label} active={agentSort.key === key} dir={agentSort.dir} onClick={() => toggleSort(key)} />
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {fa.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No agents found.</div>}
+                  <tr className="divide-x divide-border border-t border-border">
+                    {AGENT_COLUMNS.map(({ key, label }) => (
+                      <th key={key} className="px-4 py-3 font-normal normal-case">
+                        {key === "category" ? (
+                          <TableSelectFilter value={agentFilters.category || ""} onChange={(v) => setAgentFilters((f) => ({ ...f, category: v }))} placeholder="Industry" options={categoryOptions.map((c) => ({ value: c, label: c }))} />
+                        ) : key === "status" ? (
+                          <TableSelectFilter value={agentFilters.status || ""} onChange={(v) => setAgentFilters((f) => ({ ...f, status: v }))} placeholder="Status" options={[{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }]} />
+                        ) : key === "synced" ? (
+                          <TableSelectFilter value={agentFilters.synced || ""} onChange={(v) => setAgentFilters((f) => ({ ...f, synced: v }))} placeholder="VAPI" options={[{ value: "Synced", label: "Synced" }, { value: "Not synced", label: "Not synced" }]} />
+                        ) : (
+                          <TableTextFilter value={agentFilters[key] || ""} onChange={(v) => setAgentFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                        )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fa.length === 0 ? (
+                    <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">{agents.length === 0 ? "No agents found." : "No agents match your filters."}</td></tr>
+                  ) : fa.map((a) => (
+                    <tr key={a.id} className="divide-x divide-border border-t border-border bg-card/30">
+                      <td className="px-4 py-3 text-center font-medium text-foreground">{a.name}</td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="text-foreground">{a.owner_name || "—"}</div>
+                        <div className="text-xs text-muted-foreground">{a.owner_email}</div>
+                      </td>
+                      <td className="px-4 py-3 text-center text-muted-foreground">{a.category || "—"}</td>
+                      <td className="px-4 py-3 text-center text-muted-foreground">{a.voice || "—"}</td>
+                      <td className="px-4 py-3 text-center"><Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge></td>
+                      <td className="px-4 py-3 text-center">
+                        {a.synced
+                          ? <span className="text-xs font-medium text-success">Synced</span>
+                          : <span className="text-xs text-muted-foreground">Not synced</span>}
+                      </td>
+                      <td className="px-4 py-3 text-center text-muted-foreground">{a.created_at ? new Date(a.created_at).toLocaleDateString() : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination page={page} pageSize={agentPageSize} totalCount={sorted.length} onPageChange={setAgentPage} onPageSizeChange={(n) => { setAgentPageSize(n); setAgentPage(1); }} />
           </div>
         )}
       </div>
@@ -1112,7 +1489,6 @@ const Admin = () => {
   }
 
   function renderNumbers() {
-    const q = phoneSearch.toLowerCase();
     const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString() : "—");
     const daysMeta = (dl: number | null) => {
       const expired = dl != null && dl < 0;
@@ -1129,79 +1505,118 @@ const Admin = () => {
       if (!groupMap.has(key)) groupMap.set(key, { owner_email: n.owner_email, owner_name: n.owner_name, numbers: [] });
       groupMap.get(key)!.numbers.push(n);
     }
-    const groups = Array.from(groupMap.values()).filter((g) =>
-      (g.owner_email || "").toLowerCase().includes(q) ||
-      (g.owner_name || "").toLowerCase().includes(q) ||
-      g.numbers.some((n) => (n.number || "").toLowerCase().includes(q))
-    );
+    const allGroups = Array.from(groupMap.values()).map((g) => {
+      const totalMonthly = g.numbers.reduce((s, n) => s + (n.monthly_cost ?? 0), 0);
+      const withDays = g.numbers.filter((n) => n.days_left != null);
+      const soonest = withDays.length
+        ? withDays.reduce((a, b) => ((a.days_left ?? 0) <= (b.days_left ?? 0) ? a : b))
+        : null;
+      return { ...g, count: g.numbers.length, totalMonthly, soonest };
+    });
+
+    const q = (numberFilters.owner || "").trim().toLowerCase();
+    const countQ = (numberFilters.count || "").trim().toLowerCase();
+    const totalMonthlyQ = (numberFilters.totalMonthly || "").trim().toLowerCase();
+    const soonestQ = (numberFilters.soonest || "").trim().toLowerCase();
+    const filtered = allGroups.filter((g) => {
+      if (q && !((g.owner_email || "").toLowerCase().includes(q) || (g.owner_name || "").toLowerCase().includes(q))) return false;
+      if (countQ && !String(g.count).includes(countQ)) return false;
+      if (totalMonthlyQ) {
+        const label = g.totalMonthly > 0 ? `$${g.totalMonthly.toFixed(2)}` : "Free";
+        if (!label.toLowerCase().includes(totalMonthlyQ)) return false;
+      }
+      if (soonestQ) {
+        const dl = g.soonest?.days_left ?? null;
+        const label = dl == null ? "—" : dl < 0 ? "expired" : `${dl} day${dl === 1 ? "" : "s"} left`;
+        if (!label.toLowerCase().includes(soonestQ)) return false;
+      }
+      return true;
+    });
+    const sortKey = numberSort.key;
+    const sorted = !sortKey ? filtered : [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "count") cmp = a.count - b.count;
+      else if (sortKey === "totalMonthly") cmp = a.totalMonthly - b.totalMonthly;
+      else if (sortKey === "soonest") cmp = (a.soonest?.days_left ?? Infinity) - (b.soonest?.days_left ?? Infinity);
+      else cmp = (a.owner_name || a.owner_email || "").toLowerCase().localeCompare((b.owner_name || b.owner_email || "").toLowerCase());
+      return numberSort.dir === "asc" ? cmp : -cmp;
+    });
+    const totalPages = Math.max(1, Math.ceil(sorted.length / numberPageSize));
+    const page = Math.min(numberPage, totalPages);
+    const groups = sorted.slice((page - 1) * numberPageSize, page * numberPageSize);
+    const toggleSort = (key: string) => setNumberSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
 
     const activeGroup = numbersModalOwner ? groupMap.get(numbersModalOwner) ?? null : null;
 
     return (
       <div>
         <SectionHeader title="Numbers" subtitle="How many numbers each user owns. Click a user to see all their numbers and expiry dates." />
-        <div className="relative mb-4 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            placeholder="Search by number or owner email…"
-            value={phoneSearch}
-            onChange={(e) => setPhoneSearch(e.target.value)}
-            className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
         {!phoneNumbersLoaded ? (
           <ReportLoading />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full min-w-[600px] text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">Owner</th>
-                  <th className="px-4 py-3 text-center">Numbers</th>
-                  <th className="px-4 py-3">Total Monthly</th>
-                  <th className="px-4 py-3">Soonest Expiry</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((g) => {
-                  const count = g.numbers.length;
-                  const totalMonthly = g.numbers.reduce((s, n) => s + (n.monthly_cost ?? 0), 0);
-                  const withDays = g.numbers.filter((n) => n.days_left != null);
-                  const soonest = withDays.length
-                    ? withDays.reduce((a, b) => ((a.days_left ?? 0) <= (b.days_left ?? 0) ? a : b))
-                    : null;
-                  const dm = daysMeta(soonest?.days_left ?? null);
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px] text-sm">
+                <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    <th className="px-4 py-3"><SortableColumnHeader label="Owner" active={numberSort.key === "owner"} dir={numberSort.dir} onClick={() => toggleSort("owner")} /></th>
+                    <th className="px-4 py-3"><SortableColumnHeader label="Numbers" active={numberSort.key === "count"} dir={numberSort.dir} onClick={() => toggleSort("count")} /></th>
+                    <th className="px-4 py-3"><SortableColumnHeader label="Total Monthly" active={numberSort.key === "totalMonthly"} dir={numberSort.dir} onClick={() => toggleSort("totalMonthly")} /></th>
+                    <th className="px-4 py-3"><SortableColumnHeader label="Soonest Expiry" active={numberSort.key === "soonest"} dir={numberSort.dir} onClick={() => toggleSort("soonest")} /></th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                  <tr className="divide-x divide-border border-t border-border">
+                    <th className="px-4 py-3 font-normal normal-case">
+                      <TableTextFilter value={numberFilters.owner || ""} onChange={(v) => setNumberFilters((f) => ({ ...f, owner: v }))} placeholder="Owner" />
+                    </th>
+                    <th className="px-4 py-3 font-normal normal-case">
+                      <TableTextFilter value={numberFilters.count || ""} onChange={(v) => setNumberFilters((f) => ({ ...f, count: v }))} placeholder="Numbers" />
+                    </th>
+                    <th className="px-4 py-3 font-normal normal-case">
+                      <TableTextFilter value={numberFilters.totalMonthly || ""} onChange={(v) => setNumberFilters((f) => ({ ...f, totalMonthly: v }))} placeholder="Total Monthly" />
+                    </th>
+                    <th className="px-4 py-3 font-normal normal-case">
+                      <TableTextFilter value={numberFilters.soonest || ""} onChange={(v) => setNumberFilters((f) => ({ ...f, soonest: v }))} placeholder="Soonest Expiry" />
+                    </th>
+                    <th className="px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.length === 0 ? (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">{allGroups.length === 0 ? "No numbers found." : "No owners match your filter."}</td></tr>
+                  ) : groups.map((g) => {
+                  const dm = daysMeta(g.soonest?.days_left ?? null);
                   const key = g.owner_email || g.owner_name;
                   return (
                     <tr
                       key={key}
                       onClick={() => setNumbersModalOwner(key)}
-                      className="cursor-pointer border-t border-border bg-card/30 hover:bg-muted/30"
+                      className="cursor-pointer divide-x divide-border border-t border-border bg-card/30 hover:bg-muted/30"
                     >
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-center">
                         <div className="font-medium text-foreground">{g.owner_name || "—"}</div>
                         <div className="text-xs text-muted-foreground">{g.owner_email}</div>
                       </td>
-                      <td className="px-4 py-3 text-center text-lg font-bold text-foreground">{count}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{totalMonthly > 0 ? `$${totalMonthly.toFixed(2)}` : "Free"}</td>
-                      <td className="px-4 py-3">
-                        {soonest ? (
+                      <td className="px-4 py-3 text-center text-lg font-bold text-foreground">{g.count}</td>
+                      <td className="px-4 py-3 text-center text-muted-foreground">{g.totalMonthly > 0 ? `$${g.totalMonthly.toFixed(2)}` : "Free"}</td>
+                      <td className="px-4 py-3 text-center">
+                        {g.soonest ? (
                           <>
-                            <div className="text-foreground">{fmt(soonest.expires_at)}</div>
+                            <div className="text-foreground">{fmt(g.soonest.expires_at)}</div>
                             {dm.label && <div className={`text-xs ${dm.cls}`}>{dm.label}</div>}
                           </>
                         ) : "—"}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-center">
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
                       </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-            {groups.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No numbers found.</div>}
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination page={page} pageSize={numberPageSize} totalCount={sorted.length} onPageChange={setNumberPage} onPageSizeChange={(n) => { setNumberPageSize(n); setNumberPage(1); }} />
           </div>
         )}
 
@@ -1310,50 +1725,60 @@ const Admin = () => {
           </DialogContent>
         </Dialog>
 
-        <div className="relative mb-4 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            placeholder="Search users by email, name or company..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-x-auto">
           <table className="w-full min-w-[780px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3">User</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Balance</th>
-                <th className="px-4 py-3">Rate</th>
-                <th className="px-4 py-3">Numbers</th>
-                <th className="px-4 py-3">Calls</th>
+            <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <tr className="divide-x divide-border">
+                {USER_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3">
+                    <SortableColumnHeader label={label} active={userSort.key === key} dir={userSort.dir} onClick={() => toggleUserSort(key)} />
+                  </th>
+                ))}
                 <th className="px-4 py-3">Actions</th>
+              </tr>
+              <tr className="divide-x divide-border border-t border-border">
+                {USER_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "status" ? (
+                      <TableSelectFilter
+                        value={userFilters.status || ""}
+                        onChange={(v) => setUserFilters((f) => ({ ...f, status: v }))}
+                        placeholder="Status"
+                        options={[{ value: "active", label: "Active" }, { value: "Disabled", label: "Disabled" }]}
+                      />
+                    ) : (
+                      <TableTextFilter value={userFilters[key] || ""} onChange={(v) => setUserFilters((f) => ({ ...f, [key]: v }))} placeholder={label} />
+                    )}
+                  </th>
+                ))}
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
+              {filtered.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">{users.length === 0 ? "No users found" : "No users match your filters"}</td></tr>
+              )}
               {filtered.map(u => (
                 <Fragment key={u.id}>
-                  <tr className="border-t border-border bg-card/30 hover:bg-muted/30 cursor-pointer"
+                  <tr className="divide-x divide-border border-t border-border bg-card/30 hover:bg-muted/30 cursor-pointer"
                     onClick={() => setSelectedUser(selectedUser === u.id ? null : u.id)}>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       <div className="font-medium text-foreground">{u.full_name || " "}</div>
                       <div className="text-xs text-muted-foreground">{u.email}</div>
                       {u.company_name && <div className="text-xs text-muted-foreground">{u.company_name}</div>}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       <Badge variant={u.is_active ? (u.status === "active" ? "default" : "secondary") : "destructive"}>
                         {u.is_active ? u.status : "Disabled"}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-foreground">${(u.balance ?? 0).toFixed(2)}</td>
-                    <td className="px-4 py-3 text-foreground">${(u.rate_per_minute ?? 0.35).toFixed(2)}/min</td>
-                    <td className="px-4 py-3 text-foreground">{u.phone_numbers ?? 0}</td>
-                    <td className="px-4 py-3 text-foreground">{u.total_conversations}</td>
-                    <td className="px-4 py-3">
-                      <ChevronRight className={`h-4 w-4 text-muted-foreground transition ${selectedUser === u.id ? "rotate-90" : ""}`} />
+                    <td className="px-4 py-3 text-center text-foreground">${(u.balance ?? 0).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-center text-foreground">${(u.rate_per_minute ?? 0.35).toFixed(2)}/min</td>
+                    <td className="px-4 py-3 text-center text-foreground">{u.phone_numbers ?? 0}</td>
+                    <td className="px-4 py-3 text-center text-foreground">{u.total_conversations}</td>
+                    <td className="px-4 py-3 text-center">
+                      <ChevronRight className={`h-4 w-4 mx-auto text-muted-foreground transition ${selectedUser === u.id ? "rotate-90" : ""}`} />
                     </td>
                   </tr>
 
@@ -1500,9 +1925,8 @@ const Admin = () => {
               ))}
             </tbody>
           </table>
-          {filtered.length === 0 && (
-            <div className="py-8 text-center text-sm text-muted-foreground">No users found</div>
-          )}
+          </div>
+          <TablePagination page={userCurPage} pageSize={userPageSize} totalCount={filteredSorted.length} onPageChange={setUserPage} onPageSizeChange={(n) => { setUserPageSize(n); setUserPage(1); }} />
         </div>
 
         <AlertDialog open={!!pendingDisable} onOpenChange={(o) => { if (!o) setPendingDisable(null); }}>

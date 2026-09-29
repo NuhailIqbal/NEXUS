@@ -140,7 +140,7 @@ export const api = {
   getConversation: (id: string) => get(`/conversations/${id}`),
   getConversationTranscript: (id: string) => get(`/conversations/${id}/transcript`),
   getConversationRecordingUrl: (id: string) => get(`/conversations/${id}/recording-url`),
-  getConversationStats: () => get("/conversations/stats"),
+  getConversationStats: (params?: string) => get(`/conversations/stats${params ? `?${params}` : ""}`),
   syncConversationsFromVapi: () => post("/conversations/sync-from-vapi"),
   deleteConversation: (id: string) => del(`/conversations/${id}`),
 

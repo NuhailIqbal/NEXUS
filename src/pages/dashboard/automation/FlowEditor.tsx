@@ -57,6 +57,14 @@ import {
 import { NodeEditPanel } from "@/components/automation/NodeEditPanel";
 import { newId } from "@/hooks/use-local-collection";
 import { api } from "@/services/api";
+import {
+  SortableColumnHeader,
+  TableTextFilter,
+  TableSelectFilter,
+  TableDateFilter,
+  TablePagination,
+  TABLE_PAGE_SIZE_OPTIONS,
+} from "@/components/dashboard/table/TableControls";
 
 type ServerVersion = { id: string; version_number: number; created_at: string };
 
@@ -491,7 +499,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       </Dialog>
 
       {/* Tabs */}
-      <div className="flex items-center gap-6 overflow-x-auto border-b border-border bg-card px-4 sm:px-5">
+      <div className="flex items-center gap-6 overflow-x-auto overflow-y-hidden border-b border-border bg-card px-4 sm:px-5">
         {([["design", "Design"], ["statistics", "Runs"]] as const).map(([t, label]) => (
           <button
             key={t}
@@ -501,7 +509,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             }`}
           >
             {label}
-            {tab === t && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
+            {tab === t && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" />}
           </button>
         ))}
       </div>
@@ -654,10 +662,18 @@ function RunStatusBadge({ status }: { status: FlowRun["status"] }) {
   );
 }
 
+type RunSortKey = "status" | "contact" | "created_at" | "duration";
+
 function RunsTab({ flowId }: { flowId: string }) {
   const [runs, setRuns] = useState<FlowRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  const [sort, setSort] = useState<{ key: RunSortKey | null; dir: "asc" | "desc" }>({ key: "created_at", dir: "desc" });
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [startedDate, setStartedDate] = useState<Date | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE_OPTIONS[0]);
 
   const fetchRuns = useCallback(async () => {
     if (!flowId || flowId === "new") { setLoading(false); return; }
@@ -674,6 +690,73 @@ function RunsTab({ flowId }: { flowId: string }) {
     const t = setInterval(fetchRuns, 15000);
     return () => clearInterval(t);
   }, [fetchRuns]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, startedDate, pageSize]);
+
+  const toggleSort = (key: RunSortKey) => {
+    setSort((s) => {
+      if (s.key !== key) return { key, dir: "asc" };
+      if (s.dir === "asc") return { key, dir: "desc" };
+      if (s.dir === "desc") return { key: null, dir: "asc" };
+      return { key, dir: "asc" };
+    });
+  };
+
+  const contactOf = (r: FlowRun) => r.input_data?.contact_name || r.input_data?.phone || "—";
+
+  const statusOptions = useMemo(
+    () => Array.from(new Set(runs.map((r) => r.status).filter(Boolean))).map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) })),
+    [runs]
+  );
+
+  const filteredRuns = useMemo(() => {
+    let rows = runs.filter((r) => {
+      if (filters.status && r.status !== filters.status) return false;
+      if (filters.contact && !contactOf(r).toLowerCase().includes(filters.contact.toLowerCase())) return false;
+      if (startedDate) {
+        const d = new Date(r.created_at);
+        if (
+          d.getFullYear() !== startedDate.getFullYear() ||
+          d.getMonth() !== startedDate.getMonth() ||
+          d.getDate() !== startedDate.getDate()
+        )
+          return false;
+      }
+      return true;
+    });
+
+    if (sort.key) {
+      const key = sort.key;
+      rows = [...rows].sort((a, b) => {
+        let av: string | number = "";
+        let bv: string | number = "";
+        if (key === "created_at") {
+          av = new Date(a.created_at).getTime();
+          bv = new Date(b.created_at).getTime();
+        } else if (key === "contact") {
+          av = contactOf(a).toLowerCase();
+          bv = contactOf(b).toLowerCase();
+        } else if (key === "duration") {
+          av = a.completed_at ? new Date(a.completed_at).getTime() - new Date(a.created_at).getTime() : -1;
+          bv = b.completed_at ? new Date(b.completed_at).getTime() - new Date(b.created_at).getTime() : -1;
+        } else {
+          av = a.status;
+          bv = b.status;
+        }
+        if (av < bv) return sort.dir === "asc" ? -1 : 1;
+        if (av > bv) return sort.dir === "asc" ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return rows;
+  }, [runs, filters, startedDate, sort]);
+
+  const runTotalPages = Math.max(1, Math.ceil(filteredRuns.length / pageSize));
+  const runCurPage = Math.min(page, runTotalPages);
+  const pagedRuns = filteredRuns.slice((runCurPage - 1) * pageSize, runCurPage * pageSize);
 
   const total = runs.length;
   const success = runs.filter((r) => r.status === "success").length;
@@ -734,58 +817,83 @@ function RunsTab({ flowId }: { flowId: string }) {
             that matches its trigger to see a run appear here.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5">Contact / Phone</th>
-                  <th className="px-4 py-2.5">Started</th>
-                  <th className="px-4 py-2.5">Duration</th>
-                  <th className="px-4 py-2.5"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((r) => (
-                  <Fragment key={r.id}>
-                    <tr
-                      className="cursor-pointer border-t border-border hover:bg-muted/20"
-                      onClick={() => setExpanded((id) => (id === r.id ? null : r.id))}
-                    >
-                      <td className="px-4 py-2.5"><RunStatusBadge status={r.status} /></td>
-                      <td className="px-4 py-2.5 text-foreground">
-                        {r.input_data?.contact_name || r.input_data?.phone || "—"}
-                      </td>
-                      <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
-                        {new Date(r.created_at).toLocaleString()}
-                      </td>
-                      <td className="px-4 py-2.5 text-muted-foreground">{runDurationLabel(r)}</td>
-                      <td className="px-4 py-2.5 text-right text-muted-foreground">
-                        {expanded === r.id ? "Hide" : "Details"}
-                      </td>
-                    </tr>
-                    {expanded === r.id && (
-                      <tr className="border-t border-border bg-muted/10">
-                        <td colSpan={5} className="px-4 py-3">
-                          {r.status === "failed" && r.output_data?.error ? (
-                            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                              {r.output_data.error}
-                            </div>
-                          ) : r.status === "success" ? (
-                            <div className="text-xs text-muted-foreground">
-                              Ran {r.output_data?.nodes_executed ?? "—"} node(s) successfully.
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground">Still in progress…</div>
-                          )}
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr className="divide-x divide-border">
+                    <th className="px-4 py-2.5"><SortableColumnHeader label="Status" active={sort.key === "status"} dir={sort.dir} onClick={() => toggleSort("status")} /></th>
+                    <th className="px-4 py-2.5"><SortableColumnHeader label="Contact / Phone" active={sort.key === "contact"} dir={sort.dir} onClick={() => toggleSort("contact")} /></th>
+                    <th className="px-4 py-2.5"><SortableColumnHeader label="Started" active={sort.key === "created_at"} dir={sort.dir} onClick={() => toggleSort("created_at")} /></th>
+                    <th className="px-4 py-2.5"><SortableColumnHeader label="Duration" active={sort.key === "duration"} dir={sort.dir} onClick={() => toggleSort("duration")} /></th>
+                    <th className="px-4 py-2.5"></th>
+                  </tr>
+                  <tr className="divide-x divide-border border-t border-border">
+                    <th className="px-4 py-2.5 font-normal normal-case">
+                      <TableSelectFilter value={filters.status || ""} onChange={(v) => setFilters((f) => ({ ...f, status: v }))} options={statusOptions} placeholder="Status" />
+                    </th>
+                    <th className="px-4 py-2.5 font-normal normal-case">
+                      <TableTextFilter value={filters.contact || ""} onChange={(v) => setFilters((f) => ({ ...f, contact: v }))} placeholder="Contact / Phone" />
+                    </th>
+                    <th className="px-4 py-2.5 font-normal normal-case">
+                      <TableDateFilter value={startedDate} onChange={setStartedDate} />
+                    </th>
+                    <th className="px-4 py-2.5"></th>
+                    <th className="px-4 py-2.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedRuns.map((r) => (
+                    <Fragment key={r.id}>
+                      <tr
+                        className="cursor-pointer divide-x divide-border border-t border-border hover:bg-muted/20"
+                        onClick={() => setExpanded((id) => (id === r.id ? null : r.id))}
+                      >
+                        <td className="px-4 py-2.5"><RunStatusBadge status={r.status} /></td>
+                        <td className="px-4 py-2.5 text-foreground">
+                          {r.input_data?.contact_name || r.input_data?.phone || "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
+                          {new Date(r.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">{runDurationLabel(r)}</td>
+                        <td className="px-4 py-2.5 text-right text-muted-foreground">
+                          {expanded === r.id ? "Hide" : "Details"}
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      {expanded === r.id && (
+                        <tr className="border-t border-border bg-muted/10">
+                          <td colSpan={5} className="px-4 py-3">
+                            {r.status === "failed" && r.output_data?.error ? (
+                              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                                {r.output_data.error}
+                              </div>
+                            ) : r.status === "success" ? (
+                              <div className="text-xs text-muted-foreground">
+                                Ran {r.output_data?.nodes_executed ?? "—"} node(s) successfully.
+                              </div>
+                            ) : (
+                              <div className="text-xs text-muted-foreground">Still in progress…</div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                  {pagedRuns.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No runs match these filters.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination
+              page={runCurPage}
+              pageSize={pageSize}
+              totalCount={filteredRuns.length}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </div>
     </div>

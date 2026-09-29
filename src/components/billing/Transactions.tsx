@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowDown, ArrowUp, ArrowUpDown, CalendarIcon, Loader2, Search, X,
-} from "lucide-react";
-import { format, isSameDay } from "date-fns";
+import { Loader2 } from "lucide-react";
+import { isSameDay } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TableDateFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { api } from "@/services/api";
 import { PurchaseTxn, TXN_LABELS } from "./types";
 
@@ -38,6 +35,8 @@ const Transactions = () => {
     created_at: "", kind: "", description: "", amount: "", balance_after: "",
   });
   const [txnDateFilter, setTxnDateFilter] = useState<Date | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     api.getWalletTransactions().then(({ data }) => {
@@ -60,8 +59,8 @@ const Transactions = () => {
     return Array.from(set).sort();
   }, [transactions]);
 
-  const visibleTransactions = useMemo(() => {
-    const filtered = transactions.filter((t) =>
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter((t) =>
       TXN_COLUMNS.every(({ key }) => {
         if (key === "created_at") {
           if (!txnDateFilter) return true;
@@ -76,8 +75,11 @@ const Transactions = () => {
         return !q || txnTextFor(t, key).toLowerCase().includes(q);
       })
     );
-    if (!txnSortKey) return filtered;
-    const sorted = [...filtered].sort((a, b) => {
+  }, [transactions, txnFilters, txnDateFilter]);
+
+  const sortedTransactions = useMemo(() => {
+    if (!txnSortKey) return filteredTransactions;
+    return [...filteredTransactions].sort((a, b) => {
       if (txnSortKey === "amount" || txnSortKey === "balance_after") {
         const av = txnSortKey === "amount" ? a.amount : a.balance_after ?? 0;
         const bv = txnSortKey === "amount" ? b.amount : b.balance_after ?? 0;
@@ -94,8 +96,19 @@ const Transactions = () => {
       if (av > bv) return txnSortDir === "asc" ? 1 : -1;
       return 0;
     });
-    return sorted;
-  }, [transactions, txnFilters, txnDateFilter, txnSortKey, txnSortDir]);
+  }, [filteredTransactions, txnSortKey, txnSortDir]);
+
+  // Filters/sort/page-size changed — jump back to page 1 so a filter never
+  // leaves the user stranded on a now-empty page.
+  useEffect(() => { setPage(1); }, [txnFilters, txnDateFilter, txnSortKey, txnSortDir, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+  const visibleTransactions = useMemo(
+    () => sortedTransactions.slice((page - 1) * pageSize, page * pageSize),
+    [sortedTransactions, page, pageSize]
+  );
 
   if (loading) {
     return (
@@ -123,86 +136,32 @@ const Transactions = () => {
               <tr className="divide-x divide-border">
                 {TXN_COLUMNS.map(({ key, label }) => (
                   <th key={key} className="px-4 py-3 text-center">
-                    <button
-                      type="button"
+                    <SortableColumnHeader
+                      label={label}
+                      active={txnSortKey === key}
+                      dir={txnSortDir}
                       onClick={() => toggleTxnSort(key)}
-                      className="flex w-full items-center justify-between gap-2 hover:text-foreground lg:gap-1"
-                    >
-                      <span className="whitespace-nowrap lg:whitespace-normal">{label}</span>
-                      {txnSortKey === key ? (
-                        txnSortDir === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="h-3 w-3 shrink-0 opacity-50" />
-                      )}
-                    </button>
+                    />
                   </th>
                 ))}
               </tr>
               <tr className="divide-x divide-border border-t border-border">
-                {TXN_COLUMNS.map(({ key, label }) =>
-                  key === "created_at" ? (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex h-8 w-full items-center gap-1.5 rounded-md border border-input bg-background px-2 text-left text-xs text-muted-foreground hover:bg-muted"
-                          >
-                            <CalendarIcon className="h-3 w-3 shrink-0" />
-                            <span className="flex-1 truncate">{txnDateFilter ? format(txnDateFilter, "MMM d, yyyy") : "Date"}</span>
-                            {txnDateFilter && (
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => { e.stopPropagation(); setTxnDateFilter(undefined); }}
-                                className="rounded p-0.5 hover:bg-muted-foreground/20"
-                              >
-                                <X className="h-3 w-3" />
-                              </span>
-                            )}
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={txnDateFilter}
-                            onSelect={setTxnDateFilter}
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </th>
-                  ) : key === "kind" ? (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <Select
-                        value={txnFilters.kind || "__all__"}
-                        onValueChange={(v) => setTxnFilter("kind", v === "__all__" ? "" : v)}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All</SelectItem>
-                          {txnKindOptions.map((k) => (
-                            <SelectItem key={k} value={k}>{TXN_LABELS[k] || k}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </th>
-                  ) : (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <div className={`relative lg:min-w-0 ${key === "description" ? "min-w-[14rem]" : "min-w-[7.5rem]"}`}>
-                        <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={txnFilters[key]}
-                          onChange={(e) => setTxnFilter(key, e.target.value)}
-                          placeholder={label}
-                          className="h-8 pl-7 text-xs"
-                        />
-                      </div>
-                    </th>
-                  )
-                )}
+                {TXN_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "created_at" ? (
+                      <TableDateFilter value={txnDateFilter} onChange={setTxnDateFilter} />
+                    ) : key === "kind" ? (
+                      <TableSelectFilter
+                        value={txnFilters.kind}
+                        onChange={(v) => setTxnFilter("kind", v)}
+                        placeholder="Type"
+                        options={txnKindOptions.map((k) => ({ value: k, label: TXN_LABELS[k] || k }))}
+                      />
+                    ) : (
+                      <TableTextFilter value={txnFilters[key]} onChange={(v) => setTxnFilter(key, v)} placeholder={label} />
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -240,6 +199,13 @@ const Transactions = () => {
             </tbody>
           </table>
         </div>
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          totalCount={sortedTransactions.length}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
     </div>
   );

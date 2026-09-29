@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowDown, ArrowUp, ArrowUpDown, CalendarIcon, Loader2, Search, X,
-} from "lucide-react";
-import { format, isSameDay } from "date-fns";
+import { Loader2 } from "lucide-react";
+import { isSameDay } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TableDateFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { api } from "@/services/api";
 import { CallCostEntry, formatDuration } from "./types";
 
@@ -41,6 +38,8 @@ const CallCosts = () => {
     created_at: "", contact: "", direction: "", duration_seconds: "", call_cost: "", status: "",
   });
   const [callDateFilter, setCallDateFilter] = useState<Date | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     api.getBillingCallCosts().then(({ data }) => {
@@ -72,8 +71,8 @@ const CallCosts = () => {
     return Array.from(set).sort();
   }, [callCosts]);
 
-  const visibleCallCosts = useMemo(() => {
-    const filtered = callCosts.filter((c) =>
+  const filteredCallCosts = useMemo(() => {
+    return callCosts.filter((c) =>
       CALL_COLUMNS.every(({ key }) => {
         if (key === "created_at") {
           if (!callDateFilter) return true;
@@ -92,8 +91,11 @@ const CallCosts = () => {
         return !q || callTextFor(c, key).toLowerCase().includes(q);
       })
     );
-    if (!callSortKey) return filtered;
-    const sorted = [...filtered].sort((a, b) => {
+  }, [callCosts, callFilters, callDateFilter]);
+
+  const sortedCallCosts = useMemo(() => {
+    if (!callSortKey) return filteredCallCosts;
+    return [...filteredCallCosts].sort((a, b) => {
       if (callSortKey === "call_cost" || callSortKey === "duration_seconds") {
         const av = callSortKey === "call_cost" ? a.call_cost : a.duration_seconds;
         const bv = callSortKey === "call_cost" ? b.call_cost : b.duration_seconds;
@@ -110,8 +112,17 @@ const CallCosts = () => {
       if (av > bv) return callSortDir === "asc" ? 1 : -1;
       return 0;
     });
-    return sorted;
-  }, [callCosts, callFilters, callDateFilter, callSortKey, callSortDir]);
+  }, [filteredCallCosts, callSortKey, callSortDir]);
+
+  useEffect(() => { setPage(1); }, [callFilters, callDateFilter, callSortKey, callSortDir, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedCallCosts.length / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+  const visibleCallCosts = useMemo(
+    () => sortedCallCosts.slice((page - 1) * pageSize, page * pageSize),
+    [sortedCallCosts, page, pageSize]
+  );
 
   if (loading) {
     return (
@@ -139,103 +150,39 @@ const CallCosts = () => {
               <tr className="divide-x divide-border">
                 {CALL_COLUMNS.map(({ key, label }) => (
                   <th key={key} className="px-4 py-3 text-center">
-                    <button
-                      type="button"
+                    <SortableColumnHeader
+                      label={label}
+                      active={callSortKey === key}
+                      dir={callSortDir}
                       onClick={() => toggleCallSort(key)}
-                      className="flex w-full items-center justify-between gap-2 hover:text-foreground lg:gap-1"
-                    >
-                      <span className="whitespace-nowrap lg:whitespace-normal">{label}</span>
-                      {callSortKey === key ? (
-                        callSortDir === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="h-3 w-3 shrink-0 opacity-50" />
-                      )}
-                    </button>
+                    />
                   </th>
                 ))}
               </tr>
               <tr className="divide-x divide-border border-t border-border">
-                {CALL_COLUMNS.map(({ key, label }) =>
-                  key === "created_at" ? (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex h-8 w-full items-center gap-1.5 rounded-md border border-input bg-background px-2 text-left text-xs text-muted-foreground hover:bg-muted"
-                          >
-                            <CalendarIcon className="h-3 w-3 shrink-0" />
-                            <span className="flex-1 truncate">{callDateFilter ? format(callDateFilter, "MMM d, yyyy") : "Date"}</span>
-                            {callDateFilter && (
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => { e.stopPropagation(); setCallDateFilter(undefined); }}
-                                className="rounded p-0.5 hover:bg-muted-foreground/20"
-                              >
-                                <X className="h-3 w-3" />
-                              </span>
-                            )}
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={callDateFilter}
-                            onSelect={setCallDateFilter}
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </th>
-                  ) : key === "direction" ? (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <Select
-                        value={callFilters.direction || "__all__"}
-                        onValueChange={(v) => setCallFilter("direction", v === "__all__" ? "" : v)}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Direction" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All</SelectItem>
-                          {callDirectionOptions.map((d) => (
-                            <SelectItem key={d} value={d} className="capitalize">{d}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </th>
-                  ) : key === "status" ? (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <Select
-                        value={callFilters.status || "__all__"}
-                        onValueChange={(v) => setCallFilter("status", v === "__all__" ? "" : v)}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All</SelectItem>
-                          {callStatusOptions.map((s) => (
-                            <SelectItem key={s} value={s}>{s}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </th>
-                  ) : (
-                    <th key={key} className="px-4 py-3 font-normal normal-case">
-                      <div className={`relative lg:min-w-0 ${key === "contact" ? "min-w-[11rem]" : "min-w-[7rem]"}`}>
-                        <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={callFilters[key]}
-                          onChange={(e) => setCallFilter(key, e.target.value)}
-                          placeholder={label}
-                          className="h-8 pl-7 text-xs"
-                        />
-                      </div>
-                    </th>
-                  )
-                )}
+                {CALL_COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "created_at" ? (
+                      <TableDateFilter value={callDateFilter} onChange={setCallDateFilter} />
+                    ) : key === "direction" ? (
+                      <TableSelectFilter
+                        value={callFilters.direction}
+                        onChange={(v) => setCallFilter("direction", v)}
+                        placeholder="Direction"
+                        options={callDirectionOptions.map((d) => ({ value: d, label: d }))}
+                      />
+                    ) : key === "status" ? (
+                      <TableSelectFilter
+                        value={callFilters.status}
+                        onChange={(v) => setCallFilter("status", v)}
+                        placeholder="Status"
+                        options={callStatusOptions.map((s) => ({ value: s, label: s }))}
+                      />
+                    ) : (
+                      <TableTextFilter value={callFilters[key]} onChange={(v) => setCallFilter(key, v)} placeholder={label} />
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -283,6 +230,13 @@ const CallCosts = () => {
             </tbody>
           </table>
         </div>
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          totalCount={sortedCallCosts.length}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
     </div>
   );

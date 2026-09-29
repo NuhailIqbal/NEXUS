@@ -90,13 +90,15 @@ async def list_conversations(
 
 
 @router.get("/stats")
-async def conversation_stats(user=Depends(get_current_user)):
-    all_convos = (
+async def conversation_stats(user=Depends(get_current_user), direction: Optional[str] = None):
+    query = (
         supabase.table("conversations")
-        .select("status, duration, direction, qualified")
+        .select("status, duration_seconds, direction, qualified")
         .eq("user_id", resolve_owner_id(user["user_id"]))
-        .execute()
     )
+    if direction:
+        query = query.eq("direction", direction)
+    all_convos = query.execute()
     data = all_convos.data or []
     total = len(data)
     completed = sum(1 for c in data if c.get("status") == "Completed")
@@ -105,6 +107,7 @@ async def conversation_stats(user=Depends(get_current_user)):
     inbound = sum(1 for c in data if c.get("direction") == "inbound")
     outbound = sum(1 for c in data if c.get("direction") == "outbound")
     qualified = sum(1 for c in data if c.get("qualified"))
+    total_duration_seconds = sum(c.get("duration_seconds") or 0 for c in data)
 
     return {
         "data": {
@@ -115,6 +118,7 @@ async def conversation_stats(user=Depends(get_current_user)):
             "inbound": inbound,
             "outbound": outbound,
             "qualified": qualified,
+            "total_duration_seconds": total_duration_seconds,
         },
         "error": None,
     }

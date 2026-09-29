@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 import { Plus, Phone, Clock, Delete, PhoneCall, PhoneOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TableDateFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { CreatePhoneNumberDialog } from "@/components/telephony/CreatePhoneNumberDialog";
 import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
@@ -54,12 +57,31 @@ function numberExpiry(nextBillingAt?: string | null) {
   return { date: d, daysLeft };
 }
 
-type Tab = "all" | "inbound" | "outbound" | "unused";
-
 type CallStage = "idle" | "dialing" | "queued" | "ringing" | "in-progress" | "ended" | "failed";
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120000;
+
+type ColumnKey = "number" | "usedIn" | "provider" | "assignedAgent" | "status" | "purchased" | "expires";
+
+const COLUMNS: { key: ColumnKey; label: string }[] = [
+  { key: "number", label: "Number" },
+  { key: "usedIn", label: "Used In" },
+  { key: "provider", label: "Provider" },
+  { key: "assignedAgent", label: "Assigned Agent" },
+  { key: "status", label: "Status" },
+  { key: "purchased", label: "Purchased" },
+  { key: "expires", label: "Expires" },
+];
+
+const USED_IN_OPTIONS = [
+  { value: "inbound", label: "Inbound" },
+  { value: "outbound", label: "Outbound" },
+  { value: "unused", label: "Unused" },
+];
+
+const STATUS_OPTIONS = ["Active", "Inactive"];
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
@@ -67,7 +89,16 @@ const PhoneNumbers = () => {
   const [agentsById, setAgentsById] = useState<Map<string, string>>(new Map());
   const [outboundIds, setOutboundIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("all");
+
+  const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({
+    number: "", usedIn: "", provider: "", assignedAgent: "", status: "", purchased: "", expires: "",
+  });
+  const [purchasedDateFilter, setPurchasedDateFilter] = useState<Date | undefined>(undefined);
+  const [expiresDateFilter, setExpiresDateFilter] = useState<Date | undefined>(undefined);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const [testTarget, setTestTarget] = useState<Num | null>(null);
   const [testLog, setTestLog] = useState<string[]>([]);
@@ -90,14 +121,80 @@ const PhoneNumbers = () => {
 
   useEffect(() => { fetchNumbers(); }, []);
 
+  const toggleSort = (key: ColumnKey) => {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortKey(null);
+  };
+  const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
+
+  const providerOptions = useMemo(() => {
+    const set = new Set(numbers.map((n) => providerLabel(n.provider)).filter(Boolean));
+    return Array.from(set).sort();
+  }, [numbers]);
+
+  const textFor = (n: Num, key: ColumnKey): string => {
+    if (key === "number") return n.number || "";
+    if (key === "provider") return providerLabel(n.provider) || "";
+    if (key === "assignedAgent") return n.agent_id ? (agentsById.get(n.agent_id) || "Unknown agent") : "";
+    if (key === "status") return n.status || "";
+    if (key === "purchased") return n.created_at || "";
+    if (key === "expires") return n.next_billing_at || "";
+    return "";
+  };
+
   // Inbound = actively answering calls (agent assigned). Outbound = referenced by a
   // campaign. Unused = neither — a number just sitting idle, doing nothing.
-  const visibleNumbers = useMemo(() => {
-    if (tab === "inbound") return numbers.filter((n) => !!n.agent_id);
-    if (tab === "outbound") return numbers.filter((n) => outboundIds.has(n.id));
-    if (tab === "unused") return numbers.filter((n) => !n.agent_id && !outboundIds.has(n.id));
-    return numbers;
-  }, [numbers, outboundIds, tab]);
+  const filteredNumbers = useMemo(() => {
+    return numbers.filter((n) => {
+      if (filters.usedIn === "inbound" && !n.agent_id) return false;
+      if (filters.usedIn === "outbound" && !outboundIds.has(n.id)) return false;
+      if (filters.usedIn === "unused" && (n.agent_id || outboundIds.has(n.id))) return false;
+      if (filters.status && n.status !== filters.status) return false;
+      if (filters.provider && providerLabel(n.provider) !== filters.provider) return false;
+      if (purchasedDateFilter) {
+        const d = n.created_at ? new Date(n.created_at) : null;
+        if (!d || isNaN(d.getTime()) || !isSameDay(d, purchasedDateFilter)) return false;
+      }
+      if (expiresDateFilter) {
+        const d = n.next_billing_at ? new Date(n.next_billing_at) : null;
+        if (!d || isNaN(d.getTime()) || !isSameDay(d, expiresDateFilter)) return false;
+      }
+      for (const key of ["number", "assignedAgent"] as ColumnKey[]) {
+        const q = filters[key].trim().toLowerCase();
+        if (q && !textFor(n, key).toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [numbers, outboundIds, filters, purchasedDateFilter, expiresDateFilter]);
+
+  const sortedNumbers = useMemo(() => {
+    if (!sortKey) return filteredNumbers;
+    return [...filteredNumbers].sort((a, b) => {
+      if (sortKey === "purchased" || sortKey === "expires") {
+        const av = textFor(a, sortKey) ? new Date(textFor(a, sortKey)).getTime() : 0;
+        const bv = textFor(b, sortKey) ? new Date(textFor(b, sortKey)).getTime() : 0;
+        return sortDir === "asc" ? av - bv : bv - av;
+      }
+      if (sortKey === "usedIn") {
+        const rank = (n: Num) => (n.agent_id ? 1 : 0) + (outboundIds.has(n.id) ? 1 : 0);
+        return sortDir === "asc" ? rank(a) - rank(b) : rank(b) - rank(a);
+      }
+      const av = textFor(a, sortKey).toLowerCase();
+      const bv = textFor(b, sortKey).toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [filteredNumbers, sortKey, sortDir, outboundIds]);
+
+  useEffect(() => { setPage(1); }, [filters, purchasedDateFilter, expiresDateFilter, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(sortedNumbers.length / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const visibleNumbers = useMemo(
+    () => sortedNumbers.slice((page - 1) * pageSize, page * pageSize),
+    [sortedNumbers, page, pageSize]
+  );
 
   // Handle the return from Stripe checkout (low-balance number purchase).
   const confirming = useRef(false);
@@ -222,12 +319,6 @@ const PhoneNumbers = () => {
     fetchNumbers();
   };
 
-  const emptyMessage =
-    tab === "inbound" ? "No inbound numbers." :
-    tab === "outbound" ? "No outbound numbers." :
-    tab === "unused" ? "No unused numbers." :
-    "No phone numbers found.";
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -238,105 +329,116 @@ const PhoneNumbers = () => {
         <Button onClick={() => setOpen(true)} className="w-full sm:w-auto"><Plus className="mr-2 h-4 w-4" />Buy Number</Button>
       </div>
 
-      <div className="flex items-center gap-4 overflow-x-auto border-b border-border sm:gap-6">
-        {([
-          { key: "all", label: "All" },
-          { key: "inbound", label: "Inbound" },
-          { key: "outbound", label: "Outbound" },
-          { key: "unused", label: "Unused" },
-        ] as const).map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={`relative shrink-0 whitespace-nowrap py-3 text-sm font-medium ${tab === t.key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            {t.label}
-            {tab === t.key && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
-          </button>
-        ))}
-      </div>
-
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full min-w-[860px] text-sm">
-          <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-3">Number</th>
-              <th className="px-4 py-3">Used In</th>
-              <th className="px-4 py-3">Provider</th>
-              <th className="min-w-[12rem] px-4 py-3 xl:min-w-0">Assigned Agent</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Purchased</th>
-              <th className="px-4 py-3">Expires</th>
-              <th className="px-4 py-3 w-32">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-sm">
+            <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <tr className="divide-x divide-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3">
+                    <SortableColumnHeader label={label} active={sortKey === key} dir={sortDir} onClick={() => toggleSort(key)} />
+                  </th>
+                ))}
+                <th className="px-4 py-3 w-32">Actions</th>
               </tr>
-            ) : visibleNumbers.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">{emptyMessage}</td>
+              <tr className="divide-x divide-border border-t border-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "usedIn" ? (
+                      <TableSelectFilter value={filters.usedIn} onChange={(v) => setFilter("usedIn", v)} placeholder="Used In" options={USED_IN_OPTIONS} />
+                    ) : key === "provider" ? (
+                      <TableSelectFilter value={filters.provider} onChange={(v) => setFilter("provider", v)} placeholder="Provider" options={providerOptions.map((p) => ({ value: p, label: p }))} />
+                    ) : key === "status" ? (
+                      <TableSelectFilter value={filters.status} onChange={(v) => setFilter("status", v)} placeholder="Status" options={STATUS_OPTIONS.map((s) => ({ value: s, label: s }))} />
+                    ) : key === "purchased" ? (
+                      <TableDateFilter value={purchasedDateFilter} onChange={setPurchasedDateFilter} />
+                    ) : key === "expires" ? (
+                      <TableDateFilter value={expiresDateFilter} onChange={setExpiresDateFilter} />
+                    ) : (
+                      <TableTextFilter value={filters[key]} onChange={(v) => setFilter(key, v)} placeholder={label} />
+                    )}
+                  </th>
+                ))}
+                <th className="px-4 py-3"></th>
               </tr>
-            ) : (
-              visibleNumbers.map((n) => (
-                <tr key={n.id} className="border-t border-border bg-card/30">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2 whitespace-nowrap font-mono text-foreground">
-                      <Phone className="h-4 w-4 shrink-0 text-primary" /> {n.number}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1.5">
-                      {n.agent_id && (
-                        <span className="whitespace-nowrap rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Inbound</span>
-                      )}
-                      {outboundIds.has(n.id) && (
-                        <span className="whitespace-nowrap rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
-                      )}
-                      {!n.agent_id && !outboundIds.has(n.id) && (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">{providerLabel(n.provider)}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{agentsById.get(n.agent_id) || (n.agent_id ? "Unknown agent" : "—")}</td>
-                  <td className="px-4 py-3">
-                    <NumberStatus num={n} />
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-muted-foreground xl:whitespace-normal">
-                    {n.created_at ? format(new Date(n.created_at), "MMM d, yyyy") : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {(() => {
-                      const e = numberExpiry(n.next_billing_at);
-                      if (!e) return <span className="text-muted-foreground">—</span>;
-                      const expired = e.daysLeft < 0;
-                      const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
-                      return (
-                        <>
-                          <div className="whitespace-nowrap text-foreground xl:whitespace-normal">{format(e.date, "MMM d, yyyy")}</div>
-                          <div className={`whitespace-nowrap text-xs xl:whitespace-normal ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
-                            {expired ? "expired" : `${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"} left`}
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <RowActions
-                      onTest={() => openTest(n)}
-                      onSettings={() => openSettings(n)}
-                      onDelete={() => handleDelete(n)}
-                    />
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                </tr>
+              ) : visibleNumbers.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                    {numbers.length === 0 ? "No phone numbers found." : "No numbers match your filters."}
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                visibleNumbers.map((n) => (
+                  <tr key={n.id} className="divide-x divide-border border-t border-border bg-card/30">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-center gap-2 whitespace-nowrap font-mono text-foreground">
+                        <Phone className="h-4 w-4 shrink-0 text-primary" /> {n.number}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap justify-center gap-1.5">
+                        {n.agent_id && (
+                          <span className="whitespace-nowrap rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">Inbound</span>
+                        )}
+                        {outboundIds.has(n.id) && (
+                          <span className="whitespace-nowrap rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
+                        )}
+                        {!n.agent_id && !outboundIds.has(n.id) && (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-center">{providerLabel(n.provider)}</td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">{agentsById.get(n.agent_id) || (n.agent_id ? "Unknown agent" : "—")}</td>
+                    <td className="px-4 py-3 text-center">
+                      <NumberStatus num={n} />
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-center text-muted-foreground xl:whitespace-normal">
+                      {n.created_at ? format(new Date(n.created_at), "MMM d, yyyy") : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {(() => {
+                        const e = numberExpiry(n.next_billing_at);
+                        if (!e) return <span className="text-muted-foreground">—</span>;
+                        const expired = e.daysLeft < 0;
+                        const dueSoon = e.daysLeft >= 0 && e.daysLeft <= 5;
+                        return (
+                          <>
+                            <div className="whitespace-nowrap text-foreground xl:whitespace-normal">{format(e.date, "MMM d, yyyy")}</div>
+                            <div className={`whitespace-nowrap text-xs xl:whitespace-normal ${expired ? "text-destructive font-medium" : dueSoon ? "text-yellow-500" : "text-muted-foreground"}`}>
+                              {expired ? "expired" : `${e.daysLeft} day${e.daysLeft === 1 ? "" : "s"} left`}
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <RowActions
+                        onTest={() => openTest(n)}
+                        onSettings={() => openSettings(n)}
+                        onDelete={() => handleDelete(n)}
+                      />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          totalCount={sortedNumbers.length}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+        />
       </div>
 
       <CreatePhoneNumberDialog

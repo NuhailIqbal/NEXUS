@@ -1,8 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import {
-  PhoneIncoming, Loader2,
-  FileText, Play,
-} from "lucide-react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { PhoneIncoming, Loader2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +9,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  SortableColumnHeader, TableTextFilter, TableSelectFilter, TablePagination,
+} from "@/components/dashboard/table/TableControls";
 import { api } from "@/services/api";
 import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
 import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
@@ -24,7 +24,7 @@ type CallLog = {
   call_time?: string;
   phone?: string;
   contact_name?: string;
-  agent_id?: string;
+  agent_name?: string;
   ai_summary?: string;
   transcript?: string;
   transcript_messages?: TranscriptMessage[] | null;
@@ -41,11 +41,29 @@ const colorFor = (s: string) =>
   s === "In Progress" || s === "Initiated" ? "bg-info/15 text-info" :
   "bg-muted text-muted-foreground";
 
-type Agent = { id: string; name: string };
+type ColumnKey = "contact_name" | "agent_name" | "status" | "duration" | "call_time";
+
+const COLUMNS: { key: ColumnKey; label: string }[] = [
+  { key: "contact_name", label: "Caller" },
+  { key: "agent_name", label: "Agent" },
+  { key: "status", label: "Status" },
+  { key: "duration", label: "Duration" },
+  { key: "call_time", label: "Time" },
+];
+
+function textFor(c: CallLog, key: ColumnKey): string {
+  if (key === "contact_name") return c.contact_name || c.phone || "Unknown";
+  if (key === "duration") return c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "");
+  return (c[key] as string) || "";
+}
+
+const STATUS_OPTIONS = ["Initiated", "Ringing", "In Progress", "Completed", "Failed", "Unsuccessful"];
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const InboundLogs = () => {
   const [logs, setLogs] = useState<CallLog[]>([]);
-  const [agents, setAgents] = useState<Map<string, Agent>>(new Map());
+  const [totalCount, setTotalCount] = useState(0);
+  const [statTotals, setStatTotals] = useState({ completed: 0, failed: 0, durationSeconds: 0 });
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<CallLog | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -54,22 +72,72 @@ const InboundLogs = () => {
   const playerRef = useRef<CallAudioPlayerHandle | null>(null);
   const openIdRef = useRef<string | null>(null);
 
-  const fetchLogs = useCallback(async () => {
-    const [cRes, aRes] = await Promise.all([
-      api.getConversations("direction=inbound&limit=100"),
-      api.getAgents(),
+  const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({
+    contact_name: "", agent_name: "", status: "", duration: "", call_time: "",
+  });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const toggleSort = (key: ColumnKey) => {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortKey(null);
+  };
+  const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
+
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilters(filters), 400);
+    return () => clearTimeout(t);
+  }, [filters]);
+
+  const fetchLogs = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    const p = new URLSearchParams();
+    p.set("direction", "inbound");
+    if (debouncedFilters.contact_name.trim()) p.set("contact_name", debouncedFilters.contact_name.trim());
+    if (debouncedFilters.agent_name.trim()) p.set("agent_name", debouncedFilters.agent_name.trim());
+    if (debouncedFilters.status) p.set("status", debouncedFilters.status);
+    if (debouncedFilters.duration.trim()) p.set("duration", debouncedFilters.duration.trim());
+    p.set("limit", String(pageSize));
+    p.set("offset", String((page - 1) * pageSize));
+
+    const [cRes, statsRes] = await Promise.all([
+      api.getConversations(p.toString()),
+      api.getConversationStats("direction=inbound"),
     ]);
     if (Array.isArray(cRes.data)) setLogs(cRes.data);
-    if (Array.isArray(aRes.data)) setAgents(new Map(aRes.data.map((a: any) => [a.id, a])));
-    setLoading(false);
-  }, []);
+    setTotalCount((cRes as any).meta?.count ?? 0);
+    if (statsRes.data) {
+      const s = statsRes.data as any;
+      setStatTotals({ completed: s.completed ?? 0, failed: s.failed ?? 0, durationSeconds: s.total_duration_seconds ?? 0 });
+    }
+    if (!silent) setLoading(false);
+  }, [debouncedFilters, page, pageSize]);
 
   useEffect(() => {
     fetchLogs();
-    // Silently refresh so background-synced inbound calls appear without a manual reload.
-    const t = setInterval(() => fetchLogs(), 30000);
+    const t = setInterval(() => fetchLogs(true), 30000);
     return () => clearInterval(t);
   }, [fetchLogs]);
+
+  useEffect(() => { setPage(1); }, [debouncedFilters, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+  const visibleLogs = useMemo(() => {
+    if (!sortKey) return logs;
+    return [...logs].sort((a, b) => {
+      const av = textFor(a, sortKey).toLowerCase();
+      const bv = textFor(b, sortKey).toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [logs, sortKey, sortDir]);
 
   const openDetail = async (log: CallLog) => {
     setDetail(log);
@@ -84,7 +152,6 @@ const InboundLogs = () => {
     if (!log.transcript_messages || log.transcript_messages.length === 0) {
       setDetailLoading(true);
       const { data } = await api.getConversationTranscript(log.id);
-      // Ignore a stale fetch if the user already opened a different row.
       if (openIdRef.current !== log.id) return;
       if (data) {
         setDetail((d) => d && d.id === log.id ? {
@@ -99,10 +166,6 @@ const InboundLogs = () => {
       setDetailLoading(false);
     }
   };
-
-  const completed = logs.filter((l) => l.status === "Completed").length;
-  const failed = logs.filter((l) => l.status === "Failed").length;
-  const totalDuration = logs.reduce((sum, l) => sum + (l.duration_seconds || 0), 0);
 
   if (loading) {
     return (
@@ -119,79 +182,104 @@ const InboundLogs = () => {
         <p className="text-sm text-muted-foreground">All incoming calls received by your AI receptionists.</p>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-2xl font-bold text-foreground">{logs.length}</div>
+          <div className="text-2xl font-bold text-foreground">{totalCount}</div>
           <div className="text-xs text-muted-foreground">Total Calls</div>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-2xl font-bold text-green-600">{completed}</div>
+          <div className="text-2xl font-bold text-green-600">{statTotals.completed}</div>
           <div className="text-xs text-muted-foreground">Completed</div>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-2xl font-bold text-destructive">{failed}</div>
+          <div className="text-2xl font-bold text-destructive">{statTotals.failed}</div>
           <div className="text-xs text-muted-foreground">Failed</div>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="text-2xl font-bold text-foreground">{Math.round(totalDuration / 60)}m</div>
+          <div className="text-2xl font-bold text-foreground">{Math.round(statTotals.durationSeconds / 60)}m</div>
           <div className="text-xs text-muted-foreground">Total Talk Time</div>
         </div>
       </div>
 
-      {/* Logs Table */}
-      {logs.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-12 text-center text-muted-foreground">
-          No inbound calls recorded yet.
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="min-w-[10rem] px-4 py-3 md:min-w-0">Caller</th>
-                <th className="min-w-[11rem] px-4 py-3 md:min-w-0">Agent</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Duration</th>
-                <th className="px-4 py-3">Time</th>
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-center text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <tr className="divide-x divide-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3">
+                    <SortableColumnHeader label={label} active={sortKey === key} dir={sortDir} onClick={() => toggleSort(key)} />
+                  </th>
+                ))}
                 <th className="px-4 py-3 w-20">Actions</th>
+              </tr>
+              <tr className="divide-x divide-border border-t border-border">
+                {COLUMNS.map(({ key, label }) => (
+                  <th key={key} className="px-4 py-3 font-normal normal-case">
+                    {key === "status" ? (
+                      <TableSelectFilter
+                        value={filters.status}
+                        onChange={(v) => setFilter("status", v)}
+                        placeholder="Status"
+                        options={STATUS_OPTIONS.map((s) => ({ value: s, label: s }))}
+                      />
+                    ) : (
+                      <TableTextFilter value={filters[key]} onChange={(v) => setFilter(key, v)} placeholder={label} />
+                    )}
+                  </th>
+                ))}
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {logs.map((c) => (
-                <tr key={c.id} className="border-t border-border bg-card/30 hover:bg-muted/20 transition-colors">
-                  <td className="px-4 py-3 font-medium text-foreground">
-                    {c.contact_name || c.phone || "Unknown"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {c.agent_id ? agents.get(c.agent_id)?.name ?? " " : " "}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {c.call_time ? new Date(c.call_time).toLocaleString() : " "}
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => openDetail(c)}
-                      className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
-                      title="View details"
-                    >
-                      <FileText className="h-4 w-4" />
-                    </button>
+              {visibleLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                    {totalCount === 0 ? "No inbound calls recorded yet." : "No calls match your filters."}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                visibleLogs.map((c) => (
+                  <tr key={c.id} className="divide-x divide-border border-t border-border bg-card/30">
+                    <td className="px-4 py-3 text-center font-medium text-foreground">
+                      {c.contact_name || c.phone || "Unknown"}
+                    </td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">{c.agent_name || "—"}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${colorFor(c.status)}`}>{c.status}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">
+                      {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-center text-muted-foreground">
+                      {c.call_time ? new Date(c.call_time).toLocaleString() : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => openDetail(c)}
+                        className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+                        title="View details"
+                      >
+                        <FileText className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
-      )}
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          totalCount={totalCount}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          onRefresh={() => fetchLogs()}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+        />
+      </div>
 
-      {/* Detail Modal */}
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
         <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader className="text-left">
@@ -216,7 +304,7 @@ const InboundLogs = () => {
               </div>
               <div className="col-span-2 rounded-lg border border-border p-3 sm:col-span-1">
                 <div className="text-xs text-muted-foreground">Agent</div>
-                <div className="mt-1 font-medium">{detail?.agent_id ? agents.get(detail.agent_id)?.name ?? " " : " "}</div>
+                <div className="mt-1 font-medium">{detail?.agent_name || "—"}</div>
               </div>
             </div>
 
