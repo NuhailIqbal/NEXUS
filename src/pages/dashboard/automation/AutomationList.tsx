@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Pause, Play } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { SmartFilters } from "@/components/dashboard/SmartFilters";
@@ -26,6 +26,7 @@ const Automation = ({ v2 = false }: { v2?: boolean }) => {
   const [createOpen, setCreateOpen] = useState(false);
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const fetchFlows = useCallback(async () => {
     const { data, error } = await api.getFlows();
@@ -40,6 +41,17 @@ const Automation = ({ v2 = false }: { v2?: boolean }) => {
   useEffect(() => {
     fetchFlows();
   }, [fetchFlows]);
+
+  // The engine only runs flows whose status is "Active", so Paused stops future runs.
+  const togglePause = async (f: Flow) => {
+    const next = f.status === "Paused" ? "Active" : "Paused";
+    setTogglingId(f.id);
+    const { error } = await api.updateFlow(f.id, { status: next });
+    setTogglingId(null);
+    if (error) return toast.error(error);
+    setFlows((arr) => arr.map((x) => (x.id === f.id ? { ...x, status: next } : x)));
+    toast.success(next === "Paused" ? "Flow paused" : "Flow resumed");
+  };
 
   const remove = async (f: Flow) => {
     const { error } = await api.deleteFlow(f.id);
@@ -97,6 +109,15 @@ const Automation = ({ v2 = false }: { v2?: boolean }) => {
                   <td className="px-4 py-3 text-muted-foreground">{new Date(f.updated_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1">
+                      <button
+                        onClick={() => togglePause(f)}
+                        disabled={togglingId === f.id}
+                        className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
+                        aria-label={f.status === "Paused" ? "Resume flow" : "Pause flow"}
+                        title={f.status === "Paused" ? "Resume flow" : "Pause flow"}
+                      >
+                        {f.status === "Paused" ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                      </button>
                       <Link
                         to={`${base}/${f.id}?name=${encodeURIComponent(f.name)}`}
                         className="rounded-md p-2.5 sm:p-1.5 text-muted-foreground hover:bg-muted"

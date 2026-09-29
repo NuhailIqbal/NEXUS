@@ -3,7 +3,8 @@ import { useNavigate, useParams, useLocation, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Save,
-  StopCircle,
+  Pause,
+  Play,
   History,
   Settings as SettingsIcon,
   FileText,
@@ -126,6 +127,8 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const [description, setDescription] = useState("");
   const [descOpen, setDescOpen] = useState(false);
   const [descDraft, setDescDraft] = useState("");
+  const [flowStatus, setFlowStatus] = useState("Active");
+  const [togglingStatus, setTogglingStatus] = useState(false);
 
   const initial = useMemo(() => loadGraph(flowId), [flowId]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>(initial.nodes);
@@ -180,6 +183,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       }
       if (data.name) setName(data.name);
       setDescription(data.description ?? "");
+      if (data.status) setFlowStatus(data.status);
       const def = data.definition;
       if (def && Array.isArray(def.nodes)) {
         setNodes(def.nodes);
@@ -312,6 +316,24 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
     [flowId, name, description, nodes, edges],
   );
 
+  // The engine only runs flows whose status is "Active", so Paused stops future runs.
+  const togglePause = async () => {
+    if (!flowId || flowId === "new") {
+      toast.error("Save the flow first");
+      return;
+    }
+    const next = flowStatus === "Paused" ? "Active" : "Paused";
+    setTogglingStatus(true);
+    const { error } = await api.updateFlow(flowId, { status: next });
+    setTogglingStatus(false);
+    if (error) {
+      toast.error(`Could not update status: ${error}`);
+      return;
+    }
+    setFlowStatus(next);
+    toast.success(next === "Paused" ? "Flow paused" : "Flow resumed");
+  };
+
   const openDescription = () => {
     setDescDraft(description);
     setDescOpen(true);
@@ -434,10 +456,15 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             <Save className="mr-1.5 h-4 w-4" /> Save
           </Button>
           <Button
-            variant="destructive"
-            onClick={() => navigate(base)}
+            variant={flowStatus === "Paused" ? "default" : "destructive"}
+            onClick={togglePause}
+            disabled={loadingFlow || togglingStatus}
           >
-            <StopCircle className="mr-1.5 h-4 w-4" /> Stop
+            {flowStatus === "Paused" ? (
+              <><Play className="mr-1.5 h-4 w-4" /> Resume</>
+            ) : (
+              <><Pause className="mr-1.5 h-4 w-4" /> Pause</>
+            )}
           </Button>
         </div>
       </div>
