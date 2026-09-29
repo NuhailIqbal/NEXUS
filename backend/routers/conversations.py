@@ -6,6 +6,7 @@ from typing import Optional
 from services import vapi_client
 from routers.webhooks import import_vapi_call
 from routers.team import resolve_owner_id
+from services.call_events import get_hits
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
@@ -24,6 +25,7 @@ async def list_conversations(
     phone: Optional[str] = None,
     duration: Optional[str] = None,
     qualified: Optional[str] = None,
+    call_outcome: Optional[str] = None,
     call_date: Optional[str] = None,
     limit: int = Query(50, le=1000),
     offset: int = 0,
@@ -67,6 +69,8 @@ async def list_conversations(
         query = query.ilike("duration", f"%{duration}%")
     if qualified in ("yes", "no"):
         query = query.eq("qualified", qualified == "yes")
+    if call_outcome:
+        query = query.ilike("call_outcome", f"%{call_outcome}%")
     if call_date:
         query = query.gte("call_time", f"{call_date}T00:00:00").lte("call_time", f"{call_date}T23:59:59.999999")
 
@@ -195,6 +199,23 @@ async def get_transcript(conversation_id: str, user=Depends(get_current_user)):
     if not result.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"data": result.data, "error": None}
+
+
+@router.get("/{conversation_id}/events")
+async def get_conversation_events(conversation_id: str, user=Depends(get_current_user)):
+    """Call events the agent raised during this call, oldest first."""
+    conv = (
+        supabase.table("conversations")
+        .select("id, vapi_call_id")
+        .eq("id", conversation_id)
+        .eq("user_id", resolve_owner_id(user["user_id"]))
+        .maybe_single()
+        .execute()
+    )
+    if not conv.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    vapi_call_id = conv.data.get("vapi_call_id")
+    return {"data": get_hits(vapi_call_id) if vapi_call_id else [], "error": None}
 
 
 @router.get("/{conversation_id}/recording-url")
