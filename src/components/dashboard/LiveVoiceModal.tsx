@@ -305,7 +305,7 @@ export function LiveVoiceModal({
               )}
             </div>
             <p className="text-center text-xs text-muted-foreground">
-              Live web call powered by VAPI. Uses your agent's real voice, model, and tools no phone number needed.
+              Live web call. Uses your agent's real voice, model, and tools no phone number needed.
             </p>
           </>
         )}

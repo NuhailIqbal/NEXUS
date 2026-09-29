@@ -321,7 +321,7 @@ const AIVoices = () => {
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Plays a live sample using this voice's real Vapi model, the same voice your
+                Plays a live sample using this voice's real model, the same voice your
                 agents actually use on calls. Your browser will ask for microphone access even
                 though you won't need to speak.
               </p>
