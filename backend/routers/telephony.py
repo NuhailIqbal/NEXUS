@@ -197,7 +197,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
             row["vapi_phone_id"] = vapi_result.get("id")
             row["number"] = vapi_result.get("number", number or "")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+            logger.error("VAPI error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     elif provider == "twilio":
         if not settings.twilio_account_sid or not settings.twilio_auth_token:
@@ -222,7 +223,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
                 vapi_result = await vapi_client.create_phone_number(vapi_payload)
                 row["vapi_phone_id"] = vapi_result.get("id")
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Purchased {purchased['number']} but VAPI import failed: {str(e)}")
+                logger.error("Purchased {purchased['number']} but VAPI import failed: %s", e)
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
         row["monthly_cost"] = monthly_cost or PHONE_NUMBER_MONTHLY_COST
         from services.phone_billing import _add_one_month
@@ -437,7 +439,8 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
             try:
                 await vapi_client.update_phone_number(vapi_phone_id, vapi_update)
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"VAPI sync error: {str(e)}")
+                logger.error("VAPI sync error: %s", e)
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     result = (
         supabase.table("phone_numbers")
@@ -502,7 +505,7 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
 async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
-        raise HTTPException(status_code=503, detail="VAPI not configured")
+        raise HTTPException(status_code=503, detail="Voice service not configured")
 
     billing = get_or_create_billing(owner_id)
     block_reason = outbound_call_block_reason(billing)
@@ -527,7 +530,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
         .execute()
     )
     if not agent.data or not agent.data.get("vapi_assistant_id"):
-        raise HTTPException(status_code=404, detail="Agent not found or missing VAPI ID")
+        raise HTTPException(status_code=404, detail="Agent not found or not set up for calls")
 
     call_payload = {
         "assistantId": agent.data["vapi_assistant_id"],
@@ -549,7 +552,8 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     try:
         vapi_result = await vapi_client.create_call(call_payload)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"VAPI call error: {str(e)}")
+        logger.error("VAPI call error: %s", e)
+        raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     return {"data": {"vapi_call_id": vapi_result.get("id"), "status": vapi_result.get("status", "queued")}, "error": None}
 
@@ -559,11 +563,12 @@ async def get_call_status(vapi_call_id: str, user=Depends(get_current_user)):
     """Poll VAPI directly for a call's live status (queued/ringing/in-progress/ended…),
     used by the test-call dialer to reflect real progress instead of a static 'queued'."""
     if not settings.vapi_api_key:
-        raise HTTPException(status_code=503, detail="VAPI not configured")
+        raise HTTPException(status_code=503, detail="Voice service not configured")
     try:
         call = await vapi_client.get_call(vapi_call_id)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"VAPI call error: {str(e)}")
+        logger.error("VAPI call error: %s", e)
+        raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     return {
         "data": {
@@ -723,7 +728,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             vapi_assistant_id = agent_res.data.get("vapi_assistant_id")
 
     if not vapi_assistant_id:
-        raise HTTPException(status_code=400, detail="Campaign agent has no VAPI assistant")
+        raise HTTPException(status_code=400, detail="Campaign agent is not set up for calls")
 
     billing = get_or_create_billing(owner_id)
     block_reason = outbound_call_block_reason(billing)
@@ -759,7 +764,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     )
     phone_number_id = pn.data.get("vapi_phone_id") if pn.data else None
     if not phone_number_id:
-        raise HTTPException(status_code=400, detail="The campaign's phone number is not linked to VAPI yet. Wait for activation or re-provision the number.")
+        raise HTTPException(status_code=400, detail="The campaign's phone number is not active yet. Wait for activation or re-provision the number.")
 
     # Per-campaign opt-out: the account-wide WhitelistData status (Integrations page) still
     # gates whether screening is even possible, but a campaign can additionally choose not
@@ -869,7 +874,7 @@ async def list_inbound_queues(user=Depends(get_current_user)):
 async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
-        raise HTTPException(status_code=503, detail="VAPI not configured")
+        raise HTTPException(status_code=503, detail="Voice service not configured")
     if not body.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
 
@@ -882,7 +887,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
         .execute()
     )
     if not agent.data or not agent.data.get("vapi_assistant_id"):
-        raise HTTPException(status_code=400, detail="Agent not found or not synced with VAPI")
+        raise HTTPException(status_code=400, detail="Agent not found or not synced")
     vapi_assistant_id = agent.data["vapi_assistant_id"]
 
     phone_number_id = body.phone_number_id
@@ -897,11 +902,12 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             .execute()
         )
         if not phone.data or not phone.data.get("vapi_phone_id"):
-            raise HTTPException(status_code=400, detail="Phone number not found or not VAPI-provisioned")
+            raise HTTPException(status_code=400, detail="Phone number not found or not provisioned")
         try:
             await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"VAPI error assigning agent: {str(e)}")
+            logger.error("VAPI error assigning agent: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
         supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
     else:
         # A brand-new receptionist number is always a paid Twilio number — matches the
@@ -977,7 +983,8 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
                 try:
                     await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": vapi_assistant_id})
                 except Exception as e:
-                    raise HTTPException(status_code=502, detail=f"VAPI sync error: {str(e)}")
+                    logger.error("VAPI sync error: %s", e)
+                    raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
             supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", owner_id).execute()
 
     result = (

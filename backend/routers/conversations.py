@@ -143,12 +143,13 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
     )
     assistant_ids = {a["vapi_assistant_id"] for a in agents if a.get("vapi_assistant_id")}
     if not assistant_ids:
-        return {"data": {"imported": 0, "updated": 0, "note": "No VAPI-linked agents found for this account."}, "error": None}
+        return {"data": {"imported": 0, "updated": 0, "note": "No synced agents found for this account."}, "error": None}
 
     try:
         calls = await vapi_client.list_calls(limit=limit)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach VAPI: {e}")
+        logger.error("Could not reach VAPI: %s", e)
+        raise HTTPException(status_code=502, detail="Could not reach the voice service. Please try again.")
 
     mine = [c for c in calls if c.get("assistantId") in assistant_ids][:100]
     imported = updated = failed = 0

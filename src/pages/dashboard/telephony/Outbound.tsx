@@ -123,8 +123,8 @@ const Outbound = () => {
   const openPreflight = async (c: Campaign) => {
     setPreflightTarget(c);
     const init: CheckItem[] = [
-      { label: "Agent assigned & synced to VAPI", status: "loading" },
-      { label: "Phone number assigned & active in VAPI", status: "loading" },
+      { label: "Agent assigned & synced", status: "loading" },
+      { label: "Phone number assigned & active", status: "loading" },
       { label: "Contact list has dialable contacts", status: "loading" },
     ];
     setChecks(init);
@@ -136,7 +136,7 @@ const Outbound = () => {
       const { data: agentData } = await api.getAgents();
       const agent = (agentData as any[])?.find((a: any) => a.id === c.agent_id);
       if (!agent) results[0] = { ...init[0], status: "fail", detail: "Agent not found" };
-      else if (!agent.vapi_assistant_id) results[0] = { ...init[0], status: "fail", detail: `"${agent.name}" is not synced to VAPI open the agent and click Sync to VAPI` };
+      else if (!agent.vapi_assistant_id) results[0] = { ...init[0], status: "fail", detail: `"${agent.name}" is not synced open the agent and click Sync agent` };
       else results[0] = { ...init[0], status: "pass", detail: `${agent.name} ✓` };
     }
     setChecks([...results]);
@@ -147,7 +147,7 @@ const Outbound = () => {
       const { data: numData } = await api.getPhoneNumbers();
       const num = (numData as any[])?.find((n: any) => n.id === c.phone_number_id);
       if (!num) results[1] = { ...init[1], status: "fail", detail: "Phone number not found" };
-      else if (!num.vapi_phone_id) results[1] = { ...init[1], status: "fail", detail: `${num.number || "Number"} is not active in VAPI yet` };
+      else if (!num.vapi_phone_id) results[1] = { ...init[1], status: "fail", detail: `${num.number || "Number"} is not active yet` };
       else results[1] = { ...init[1], status: "pass", detail: `${num.number} ✓` };
     }
     setChecks([...results]);
@@ -178,7 +178,7 @@ const Outbound = () => {
     // Suppressed numbers aren't failures — they were deliberately skipped by DNC screening,
     // so they're reported separately from VAPI errors.
     const skipped = suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "";
-    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown VAPI error"}${skipped}`);
+    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown error"}${skipped}`);
     else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed${skipped}`);
     else if (suppressed > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
     else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);

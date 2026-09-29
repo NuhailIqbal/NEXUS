@@ -32,6 +32,7 @@ import { toast } from "sonner";
 // carrier (and the price it implies) to end users. Raw values are left untouched.
 const PROVIDER_LABELS: Record<string, string> = {
   twilio: "Standard",
+  vapi: "Standard",
 };
 const providerLabel = (p: string) => PROVIDER_LABELS[(p || "").toLowerCase()] ?? p;
 
@@ -498,7 +499,7 @@ const PhoneNumbers = () => {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Provider</Label>
-                <Input value={settingsForm.provider} onChange={(e) => setSettingsForm((f) => ({ ...f, provider: e.target.value }))} />
+                <Input value={providerLabel(settingsForm.provider)} readOnly disabled />
               </div>
               <div className="space-y-2">
                 <Label>Status</Label>
