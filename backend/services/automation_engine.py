@@ -253,7 +253,7 @@ async def _connect_call_agent(user_id: str, config: dict, conversation: dict, ta
         .execute()
     )
     if not agent.data or not agent.data.get("vapi_assistant_id"):
-        raise ValueError(f"{node_label} node: agent {agent_id} not found or has no VAPI assistant")
+        raise ValueError(f"{node_label} node: agent {agent_id} not found or is not set up for calls")
 
     candidate_numbers = (
         supabase.table("phone_numbers")

@@ -1,4 +1,5 @@
 import time
+import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user
@@ -8,6 +9,7 @@ from services import vapi_client
 from config import settings
 from routers.team import resolve_owner_id
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["Tools"])
 
 
@@ -89,7 +91,8 @@ async def create_tool(body: ToolCreate, user=Depends(get_current_user)):
             vapi_tool = await vapi_client.create_tool(vapi_payload)
             row["vapi_tool_id"] = vapi_tool.get("id")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+            logger.error("VAPI error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     result = supabase.table("tools").insert(row).execute()
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -144,7 +147,8 @@ async def update_tool(tool_id: str, body: ToolUpdate, user=Depends(get_current_u
                 )
                 await vapi_client.update_tool(tool["vapi_tool_id"], vapi_payload)
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"VAPI error: {str(e)}")
+                logger.error("VAPI error: %s", e)
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     result = (
         supabase.table("tools")

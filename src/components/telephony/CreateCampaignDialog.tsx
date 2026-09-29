@@ -299,7 +299,7 @@ function Step4({
 }) {
   const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? " ", [agents, data.agentId]);
   const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? " ", [lists, data.listId]);
-  const numberLabel  = useMemo(() => phoneNumbers.find((p) => p.id === data.phoneNumberId)?.number ?? "VAPI default", [phoneNumbers, data.phoneNumberId]);
+  const numberLabel  = useMemo(() => phoneNumbers.find((p) => p.id === data.phoneNumberId)?.number ?? "Default number", [phoneNumbers, data.phoneNumberId]);
 
   return (
     <div className="space-y-6">

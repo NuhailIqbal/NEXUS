@@ -58,13 +58,13 @@ export function LiveVoiceModal({
   const startCall = async (assistantIdOverride?: string) => {
     if (!agent) return;
     if (!PUBLIC_KEY) {
-      setError("VAPI public key is not configured. Set VITE_VAPI_PUBLIC_KEY in your .env file.");
+      setError("Voice calling is not configured. Please contact support.");
       setStatus("error");
       return;
     }
     const assistantId = assistantIdOverride ?? syncedAssistantId ?? agent.vapi_assistant_id;
     if (!assistantId) {
-      setError("This agent isn't linked to a VAPI assistant yet. It was likely created before VAPI was configured use the Sync button below to fix this.");
+      setError("This agent isn't set up for voice calls yet. It was likely created before voice calling was configured use the Sync button below to fix this.");
       setStatus("error");
       return;
     }
@@ -91,7 +91,7 @@ export function LiveVoiceModal({
         }
       });
       vapi.on("error", (e: any) => {
-        const msg = e?.error?.message ?? e?.message ?? "VAPI call error";
+        const msg = e?.error?.message ?? e?.message ?? "Call error";
         setError(msg);
         setStatus("error");
       });
@@ -111,14 +111,14 @@ export function LiveVoiceModal({
     const result = await api.syncAgentVapi(agent.id);
     setSyncing(false);
     if (result.error || !result.data?.vapi_assistant_id) {
-      setError(result.error ?? "Sync failed no assistant ID returned. Check your VAPI configuration.");
+      setError(result.error ?? "Sync failed no assistant ID returned. Please try again.");
       setStatus("error");
       return;
     }
     const newId: string = result.data.vapi_assistant_id;
     setSyncedAssistantId(newId);
     onAgentSynced?.(agent.id, newId);
-    toast.success("Agent synced to VAPI starting call…");
+    toast.success("Agent synced starting call…");
     await startCall(newId);
   };
 
@@ -221,7 +221,7 @@ export function LiveVoiceModal({
                     ) : (
                       <RefreshCw className="mr-2 h-3.5 w-3.5" />
                     )}
-                    {syncing ? "Syncing…" : "Sync to VAPI"}
+                    {syncing ? "Syncing…" : "Sync agent"}
                   </Button>
                 )}
               </div>

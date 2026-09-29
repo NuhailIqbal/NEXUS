@@ -179,12 +179,12 @@ const AIVoices = () => {
   const speak = async () => {
     if (!previewVoice) return;
     if (!VAPI_PUBLIC_KEY) {
-      setPreviewError("VAPI public key is not configured. Set VITE_VAPI_PUBLIC_KEY in your .env file.");
+      setPreviewError("Voice preview is not configured. Please contact support.");
       return;
     }
     const entry = VOICE_BLOCKS[previewVoice.name.toLowerCase()];
     if (!entry) {
-      setPreviewError(`No Vapi voice mapping found for "${previewVoice.name}".`);
+      setPreviewError(`No voice mapping found for "${previewVoice.name}".`);
       return;
     }
 
