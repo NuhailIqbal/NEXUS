@@ -97,7 +97,10 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
       case "condition":
         return (
           <>
-            <Field label="Field"><Input value={config.field ?? ""} onChange={(e) => set("field", e.target.value)} placeholder="contact.status" /></Field>
+            <Field label="Field"><Input value={config.field ?? ""} onChange={(e) => set("field", e.target.value)} placeholder="call_outcome" /></Field>
+            <p className="text-xs text-muted-foreground">
+              Call fields: <code>status</code>, <code>qualified</code>, <code>call_outcome</code> (final outcome), <code>call_events</code> (all events raised, use "contains").
+            </p>
             <Field label="Operator">
               <select value={config.op ?? "equals"} onChange={(e) => set("op", e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
                 <option value="equals">equals</option>

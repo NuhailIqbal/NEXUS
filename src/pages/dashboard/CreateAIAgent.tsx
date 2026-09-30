@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles, Briefcase,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,13 +14,15 @@ import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
 import { IndustryCombobox } from "@/components/dashboard/IndustryCombobox";
+import { StepCallEvents, toCallEventsPayload, type CallEventForm } from "@/components/agents/StepCallEvents";
 
-export type StepKey = "setup" | "knowledge" | "prompt" | "testing";
+export type StepKey = "setup" | "knowledge" | "prompt" | "events" | "testing";
 
 export const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "setup", title: "Complete Setup", description: "Basic agent configuration and tools", icon: Bot },
   { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
   { key: "prompt", title: "Prompt Studio", description: "Craft the agent's instructions", icon: FileText },
+  { key: "events", title: "Call Events", description: "Moments the agent reports during calls", icon: Zap },
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
 ];
 
@@ -37,6 +39,7 @@ export type FormState = {
   knowledgeFiles: File[];
   systemPrompt: string;
   greeting: string;
+  callEvents: CallEventForm[];
   testMessage: string;
 };
 
@@ -49,13 +52,14 @@ const CreateAIAgent = () => {
   const [stepIndex, setStepIndex] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
   const [completed, setCompleted] = useState<Record<StepKey, boolean>>({
-    setup: false, knowledge: false, prompt: false, testing: false,
+    setup: false, knowledge: false, prompt: false, events: false, testing: false,
   });
   const [form, setForm] = useState<FormState>({
     agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English", voice: "Elliot",
     knowledgeText: "",
     knowledgeFiles: [],
     systemPrompt: "", greeting: "",
+    callEvents: [],
     testMessage: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -109,6 +113,7 @@ const CreateAIAgent = () => {
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
       knowledge_text: form.knowledgeText || null,
+      call_events: toCallEventsPayload(form.callEvents),
     });
     if (error || !data?.id) {
       toast.error(error || "Failed to create agent");
@@ -192,7 +197,7 @@ const CreateAIAgent = () => {
             </div>
           </div>
 
-          <ul className="grid grid-cols-4 gap-2 lg:grid-cols-1">
+          <ul className="grid grid-cols-5 gap-2 lg:grid-cols-1">
             {STEPS.map((s, i) => {
               const isActive = i === stepIndex;
               const isDone = completed[s.key];
@@ -246,6 +251,9 @@ const CreateAIAgent = () => {
             {currentStep.key === "setup" && <StepSetup form={form} update={update} />}
             {currentStep.key === "knowledge" && <StepKnowledge form={form} update={update} />}
             {currentStep.key === "prompt" && <StepPrompt form={form} update={update} />}
+            {currentStep.key === "events" && (
+              <StepCallEvents events={form.callEvents} onChange={(v) => update("callEvents", v)} />
+            )}
             {currentStep.key === "testing" && <StepTesting form={form} update={update} />}
           </div>
 

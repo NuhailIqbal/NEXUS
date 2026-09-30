@@ -9,6 +9,7 @@ from config import settings
 from database import supabase
 from services.gemini import summarize_transcript
 from services.automation_engine import run_post_call_automations
+from services.call_events import finalize_call_events
 from routers.billing import record_call_cost
 
 logger = logging.getLogger(__name__)
@@ -285,6 +286,8 @@ def import_vapi_call(call: dict, user_id: str) -> str:
         supabase.table("conversations").insert(base).execute()
         result = "imported"
 
+    finalize_call_events(vapi_call_id, _conversation_id_for(vapi_call_id))
+
     # Set the displayed call_cost and charge the wallet once (idempotent).
     if dur:
         direction = "inbound" if "inbound" in (call.get("type") or "").lower() else "outbound"
@@ -446,6 +449,8 @@ async def _handle_call_ended(payload: dict):
             cost = record_call_cost(user_id, vapi_call_id, dur_int,
                                     vapi_cost=_extract_vapi_cost(payload), direction=direction)
             logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
+
+    finalize_call_events(vapi_call_id, conv_id)
 
     asyncio.create_task(_post_call_ai(vapi_call_id, transcript, conv_id))
 

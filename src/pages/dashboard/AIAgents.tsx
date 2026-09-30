@@ -5,6 +5,7 @@ import { LiveVoiceModal } from "@/components/dashboard/LiveVoiceModal";
 import EditAgentModal from "./EditAIAgent";
 import { toast } from "sonner";
 import { api } from "@/services/api";
+import type { SavedCallEvent } from "@/components/agents/StepCallEvents";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { SmartFilters, STATUS_DEFAULT, CATEGORY_DEFAULT, DATE_DEFAULT } from "@/components/dashboard/SmartFilters";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
@@ -112,7 +113,15 @@ const AIAgents = () => {
   const confirmDuplicate = async () => {
     if (!pendingDuplicate) return;
     const a = pendingDuplicate;
+    // Carry the agent's call events over so the copy reports the same outcomes.
+    const eventsRes = await api.getAgentEvents(a.id);
+    const callEvents = ((eventsRes.data ?? []) as SavedCallEvent[]).map((e) => ({
+      label: e.label ?? "",
+      description: e.description || null,
+      outcome: e.outcome || null,
+    }));
     const { error } = await api.createAgent({
+      call_events: callEvents,
       name: `${a.name} (Copy)`,
       voice: a.voice,
       language: a.language,
