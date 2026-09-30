@@ -17,7 +17,6 @@ from slowapi.util import get_remote_address
 from database import supabase
 from services.email_service import send_email
 from services.sms_service import send_sms
-from services.call_events import record_hit
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -66,73 +65,6 @@ async def _parse_tool_call(request: Request) -> tuple[str | None, dict, str | No
 
 def _result(tc_id: str | None, result: str) -> dict:
     return {"results": [{"toolCallId": tc_id, "result": result}]}
-
-
-@router.post("/trigger-event")
-@limiter.limit("120/minute")
-async def cb_trigger_event(request: Request):
-    """Records call events raised by the agent's `trigger_event` tool. Unlike the other
-    callbacks this handles every tool call in the request, since the model may raise
-    several events in one turn. Tolerant of both VAPI payload shapes (`toolCalls` with a
-    nested `function`, and `toolCallList` with flat name/arguments) and of junk arguments."""
-    import json
-    try:
-        body = await request.json()
-    except Exception:
-        return {"results": []}
-    if not isinstance(body, dict):
-        return {"results": []}
-
-    msg = body.get("message") if isinstance(body.get("message"), dict) else body
-    call = msg.get("call") if isinstance(msg.get("call"), dict) else {}
-    vapi_call_id = call.get("id")
-    assistant_id = call.get("assistantId") or msg.get("assistantId")
-    tool_calls = msg.get("toolCalls") or msg.get("tool_calls") or msg.get("toolCallList") or []
-    if not isinstance(tool_calls, list):
-        return {"results": []}
-
-    agent = None
-    if assistant_id and isinstance(assistant_id, str):
-        res = (
-            supabase.table("ai_agents")
-            .select("id, user_id")
-            .eq("vapi_assistant_id", assistant_id)
-            .limit(1)
-            .execute()
-        )
-        agent = res.data[0] if res.data else None
-
-    results = []
-    for tc in tool_calls:
-        if not isinstance(tc, dict):
-            continue
-        tc_id = tc.get("id") or tc.get("toolCallId")
-        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
-        args = fn.get("arguments") or {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except Exception:
-                args = {}
-        if not isinstance(args, dict):
-            args = {}
-        if not agent or not vapi_call_id:
-            results.append({"toolCallId": tc_id, "result": "Error: could not identify the call."})
-            continue
-        event = args.get("event")
-        note = args.get("note")
-        try:
-            hit = record_hit(agent["user_id"], agent["id"], vapi_call_id, event,
-                             note if isinstance(note, str) else None, tc_id)
-        except Exception as e:
-            logger.warning("trigger_event failed for call %s: %s", vapi_call_id, e)
-            hit = None
-        label = event if isinstance(event, str) else ""
-        results.append({
-            "toolCallId": tc_id,
-            "result": f"Event '{label}' recorded." if hit else f"Unknown event '{label}'.",
-        })
-    return {"results": results}
 
 
 @router.post("/send-email")

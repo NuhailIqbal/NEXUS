@@ -456,42 +456,6 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.team_members ADD COLUMN IF NOT EXISTS invite_token_expires_at timestamptz',
         'CREATE UNIQUE INDEX IF NOT EXISTS team_members_invite_token_idx '
         'ON public.team_members (invite_token) WHERE invite_token IS NOT NULL',
-        # Call events: per-agent signals the AI raises mid-call, bound to an outcome value.
-        # The agent's single `trigger_event` VAPI tool id lives on ai_agents.events_tool_id;
-        # the final outcome of a call is written to conversations.call_outcome at hangup.
-        'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS events_tool_id text',
-        'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS call_outcome text',
-        '''CREATE TABLE IF NOT EXISTS public.call_events (
-            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
-            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-            agent_id uuid NOT NULL REFERENCES public.ai_agents(id) ON DELETE CASCADE,
-            event_key text NOT NULL,
-            label text NOT NULL,
-            description text,
-            outcome text,
-            position integer DEFAULT 0 NOT NULL,
-            created_at timestamptz DEFAULT now() NOT NULL,
-            UNIQUE (agent_id, event_key)
-        )''',
-        '''CREATE TABLE IF NOT EXISTS public.call_event_hits (
-            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
-            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-            agent_id uuid REFERENCES public.ai_agents(id) ON DELETE SET NULL,
-            conversation_id uuid REFERENCES public.conversations(id) ON DELETE CASCADE,
-            vapi_call_id text NOT NULL,
-            event_id uuid REFERENCES public.call_events(id) ON DELETE SET NULL,
-            event_key text NOT NULL,
-            label text,
-            outcome text,
-            note text,
-            created_at timestamptz DEFAULT now() NOT NULL
-        )''',
-        'ALTER TABLE public.call_event_hits ADD COLUMN IF NOT EXISTS tool_call_id text',
-        'CREATE INDEX IF NOT EXISTS call_event_hits_call_idx ON public.call_event_hits (vapi_call_id, created_at)',
-        # A retried VAPI tool call (same toolCallId) must not double-count an event.
-        '''CREATE UNIQUE INDEX IF NOT EXISTS call_event_hits_tool_call_uidx
-            ON public.call_event_hits (vapi_call_id, tool_call_id) WHERE tool_call_id IS NOT NULL''',
-        'CREATE INDEX IF NOT EXISTS call_event_hits_conv_idx ON public.call_event_hits (conversation_id)',
     ]
     for stmt in statements:
         try:

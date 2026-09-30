@@ -15,7 +15,6 @@ import {
   StepPrompt,
   StepTesting,
 } from "./CreateAIAgent";
-import { StepCallEvents, toCallEventsPayload, type SavedCallEvent } from "@/components/agents/StepCallEvents";
 
 type Agent = {
   id: string;
@@ -46,12 +45,11 @@ const EMPTY_FORM: FormState = {
   industry: "", language: "English", voice: "Elliot",
   knowledgeText: "", knowledgeFiles: [],
   systemPrompt: "", greeting: "",
-  callEvents: [],
   testMessage: "",
 };
 
 const EMPTY_COMPLETED: Record<StepKey, boolean> = {
-  setup: false, knowledge: false, prompt: false, events: false, testing: false,
+  setup: false, knowledge: false, prompt: false, testing: false,
 };
 
 export default function EditAgentModal({
@@ -88,8 +86,6 @@ export default function EditAgentModal({
         return;
       }
       const a = data as Agent;
-      const eventsRes = await api.getAgentEvents(agentId);
-      if (cancelled) return;
       setForm({
         agentName: a.name ?? "",
         website: a.website ?? "",
@@ -103,11 +99,6 @@ export default function EditAgentModal({
         knowledgeFiles: [],
         systemPrompt: a.system_prompt ?? "",
         greeting: a.first_message ?? "",
-        callEvents: ((eventsRes.data ?? []) as SavedCallEvent[]).map((e) => ({
-          label: e.label ?? "",
-          description: e.description ?? "",
-          outcome: e.outcome ?? "",
-        })),
         testMessage: "",
       });
       setStatus(a.status ?? "Active");
@@ -167,7 +158,6 @@ export default function EditAgentModal({
       main_goal: form.mainGoal || null,
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
-      call_events: toCallEventsPayload(form.callEvents),
     });
     if (error) {
       toast.error(error);
@@ -260,7 +250,7 @@ export default function EditAgentModal({
                   </div>
                 </div>
 
-                <ul className="grid grid-cols-5 gap-2 lg:grid-cols-1">
+                <ul className="grid grid-cols-4 gap-2 lg:grid-cols-1">
                   {STEPS.map((s, i) => {
                     const isActive = i === stepIndex;
                     const isDone = completed[s.key];
@@ -319,9 +309,6 @@ export default function EditAgentModal({
                 )}
                 {currentStep.key === "knowledge" && <StepKnowledge form={form} update={update} compact />}
                 {currentStep.key === "prompt" && <StepPrompt form={form} update={update} compact />}
-                {currentStep.key === "events" && (
-                  <StepCallEvents events={form.callEvents} onChange={(v) => update("callEvents", v)} compact />
-                )}
                 {currentStep.key === "testing" && <StepTesting form={form} update={update} compact />}
 
                 <div className="mt-6 flex items-center justify-between border-t border-border pt-4">

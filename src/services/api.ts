@@ -93,7 +93,6 @@ export const api = {
   endVoiceTest: (assistantId: string) => del(`/agents/test-voice/${assistantId}`),
   analyzeAgentWebsite: (url: string) => post("/agents/analyze-website", { url }),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
-  getAgentEvents: (id: string) => get(`/agents/${id}/events`),
   deleteAgent: (id: string) => del(`/agents/${id}`),
   syncAgentVapi: (id: string) => post(`/agents/${id}/sync-vapi`),
   uploadAgentKnowledge: async (agentId: string, file: File) => {
@@ -139,7 +138,6 @@ export const api = {
   // Conversations
   getConversations: (params?: string) => get(`/conversations${params ? `?${params}` : ""}`),
   getConversation: (id: string) => get(`/conversations/${id}`),
-  getConversationEvents: (id: string) => get(`/conversations/${id}/events`),
   getConversationTranscript: (id: string) => get(`/conversations/${id}/transcript`),
   getConversationRecordingUrl: (id: string) => get(`/conversations/${id}/recording-url`),
   getConversationStats: (params?: string) => get(`/conversations/stats${params ? `?${params}` : ""}`),
