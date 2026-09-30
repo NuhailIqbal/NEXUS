@@ -87,13 +87,6 @@ class IntegrationUpdate(BaseModel):
 
 # ── AI Agents ──
 
-class CallEventIn(BaseModel):
-    label: str
-    event_key: Optional[str] = None
-    description: Optional[str] = None
-    outcome: Optional[str] = None
-
-
 class AgentCreate(BaseModel):
     name: str
     voice: Optional[str] = None
@@ -107,7 +100,6 @@ class AgentCreate(BaseModel):
     knowledge_text: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
     transfer_number: Optional[str] = None
-    call_events: Optional[list[CallEventIn]] = None
 
 
 class AgentTest(BaseModel):
@@ -140,7 +132,6 @@ class AgentUpdate(BaseModel):
     website: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
     transfer_number: Optional[str] = None
-    call_events: Optional[list[CallEventIn]] = None
 
 
 # ── Tools ──

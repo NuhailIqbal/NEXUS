@@ -5,23 +5,12 @@ from database import supabase
 from services.email_service import send_email
 from services.sms_service import send_sms
 from services import vapi_client, whitelist_service
-from services.call_events import get_hits
 from routers.billing import outbound_call_block_reason, get_or_create_billing, check_call_quota
 
 logger = logging.getLogger(__name__)
 
 
 async def run_post_call_automations(user_id: str, conversation: dict):
-    # Expose the events raised during the call to flow conditions/templates:
-    # `call_events` (comma-separated event keys) and `call_outcome` (final outcome).
-    if conversation.get("vapi_call_id"):
-        try:
-            conversation["call_events"] = ", ".join(
-                h["event_key"] for h in get_hits(conversation["vapi_call_id"])
-            )
-        except Exception as e:
-            logger.warning(f"could not load call events for automation: {e}")
-
     flows = (
         supabase.table("automation_flows")
         .select("*")
@@ -49,8 +38,6 @@ async def run_post_call_automations(user_id: str, conversation: dict):
                 "phone": conversation.get("phone"),
                 "contact_name": conversation.get("contact_name"),
                 "status": conversation.get("status"),
-                "call_outcome": conversation.get("call_outcome"),
-                "call_events": conversation.get("call_events"),
                 "transcript": (conversation.get("transcript") or "")[:500],
             },
         }
@@ -339,8 +326,6 @@ def _interpolate(template: str, conversation: dict) -> str:
         "{{phone}}": conversation.get("phone", ""),
         "{{status}}": conversation.get("status", ""),
         "{{duration}}": conversation.get("duration", ""),
-        "{{call_outcome}}": conversation.get("call_outcome", ""),
-        "{{call_events}}": conversation.get("call_events", ""),
     }
     result = template
     for key, val in replacements.items():
