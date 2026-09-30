@@ -188,8 +188,8 @@ export const PALETTE_GROUPS: { title: string; items: { kind: FlowNodeKind; label
     title: "Actions",
     items: [
       { kind: "webhook", label: "Webhook" },
-      { kind: "call", label: "Call" },
-      { kind: "connect-agent", label: "Connect Call Agent" },
+      { kind: "call", label: "Call Fixed Number" },
+      { kind: "connect-agent", label: "Call Back Contact" },
       { kind: "sms", label: "SMS" },
       { kind: "email", label: "Email" },
       { kind: "update-contact", label: "Update Contact" },

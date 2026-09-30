@@ -153,7 +153,9 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
               </Select>
             </Field>
             <p className="text-xs text-muted-foreground">
-              Places a real outbound call to the contact using this agent when the flow runs.
+              Automatically calls back whichever number triggered this flow (the contact/caller),
+              using this agent — no number to type in. Use "Call Fixed Number" instead to notify
+              a different, fixed number (e.g. a manager).
             </p>
           </>
         );
@@ -177,7 +179,7 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
             </Field>
             <p className="text-xs text-muted-foreground">
               Places a real outbound call to this fixed number (not the contact) using this agent —
-              e.g. to notify a manager when the flow runs. Use "Connect Call Agent" instead to call the contact back.
+              e.g. to notify a manager when the flow runs. Use "Call Back Contact" instead to call the contact back.
             </p>
           </>
         );
