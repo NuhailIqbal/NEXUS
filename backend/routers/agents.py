@@ -1,5 +1,6 @@
 import re
 import logging
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -17,6 +18,7 @@ from config import settings
 from routers.billing import account_block_reason, get_or_create_billing
 from routers.team import resolve_owner_id
 
+logger = logging.getLogger(__name__)
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/agents", tags=["Agents"])
@@ -108,6 +110,8 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
             except Exception as e:
                 logger.error("VAPI transfer tool error: %s", e)
                 raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+                logger.error("VAPI transfer tool error: %s", e)
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
             if transfer_tool_id:
                 tool_ids = (tool_ids or []) + [transfer_tool_id]
                 row["transfer_tool_id"] = transfer_tool_id
@@ -177,6 +181,7 @@ async def start_voice_test(body: AgentVoiceTestStart, user=Depends(get_current_u
     is expected to call DELETE /test-voice/{assistant_id} once the test call ends."""
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="Voice testing is not available right now.")
+        raise HTTPException(status_code=503, detail="Voice testing is not available right now.")
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, None, None)
     payload = vapi_client.build_assistant_payload(
         name=f"[test] {body.name}",
@@ -190,8 +195,11 @@ async def start_voice_test(body: AgentVoiceTestStart, user=Depends(get_current_u
     except Exception as e:
         logger.error("VAPI error: %s", e)
         raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+        logger.error("VAPI error: %s", e)
+        raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
     assistant_id = vapi_agent.get("id")
     if not assistant_id:
+        raise HTTPException(status_code=502, detail="The voice service did not return an assistant id.")
         raise HTTPException(status_code=502, detail="The voice service did not return an assistant id.")
     return {"data": {"vapi_assistant_id": assistant_id}, "error": None}
 
@@ -231,6 +239,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=400, detail="The voice service is not configured on this server.")
+        raise HTTPException(status_code=400, detail="The voice service is not configured on this server.")
 
     agent_res = (
         supabase.table("ai_agents")
@@ -258,6 +267,8 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
         except Exception as e:
             logger.error("VAPI transfer tool error: %s", e)
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+            logger.error("VAPI transfer tool error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
     if transfer_tool_id:
         tool_ids = (tool_ids or []) + [transfer_tool_id]
     events = get_events(agent_id)
@@ -282,6 +293,8 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
         vapi_agent = await vapi_client.create_assistant(payload)
         vapi_assistant_id = vapi_agent.get("id")
     except Exception as e:
+        logger.error("VAPI error: %s", e)
+        raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
         logger.error("VAPI error: %s", e)
         raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
@@ -451,6 +464,8 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         except Exception as e:
             logger.error("VAPI error: %s", e)
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+            logger.error("VAPI error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     if new_events is not None:
         replace_events(owner_id, agent_id, new_events)
@@ -524,6 +539,8 @@ async def upload_knowledge(agent_id: str, file: UploadFile = File(...), user=Dep
             vapi_file = await vapi_client.upload_file(content, file.filename)
             vapi_file_id = vapi_file.get("id")
         except Exception as e:
+            logger.error("VAPI file upload error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
             logger.error("VAPI file upload error: %s", e)
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
