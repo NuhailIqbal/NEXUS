@@ -212,6 +212,30 @@ class PhoneNumberUpdate(BaseModel):
     status: Optional[str] = None
 
 
+# ── BYOT (Bring Your Own Twilio) ──
+
+class TwilioCredentialCreate(BaseModel):
+    account_sid: str
+    auth_token: str
+    label: Optional[str] = None
+
+
+class TwilioCredentialUpdate(BaseModel):
+    account_sid: Optional[str] = None
+    auth_token: Optional[str] = None
+    label: Optional[str] = None
+
+
+class PhoneNumberByotCreate(BaseModel):
+    mode: str  # "import" | "purchase"
+    credential_id: str
+    number: Optional[str] = None       # required for mode="import"
+    area_code: Optional[str] = None    # optional, mode="purchase"
+    agent_id: Optional[str] = None
+    label: Optional[str] = None
+    status: Optional[str] = "Active"
+
+
 # ── Outbound Call ──
 
 class OutboundCallCreate(BaseModel):

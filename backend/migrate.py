@@ -456,6 +456,20 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.team_members ADD COLUMN IF NOT EXISTS invite_token_expires_at timestamptz',
         'CREATE UNIQUE INDEX IF NOT EXISTS team_members_invite_token_idx '
         'ON public.team_members (invite_token) WHERE invite_token IS NOT NULL',
+        # BYOT (Bring Your Own Twilio): a number can reference a user-connected Twilio
+        # account instead of the platform's own one; its provider value is 'twilio_byot'.
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS twilio_credential_id uuid',
+        '''CREATE TABLE IF NOT EXISTS public.twilio_byot_credentials (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL,
+            account_sid text NOT NULL,
+            config_encrypted text NOT NULL,
+            label text,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS twilio_byot_credentials_user_idx ON public.twilio_byot_credentials (user_id)',
+        'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS byot_exclude_twilio_leg boolean DEFAULT true',
     ]
     for stmt in statements:
         try:

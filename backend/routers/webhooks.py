@@ -65,6 +65,32 @@ def _extract_phone_number(payload: dict) -> str | None:
     return customer.get("number")
 
 
+def _extract_phone_number_id(payload: dict) -> str | None:
+    """VAPI's id for the NEXUS phone number that handled this call (matches
+    phone_numbers.vapi_phone_id) — None for calls with no phone number (e.g. web
+    widget calls)."""
+    msg = payload.get("message", {})
+    call_obj = msg.get("call", {})
+    return call_obj.get("phoneNumberId") or msg.get("phoneNumberId")
+
+
+def _is_byot_call(payload: dict) -> bool:
+    """True if the phone number that handled this call is a BYOT (user-owned Twilio)
+    number — used to exclude the platform's estimated Twilio carrier leg from the
+    call's charge, since the user already pays Twilio directly for it."""
+    vapi_phone_id = _extract_phone_number_id(payload)
+    if not vapi_phone_id:
+        return False
+    row = (
+        supabase.table("phone_numbers")
+        .select("provider")
+        .eq("vapi_phone_id", vapi_phone_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(row.data and (row.data[0].get("provider") or "").lower() == "twilio_byot")
+
+
 # A call counts as "qualified" when the AI handed it off to a human — VAPI
 # reports this via endedReason (e.g. "assistant-forwarded-call", "transfer").
 def _is_qualified(ended_reason: str) -> bool:
@@ -289,7 +315,8 @@ def import_vapi_call(call: dict, user_id: str) -> str:
     if dur:
         direction = "inbound" if "inbound" in (call.get("type") or "").lower() else "outbound"
         record_call_cost(user_id, vapi_call_id, dur,
-                         vapi_cost=_extract_vapi_cost(payload), direction=direction)
+                         vapi_cost=_extract_vapi_cost(payload), direction=direction,
+                         is_byot=_is_byot_call(payload))
     return result
 
 
@@ -444,7 +471,8 @@ async def _handle_call_ended(payload: dict):
         if dur_int > 0:
             direction = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
             cost = record_call_cost(user_id, vapi_call_id, dur_int,
-                                    vapi_cost=_extract_vapi_cost(payload), direction=direction)
+                                    vapi_cost=_extract_vapi_cost(payload), direction=direction,
+                                    is_byot=_is_byot_call(payload))
             logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
 
     asyncio.create_task(_post_call_ai(vapi_call_id, transcript, conv_id))

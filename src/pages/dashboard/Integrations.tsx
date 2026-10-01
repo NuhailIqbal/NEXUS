@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plug, Mail, Phone, Plus, Trash2, Settings as SettingsIcon, PlayCircle, CheckCircle2, XCircle, Loader2, ShieldCheck, ExternalLink } from "lucide-react";
+import { Mail, Phone, Plus, Trash2, Settings as SettingsIcon, PlayCircle, CheckCircle2, XCircle, Loader2, ShieldCheck, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,8 +21,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AddIntegrationDialog } from "@/components/integrations/AddIntegrationDialog";
+import { GoogleCalendarCard } from "@/components/integrations/GoogleCalendarCard";
+import { TwilioByotCard } from "@/components/integrations/TwilioByotCard";
+import { IntegrationTile } from "@/components/integrations/IntegrationTile";
 import { api } from "@/services/api";
 import { toast } from "sonner";
+
+const CATEGORY_ICON = { voice: Phone, email: Mail, other: ShieldCheck } as const;
 
 type Integration = {
   id: string;
@@ -37,6 +42,10 @@ const Integrations = () => {
   const [openAdd, setOpenAdd] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
+  // Twilio BYOT credentials live in their own card/endpoint, not the `integrations`
+  // table — bumping this remounts TwilioByotCard so it refetches after a connection
+  // made from the generic Add Integration dialog.
+  const [twilioRefreshKey, setTwilioRefreshKey] = useState(0);
 
   const [testTarget, setTestTarget] = useState<Integration | null>(null);
   const [testState, setTestState] = useState<"idle" | "running" | "success" | "fail">("idle");
@@ -59,9 +68,7 @@ const Integrations = () => {
     fetchIntegrations();
   }, [fetchIntegrations]);
 
-  const voice = integrations.filter((i) => i.category === "voice");
-  const email = integrations.filter((i) => i.category === "email");
-  const other = integrations.filter((i) => i.category === "other");
+  const hasDncIntegration = integrations.some((i) => i.category === "other");
 
   const handleDelete = async (i: Integration) => {
     const { error } = await api.deleteIntegration(i.id);
@@ -153,56 +160,51 @@ const Integrations = () => {
     }
   };
 
-  const Section = ({ title, icon: Icon, items }: { title: string; icon: typeof Plug; items: Integration[] }) =>
-    items.length === 0 ? null : (
-      <div>
-        <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-foreground">
-          <Icon className="h-5 w-5 text-primary" />
-          {title}
-        </h2>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {items.map((i) => (
-            <div key={i.id} className="flex items-start justify-between rounded-xl border border-border bg-card p-4 card-interactive">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-foreground">{i.name}</div>
-                <div className="text-xs text-muted-foreground">{i.description}</div>
-                <div className="mt-2">
-                  <Badge variant={i.status === "Active" ? "default" : i.status === "Paused" ? "secondary" : "outline"}>
-                    {i.status}
-                  </Badge>
-                </div>
-              </div>
-              <div className="flex items-center gap-0.5 ml-2">
-                <button
-                  onClick={() => openTest(i)}
-                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-primary sm:p-1.5"
-                  aria-label="Test"
-                  title="Test connection"
-                >
-                  <PlayCircle className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => openSettings(i)}
-                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:p-1.5"
-                  aria-label="Settings"
-                  title="Settings"
-                >
-                  <SettingsIcon className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(i)}
-                  className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-destructive sm:p-1.5"
-                  aria-label="Delete"
-                  title="Delete"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+  const IntegrationCard = ({ i }: { i: Integration }) => (
+    <IntegrationTile
+      icon={CATEGORY_ICON[i.category]}
+      title={i.name}
+      badge={
+        i.status === "Active" ? (
+          <Badge variant="outline" className="shrink-0 gap-1 border-success/40 bg-success/10 text-success">
+            <CheckCircle2 className="h-3 w-3" /> Connected
+          </Badge>
+        ) : (
+          <Badge variant={i.status === "Paused" ? "secondary" : "outline"}>{i.status}</Badge>
+        )
+      }
+      actions={
+        <>
+          <button
+            onClick={() => openTest(i)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-primary"
+            aria-label="Test"
+            title="Test connection"
+          >
+            <PlayCircle className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => openSettings(i)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <SettingsIcon className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => handleDelete(i)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+            aria-label="Delete"
+            title="Delete"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </>
+      }
+    >
+      <p className="truncate">{i.description}</p>
+    </IntegrationTile>
+  );
 
   if (loading) {
     return (
@@ -213,7 +215,7 @@ const Integrations = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Integrations</h1>
@@ -225,38 +227,42 @@ const Integrations = () => {
           </Button>
         </div>
       </div>
-      <Section title="Voice & Telephony" icon={Phone} items={voice} />
-      <Section title="Email" icon={Mail} items={email} />
-      {/* WhitelistData is currently the only integration type that lands in "other" — name
-          the section after what it actually is instead of a generic catch-all label. */}
-      <Section title="DNC Screening" icon={ShieldCheck} items={other} />
-      {other.length === 0 && (
-        <div className="flex flex-col items-start justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/30 p-4 sm:flex-row sm:items-center">
-          <div className="flex items-start gap-3">
-            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-            <div>
-              <div className="font-medium text-foreground">Screen contacts against DNC & litigation lists</div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                WhitelistData checks phone numbers against Do-Not-Call and litigator lists before you dial.
-                It's a separate service, so sign up there to get an API key, then connect it here with Add Integration.
-              </p>
-            </div>
-          </div>
-          <a
-            href="https://app.whitelistdata.com/"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <GoogleCalendarCard />
+        <TwilioByotCard key={twilioRefreshKey} />
+        {integrations.map((i) => <IntegrationCard key={i.id} i={i} />)}
+        {/* WhitelistData is currently the only integration type that lands in "other" —
+            name the prompt after what it actually is instead of a generic catch-all label. */}
+        {!hasDncIntegration && (
+          <IntegrationTile
+            icon={ShieldCheck}
+            title="DNC Screening"
+            dashed
+            actions={
+              <a
+                href="https://app.whitelistdata.com/"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              >
+                Get an API key <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            }
           >
-            Get an API key <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-        </div>
-      )}
+            <p>
+              Screen contacts against Do-Not-Call and litigator lists before you dial. WhitelistData is a
+              separate service — sign up to get an API key, then connect it here with Add Integration.
+            </p>
+          </IntegrationTile>
+        )}
+      </div>
 
       <AddIntegrationDialog
         open={openAdd}
         onOpenChange={setOpenAdd}
         onCreate={handleCreateIntegration}
+        onTwilioConnected={() => setTwilioRefreshKey((k) => k + 1)}
       />
 
       {/* Test Connection Modal */}

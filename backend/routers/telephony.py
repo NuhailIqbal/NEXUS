@@ -11,8 +11,9 @@ from models.schemas import (
     InboundQueueCreate, InboundQueueUpdate,
     PhoneNumberCreate, PhoneNumberUpdate,
     OutboundCallCreate,
+    TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, whitelist_service
+from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -21,6 +22,7 @@ from routers.billing import (
     has_balance,
     debit_balance,
     PHONE_NUMBER_MONTHLY_COST,
+    BYOT_PHONE_NUMBER_MONTHLY_COST,
 )
 from routers.team import resolve_owner_id
 
@@ -167,10 +169,13 @@ async def _resolve_assistant_id(user_id: str, agent_id: str | None) -> str | Non
 async def _provision_phone_number(*, user_id: str, provider: str, number: str | None = None,
                                   area_code: str | None = None, agent_id: str | None = None,
                                   status: str = "Active", monthly_cost: float = 0.0,
-                                  stripe_session_id: str | None = None) -> dict:
-    """Provision a phone number (VAPI-native or Twilio→VAPI import) and store the row.
+                                  stripe_session_id: str | None = None,
+                                  credential_id: str | None = None, mode: str | None = None,
+                                  label: str | None = None) -> dict:
+    """Provision a phone number (VAPI-native, Twilio→VAPI import, or BYOT) and store the row.
 
-    Shared by the direct create endpoint (VAPI) and the post-payment confirm endpoint (Twilio).
+    Shared by the direct create endpoint (VAPI), the post-payment confirm endpoint
+    (Twilio), and the BYOT endpoint (twilio_byot).
     """
     provider = (provider or "vapi").lower()
     row: dict = {
@@ -183,8 +188,83 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
         row["agent_id"] = agent_id
     if stripe_session_id:
         row["stripe_session_id"] = stripe_session_id
+    if label:
+        row["label"] = label
 
     assistant_id = await _resolve_assistant_id(user_id, agent_id)
+
+    if provider == "twilio_byot":
+        creds = twilio_byot_service.get_credentials(credential_id, user_id)
+        if not creds:
+            raise HTTPException(status_code=404, detail="Twilio credential not found")
+        account_sid, auth_token = creds
+
+        if mode == "purchase":
+            try:
+                purchased = await twilio_service.buy_us_number(
+                    sms=True, voice=True, area_code=area_code,
+                    account_sid=account_sid, auth_token=auth_token,
+                )
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Twilio purchase failed: {str(e)}")
+            row["number"] = purchased["number"]
+            row["twilio_sid"] = purchased.get("sid")
+        else:  # mode == "import": the user already owns this number
+            number = (number or "").strip()
+            if not number:
+                raise HTTPException(status_code=400, detail="A phone number is required to import.")
+            # Verify it's really on their Twilio account before attempting the VAPI import —
+            # a typo (missing '+', wrong country code, extra whitespace) would otherwise only
+            # surface as VAPI's generic import failure further down, with no hint of why.
+            sid = await twilio_service.find_sid_by_number(number, account_sid=account_sid, auth_token=auth_token)
+            if not sid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{number} wasn't found on your connected Twilio account. "
+                           "Check it's typed correctly, e.g. +15551234567.",
+                )
+            row["number"] = number
+            row["twilio_sid"] = sid
+
+        if settings.vapi_api_key:
+            try:
+                vapi_payload: dict = {
+                    "provider": "twilio",
+                    "number": row["number"],
+                    "twilioAccountSid": account_sid,
+                    "twilioAuthToken": auth_token,
+                }
+                if assistant_id:
+                    vapi_payload["assistantId"] = assistant_id
+                vapi_result = await vapi_client.create_phone_number(vapi_payload)
+                row["vapi_phone_id"] = vapi_result.get("id")
+            except Exception as e:
+                logger.error("Imported %s but VAPI import failed: %s", row["number"], e)
+                # mode="purchase" just spent the user's own money on a Twilio number that
+                # would otherwise be left live (and billed by Twilio) with zero record of
+                # it anywhere on our side — best-effort release it so they aren't stuck
+                # paying for a number they can't see or manage. mode="import" never
+                # purchased anything, so there's nothing to roll back.
+                if mode == "purchase" and row.get("twilio_sid"):
+                    try:
+                        await twilio_service.release_number(
+                            row["twilio_sid"], account_sid=account_sid, auth_token=auth_token,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to roll back Twilio number %s (sid=%s) after a failed VAPI "
+                            "import — it is still live on the user's own Twilio account",
+                            row["number"], row.get("twilio_sid"),
+                        )
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+
+        row["twilio_credential_id"] = credential_id
+        row["monthly_cost"] = monthly_cost or BYOT_PHONE_NUMBER_MONTHLY_COST
+        from services.phone_billing import _add_one_month
+        row["next_billing_at"] = _add_one_month(datetime.now(timezone.utc)).isoformat()
+
+        result = supabase.table("phone_numbers").insert(row).execute()
+        return result.data[0] if result.data else row
 
     if provider == "vapi" and settings.vapi_api_key:
         try:
@@ -397,6 +477,79 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
     return {"data": row, "error": None}
 
 
+# ── BYOT (Bring Your Own Twilio) ──
+
+@router.get("/twilio-credentials")
+async def list_twilio_credentials(user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
+    return {"data": twilio_byot_service.list_credentials(owner_id), "error": None}
+
+
+@router.post("/twilio-credentials")
+async def create_twilio_credential(body: TwilioCredentialCreate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
+    try:
+        row = await twilio_byot_service.save_credentials(
+            owner_id, body.account_sid, body.auth_token, body.label,
+        )
+    except twilio_byot_service.InvalidTwilioCredentials as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"data": row, "error": None}
+
+
+@router.patch("/twilio-credentials/{credential_id}")
+async def update_twilio_credential(credential_id: str, body: TwilioCredentialUpdate, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
+    try:
+        row = await twilio_byot_service.update_credentials(
+            credential_id, owner_id,
+            account_sid=body.account_sid, auth_token=body.auth_token, label=body.label,
+        )
+    except twilio_byot_service.InvalidTwilioCredentials as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Twilio credential not found")
+    return {"data": row, "error": None}
+
+
+@router.delete("/twilio-credentials/{credential_id}")
+async def delete_twilio_credential(credential_id: str, user=Depends(get_current_user)):
+    owner_id = resolve_owner_id(user["user_id"])
+    try:
+        twilio_byot_service.delete_credentials(credential_id, owner_id)
+    except twilio_byot_service.CredentialInUse as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"data": None, "error": None}
+
+
+@router.post("/phone-numbers/byot")
+async def create_byot_phone_number(body: PhoneNumberByotCreate, user=Depends(get_current_user)):
+    """BYOT numbers skip the wallet-debit/Stripe-checkout path entirely — there's no
+    upfront charge. The $1/month hosting fee is billed by the same recurring sweep
+    that bills platform Twilio numbers (services/phone_billing.py), just at the lower
+    BYOT rate, since the user already pays Twilio directly for the number itself."""
+    owner_id = resolve_owner_id(user["user_id"])
+    mode = (body.mode or "").lower()
+    if mode not in ("import", "purchase"):
+        raise HTTPException(status_code=400, detail="mode must be 'import' or 'purchase'")
+    if mode == "import" and not body.number:
+        raise HTTPException(status_code=400, detail="number is required for mode='import'")
+
+    row = await _provision_phone_number(
+        user_id=owner_id,
+        provider="twilio_byot",
+        number=body.number,
+        area_code=body.area_code,
+        agent_id=body.agent_id,
+        status=body.status or "Active",
+        monthly_cost=BYOT_PHONE_NUMBER_MONTHLY_COST,
+        credential_id=body.credential_id,
+        mode=mode,
+        label=body.label,
+    )
+    return {"data": row, "error": None}
+
+
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
@@ -468,6 +621,8 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
             await vapi_client.delete_phone_number(existing.data["vapi_phone_id"])
         except Exception:
             pass
+    # BYOT: the Twilio number belongs to the user's own account, not ours — we only
+    # ever remove our own VAPI import + database row, never touch their Twilio account.
     if existing.data and (existing.data.get("provider") or "").lower() == "twilio":
         # Deleting our record must not silently leave a real Twilio number live —
         # Twilio bills it monthly forever otherwise, regardless of whether it's used

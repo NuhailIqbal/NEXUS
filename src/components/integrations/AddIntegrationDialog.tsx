@@ -1,15 +1,22 @@
-import { useState } from "react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, Eye, EyeOff, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, Eye, EyeOff, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { api } from "@/services/api";
+import { CalendarConnectSteps } from "./CalendarConnectSteps";
+import { startGoogleConnect } from "./calendarConnect";
+import type { CalendarStatus } from "./calendarTypes";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate?: (data: { name: string; description: string; type: string; credentials: Record<string, string> }) => void;
+  /** Called after a Twilio (BYOT) connection is saved, so the page's dedicated
+   *  Twilio card (which has its own separate list/delete UI) can refresh. */
+  onTwilioConnected?: () => void;
 };
 
 type FieldDef = { key: string; label: string; placeholder: string; help: string; type?: string };
@@ -17,26 +24,86 @@ type FieldDef = { key: string; label: string; placeholder: string; help: string;
 // `provider` is written into the saved config blob so the backend can identify this
 // integration reliably, independent of whatever the user types as its display name.
 //
-// Only WhitelistData is offered here — every other entry that used to live in this list
-// (Brevo, Twilio, Stripe, OpenAI, Gemini, and a long tail of placeholder providers with no
-// backend behind them at all) has been removed at the user's request.
-const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlPaste?: boolean; fields: FieldDef[] }[] = [
-  { value: "WhitelistData", label: "WhitelistData (DNC screening)", provider: "whitelistdata", urlPaste: true, fields: [
+// WhitelistData, Brevo, SendGrid and SMTP are offered here — every other entry that used to
+// live in this list (Twilio, Stripe, OpenAI, Gemini, and a long tail of placeholder providers
+// with no backend behind them at all) has been removed at the user's request. Twilio is back,
+// now backed by the real BYOT feature (services/twilio_byot_service.py) — see `twilioByot` below.
+const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlPaste?: boolean; calendar?: boolean; twilioByot?: boolean; fields: FieldDef[] }[] = [
+  { value: "WhitelistData", label: "WhitelistData", provider: "whitelistdata", urlPaste: true, fields: [
     { key: "apiKey", label: "API Key", placeholder: "d5078618-5c1c-4e3e-…", help: "The apiKey value from your WhitelistData account" },
     { key: "code", label: "Function Code", placeholder: "ONbKJs8jpJZWJU5vO9Zg…", help: "The code value from your WhitelistData endpoint URL" },
     { key: "secret", label: "Secret", placeholder: "sha290OpGRNz", help: "The secret value from your WhitelistData endpoint URL", type: "password" },
   ]},
+  // Not an API-key integration: connecting goes through Google's own sign-in (OAuth), so this type
+  // has no fields. Step 2 shows the setup steps and a "Connect with Google" button instead.
+  { value: "GoogleCalendar", label: "Google Calendar", calendar: true, fields: [] },
+  // Bring Your Own Twilio: saved via /telephony/twilio-credentials (a dedicated table/endpoint),
+  // not the generic integrations table — see the twilioByot branch in next() below.
+  { value: "TwilioByot", label: "Twilio", twilioByot: true, fields: [
+    { key: "accountSid", label: "Account SID", placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", help: "Twilio Console → Account" },
+    { key: "authToken", label: "Auth Token", placeholder: "Your Twilio Auth Token", help: "Twilio Console → Account → API keys & tokens", type: "password" },
+  ]},
+  { value: "Brevo", label: "Brevo", provider: "brevo", fields: [
+    { key: "apiKey", label: "API Key", placeholder: "xkeysib-xxxxxxxxxxxx…", help: "Your Brevo API key (SMTP & API > API Keys)", type: "password" },
+    { key: "fromEmail", label: "From Email", placeholder: "noreply@yourdomain.com", help: "Must be a verified sender in Brevo" },
+  ]},
+  { value: "SendGrid", label: "SendGrid", provider: "sendgrid", fields: [
+    { key: "apiKey", label: "API Key", placeholder: "SG.xxxxxxxxxxxx…", help: "Your SendGrid API key (Settings > API Keys)", type: "password" },
+    { key: "fromEmail", label: "From Email", placeholder: "noreply@yourdomain.com", help: "Must be a verified sender identity in SendGrid" },
+  ]},
+  { value: "SMTP", label: "SMTP", provider: "smtp", fields: [
+    { key: "host", label: "SMTP Host", placeholder: "smtp.yourdomain.com", help: "Your SMTP server hostname" },
+    { key: "port", label: "Port", placeholder: "587", help: "Usually 587 (TLS) or 465 (SSL)" },
+    { key: "username", label: "Username", placeholder: "you@yourdomain.com", help: "SMTP login username" },
+    { key: "password", label: "Password", placeholder: "••••••••", help: "SMTP login password", type: "password" },
+    { key: "fromEmail", label: "From Email", placeholder: "noreply@yourdomain.com", help: "Address emails will be sent from" },
+  ]},
 ];
 
-export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
+export function AddIntegrationDialog({ open, onOpenChange, onCreate, onTwilioConnected }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [type, setType] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [submitting, setSubmitting] = useState(false);
 
   const selected = INTEGRATION_TYPES.find((t) => t.value === type);
+  const isCalendar = !!selected?.calendar;
+  const isTwilioByot = !!selected?.twilioByot;
+
+  const [calStatus, setCalStatus] = useState<CalendarStatus | null>(null);
+  const [calLoading, setCalLoading] = useState(false);
+  const [calError, setCalError] = useState<string | null>(null);
+  const [isOwner, setIsOwner] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+
+  const loadCalendar = async () => {
+    setCalLoading(true);
+    setCalError(null);
+    const [s, role] = await Promise.all([api.getCalendarStatus(), api.getMyRole()]);
+    if (s.error || !s.data) setCalError(s.error || "Couldn't load the calendar setup.");
+    else setCalStatus(s.data as CalendarStatus);
+    setIsOwner((role.data as { is_owner?: boolean } | null)?.is_owner ?? true);
+    setCalLoading(false);
+  };
+
+  // Look up the calendar setup only when the person actually reaches the Google Calendar step.
+  useEffect(() => {
+    if (open && step === 2 && isCalendar) loadCalendar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step, isCalendar]);
+
+  const connectGoogle = async () => {
+    setConnecting(true);
+    const err = await startGoogleConnect();
+    if (err) {
+      setConnecting(false);
+      toast.error(err);
+    }
+  };
+  const canConnect = !!calStatus && calStatus.configured && isOwner && (!calStatus.connected || calStatus.status === "reauth_required");
 
   const reset = () => {
     setStep(1);
@@ -44,6 +111,10 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
     setDescription("");
     setType("");
     setCreds({});
+    setCalStatus(null);
+    setCalError(null);
+    setConnecting(false);
+    setSubmitting(false);
   };
 
   const close = (next: boolean) => {
@@ -51,16 +122,29 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
     onOpenChange(next);
   };
 
-  const next = () => {
+  const next = async () => {
     if (step === 1) {
-      if (!name.trim()) return toast.error("Integration name is required");
       if (!type) return toast.error("Please select an integration type");
+      if (!isCalendar && !name.trim()) return toast.error("Integration name is required");
       setStep(2);
       return;
     }
     if (step === 2) {
       const missing = selected?.fields.find((f) => !creds[f.key]?.trim());
       if (missing) return toast.error(`${missing.label} is required`);
+
+      if (isTwilioByot) {
+        setSubmitting(true);
+        const { error } = await api.createTwilioCredential({
+          account_sid: creds.accountSid, auth_token: creds.authToken, label: name.trim() || undefined,
+        });
+        setSubmitting(false);
+        if (error) return toast.error(error);
+        onTwilioConnected?.();
+        setStep(3);
+        return;
+      }
+
       const credentials = selected?.provider
         ? { ...creds, provider: selected.provider }
         : creds;
@@ -104,7 +188,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
         </div>
 
         <div className="flex items-center justify-center gap-2 px-6 pt-5">
-          {[1, 2, 3].map((n, i) => {
+          {(isCalendar ? [1, 2] : [1, 2, 3]).map((n, i, all) => {
             const done = step > n;
             const active = step === n;
             return (
@@ -112,7 +196,7 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
                 <div className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold ${done || active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                   {done ? <Check className="h-4 w-4" /> : n}
                 </div>
-                {i < 2 && <div className={`mx-1 h-1 w-10 rounded sm:w-24 ${step > n ? "bg-primary" : "bg-muted"}`} />}
+                {i < all.length - 1 && <div className={`mx-1 h-1 w-10 rounded sm:w-24 ${step > n ? "bg-primary" : "bg-muted"}`} />}
               </div>
             );
           })}
@@ -123,27 +207,40 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
             <div className="space-y-4">
               <h3 className="text-base font-semibold">Integration Details</h3>
               <div>
-                <label className="mb-1.5 block text-sm font-medium">Integration Name <span className="text-destructive">*</span></label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., My Custom API" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">Description</label>
-                <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe what this integration does…" rows={3} className="w-full rounded-md border border-input bg-background p-2 text-sm" />
-              </div>
-              <div>
                 <label className="mb-1.5 block text-sm font-medium">Select Integration Type <span className="text-destructive">*</span></label>
                 <Select value={type || "__none__"} onValueChange={(v) => { setType(v === "__none__" ? "" : v); setCreds({}); }}>
-                  <SelectTrigger><SelectValue placeholder="Select Integration" /></SelectTrigger>
+                  <SelectTrigger aria-label="Integration type"><SelectValue placeholder="Select Integration" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__" disabled>Select Integration</SelectItem>
                     {INTEGRATION_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
                   </SelectContent>
                 </Select>
               </div>
+              {isCalendar ? (
+                <p className="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">
+                  Connect your Google Calendar so agents can check your free times and book meetings during a call.
+                  Click Next to see how.
+                </p>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium">Integration Name <span className="text-destructive">*</span></label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., My Custom API" />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium">Description</label>
+                    <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe what this integration does…" rows={3} className="w-full rounded-md border border-input bg-background p-2 text-sm" />
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {step === 2 && selected && (
+          {step === 2 && isCalendar && (
+            <CalendarConnectSteps status={calStatus} loading={calLoading} error={calError} isOwner={isOwner} onRetry={loadCalendar} />
+          )}
+
+          {step === 2 && selected && !isCalendar && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">Authenticate with {selected.label} using API key</p>
               {selected.provider === "whitelistdata" && (
@@ -225,12 +322,22 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate }: Props) {
                 <Button variant="outline" onClick={() => setStep(1)}><ChevronLeft className="mr-1 h-4 w-4" /> Previous</Button>
               )}
               {step === 1 ? (
-                <Button onClick={next} disabled={!name.trim() || !type} className="bg-primary text-primary-foreground hover:opacity-90">
+                <Button onClick={next} disabled={!type || (!isCalendar && !name.trim())} className="bg-primary text-primary-foreground hover:opacity-90">
                   Next <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
+              ) : isCalendar ? (
+                canConnect ? (
+                  <Button onClick={connectGoogle} disabled={connecting} className="bg-primary text-primary-foreground hover:opacity-90">
+                    {connecting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                    {calStatus?.connected ? "Reconnect with Google" : "Connect with Google"}
+                  </Button>
+                ) : (
+                  <Button onClick={() => close(false)} className="bg-primary text-primary-foreground hover:opacity-90">Close</Button>
+                )
               ) : (
-                <Button onClick={next} className="bg-primary text-primary-foreground hover:opacity-90">
-                  <CheckCircle2 className="mr-1 h-4 w-4" /> Create
+                <Button onClick={next} disabled={submitting} className="bg-primary text-primary-foreground hover:opacity-90">
+                  {submitting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1 h-4 w-4" />}
+                  {submitting ? "Connecting…" : "Create"}
                 </Button>
               )}
             </>
