@@ -60,7 +60,7 @@ def _fetch_due_numbers(now_iso: str) -> list[dict]:
     return (
         supabase.table("phone_numbers")
         .select("id, user_id, number, monthly_cost, next_billing_at")
-        .eq("provider", "twilio")
+        .in_("provider", ["twilio", "twilio_byot"])
         .not_.is_("next_billing_at", "null")
         .lte("next_billing_at", now_iso)
         .order("user_id")

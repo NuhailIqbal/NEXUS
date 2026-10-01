@@ -93,6 +93,11 @@ export const api = {
   endVoiceTest: (assistantId: string) => del(`/agents/test-voice/${assistantId}`),
   analyzeAgentWebsite: (url: string) => post("/agents/analyze-website", { url }),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
+  // The Google Calendar connection
+  getCalendarStatus: () => get("/calendar/status"),
+  getCalendarConnectUrl: (tz: string) => get(`/calendar/google/connect-url?tz=${encodeURIComponent(tz)}`),
+  updateCalendarSettings: (data: Record<string, unknown>) => patch("/calendar/settings", data),
+  disconnectCalendar: () => del("/calendar/google"),
   deleteAgent: (id: string) => del(`/agents/${id}`),
   syncAgentVapi: (id: string) => post(`/agents/${id}/sync-vapi`),
   uploadAgentKnowledge: async (agentId: string, file: File) => {
@@ -154,6 +159,14 @@ export const api = {
   updatePhoneNumber: (id: string, data: any) => patch(`/telephony/phone-numbers/${id}`, data),
   deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
 
+  // Telephony - BYOT (Bring Your Own Twilio)
+  getTwilioCredentials: () => get("/telephony/twilio-credentials"),
+  createTwilioCredential: (data: { account_sid: string; auth_token: string; label?: string }) =>
+    post("/telephony/twilio-credentials", data),
+  updateTwilioCredential: (id: string, data: { account_sid?: string; auth_token?: string; label?: string }) =>
+    patch(`/telephony/twilio-credentials/${id}`, data),
+  deleteTwilioCredential: (id: string) => del(`/telephony/twilio-credentials/${id}`),
+  createByotPhoneNumber: (data: any) => post("/telephony/phone-numbers/byot", data),
   // Telephony - Campaigns
   getCampaigns: () => get("/telephony/campaigns"),
   createCampaign: (data: any) => post("/telephony/campaigns", data),

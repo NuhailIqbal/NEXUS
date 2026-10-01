@@ -30,9 +30,12 @@ import { toast } from "sonner";
 
 // User-facing provider labels are kept generic so we don't expose the underlying
 // carrier (and the price it implies) to end users. Raw values are left untouched.
+// BYOT is the one exception — the whole point of it is the user explicitly
+// choosing Twilio, so it's surfaced plainly instead of hidden behind "Standard".
 const PROVIDER_LABELS: Record<string, string> = {
   twilio: "Standard",
   vapi: "Standard",
+  twilio_byot: "Twilio",
 };
 const providerLabel = (p: string) => PROVIDER_LABELS[(p || "").toLowerCase()] ?? p;
 
@@ -47,6 +50,7 @@ type Num = {
   monthly_cost?: number;
   next_billing_at?: string | null;
   suspended_for_balance?: boolean;
+  twilio_credential_id?: string | null;
 };
 
 // Real recurring-billing renewal date (next_billing_at). NULL for free VAPI numbers.
@@ -446,8 +450,24 @@ const PhoneNumbers = () => {
         open={open}
         onOpenChange={setOpen}
         onCreate={async (d) => {
+          const status = d.active ? "Active" : "Inactive";
+
+          if (d.serviceProvider === "BYOT") {
+            const { data, error } = await api.createByotPhoneNumber({
+              mode: d.byotMode || "import",
+              credential_id: d.byotCredentialId,
+              number: d.byotNumber || undefined,
+              agent_id: d.agentId || undefined,
+              status,
+            });
+            if (error) return toast.error(error);
+            toast.success(`Phone number ${data?.number || ""} connected`);
+            fetchNumbers();
+            return;
+          }
+
           const payload: Record<string, any> = {
-            status: d.active ? "Active" : "Inactive",
+            status,
             provider: d.serviceProvider,
           };
           if (d.agentId) payload.agent_id = d.agentId;

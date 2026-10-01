@@ -410,6 +410,10 @@ CREATE TABLE IF NOT EXISTS public.platform_settings (
     -- Shared VAPI assistant used to answer inbound calls for accounts with an empty
     -- wallet balance (created once, lazily, and reused across every user).
     fallback_assistant_id text,
+    -- BYOT: whether the estimated Twilio carrier leg is excluded from a BYOT call's
+    -- per-minute charge (the user already pays Twilio directly for that leg on their
+    -- own account, so including it too would double-charge them).
+    byot_exclude_twilio_leg boolean DEFAULT true,
     updated_at timestamp with time zone DEFAULT now()
 );
 
@@ -640,7 +644,26 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     label text,
     stripe_session_id text,
     suspended_for_balance boolean DEFAULT false,
-    next_billing_at timestamp with time zone
+    next_billing_at timestamp with time zone,
+    twilio_credential_id uuid
+);
+
+
+--
+-- Name: twilio_byot_credentials; Type: TABLE; Schema: public; Owner: -
+-- BYOT (Bring Your Own Twilio): one row per Twilio account a user has connected.
+-- auth_token is never stored in the clear — config_encrypted holds a Fernet-encrypted
+-- JSON blob ({"auth_token": "..."}), same pattern as integrations.config_encrypted.
+--
+
+CREATE TABLE IF NOT EXISTS public.twilio_byot_credentials (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    account_sid text NOT NULL,
+    config_encrypted text NOT NULL,
+    label text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 

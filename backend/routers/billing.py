@@ -31,6 +31,10 @@ DEFAULT_COST_MULTIPLIER = 3.00
 # Monthly cost charged to the client for each Twilio phone number they provision.
 PHONE_NUMBER_MONTHLY_COST = 3.00
 
+# BYOT (Bring Your Own Twilio): the user pays Twilio directly for the number and its
+# carrier minutes, so NEXUS only charges a flat hosting/management fee — no markup.
+BYOT_PHONE_NUMBER_MONTHLY_COST = 1.00
+
 
 def get_or_create_billing(user_id: str) -> dict:
     result = supabase.table("billing").select("*").eq("user_id", user_id).execute()
@@ -449,22 +453,40 @@ def _twilio_leg(duration_seconds: int, direction: str) -> float:
     return (duration_seconds / 60.0) * float(rate)
 
 
+def _byot_excludes_twilio_leg() -> bool:
+    """Admin-editable platform_settings toggle (default True): whether a BYOT call's
+    charge excludes the estimated Twilio carrier leg. It's on by default because the
+    user already pays Twilio directly for that leg on their own account — including
+    it again in NEXUS's charge would double-bill them."""
+    try:
+        rows = supabase.table("platform_settings").select("byot_exclude_twilio_leg").limit(1).execute().data
+        if rows and rows[0].get("byot_exclude_twilio_leg") is not None:
+            return bool(rows[0]["byot_exclude_twilio_leg"])
+    except Exception:
+        pass
+    return True
+
+
 def calculate_call_cost(
     user_id: str,
     duration_seconds: int,
     vapi_cost: float | None = None,
     direction: str = "outbound",
+    is_byot: bool = False,
 ) -> tuple[float, float]:
     """Cost-plus pricing. Returns (charge, provider_cost).
 
     charge = provider_cost × the user's plan cost_multiplier, where provider_cost is
     VAPI's reported call cost plus the estimated Twilio carrier leg. When VAPI cost
     data is missing, falls back to the plan's advertised per-minute rate.
+    For a BYOT call (is_byot=True), the Twilio carrier leg is excluded by default
+    (see _byot_excludes_twilio_leg) since the user already pays Twilio directly for it.
     Charges are rounded to whole cents so per-call cost, breakdown total, wallet
     debit and balance all reconcile exactly."""
     billing = get_or_create_billing(user_id)
     if vapi_cost is not None:
-        provider_cost = round(float(vapi_cost) + _twilio_leg(duration_seconds, direction), 4)
+        twilio_leg = 0.0 if (is_byot and _byot_excludes_twilio_leg()) else _twilio_leg(duration_seconds, direction)
+        provider_cost = round(float(vapi_cost) + twilio_leg, 4)
         multiplier = float(billing.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER)
         return round(provider_cost * multiplier, 2), provider_cost
     rate = billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE
@@ -532,11 +554,12 @@ def record_call_cost(
     duration_seconds: int,
     vapi_cost: float | None = None,
     direction: str = "outbound",
+    is_byot: bool = False,
 ) -> float:
     """Compute the call's cost, store it on the conversation (for the Cost Breakdown),
     and debit the wallet — the debit happens exactly once per call (idempotent by the
     ledger), so both the webhook and the background sync can call this freely."""
-    cost, provider_cost = calculate_call_cost(user_id, duration_seconds, vapi_cost, direction)
+    cost, provider_cost = calculate_call_cost(user_id, duration_seconds, vapi_cost, direction, is_byot)
 
     # Always keep the row's displayed cost + duration in sync (even on re-import).
     updates: dict = {

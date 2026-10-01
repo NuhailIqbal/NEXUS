@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { X, Plus } from "lucide-react";
+import { X, Plus, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/services/api";
+import { ConnectTwilioDialog } from "@/components/telephony/ConnectTwilioDialog";
 
 type Props = {
   open: boolean;
@@ -15,20 +17,29 @@ type Props = {
 };
 
 export type Purpose = "inbound" | "outbound" | "both";
+export type ByotMode = "import" | "purchase";
 
 export type PhoneNumberData = {
   active: boolean;
   serviceProvider: string;
   agentId: string;
   purpose: Purpose | "";
+  // BYOT-only fields
+  byotCredentialId?: string;
+  byotMode?: ByotMode;
+  byotNumber?: string;
 };
 
-const PROVIDERS = ["Twilio"];
+type TwilioCredential = { id: string; account_sid: string; auth_token_masked?: string; label?: string | null };
+
+const PROVIDERS = ["Twilio", "BYOT"];
 
 // User-facing labels are kept generic so we don't expose the underlying carrier
-// (and the price it implies) to end users. Internal value stays "Twilio".
+// (and the price it implies) to end users. Internal value stays "Twilio". BYOT is
+// the one exception — the whole point of it is the user explicitly choosing Twilio.
 const PROVIDER_LABELS: Record<string, string> = {
   Twilio: "Standard",
+  BYOT: "Twilio",
 };
 
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
@@ -37,26 +48,50 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     serviceProvider: "",
     agentId: "",
     purpose: "",
+    byotMode: "import",
   });
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+  const [credentials, setCredentials] = useState<TwilioCredential[]>([]);
+  const [connectOpen, setConnectOpen] = useState(false);
+
+  const loadCredentials = () => {
+    api.getTwilioCredentials().then(({ data: d }) => {
+      const list = (d as TwilioCredential[]) ?? [];
+      setCredentials(list);
+      // Auto-select when exactly one account is connected — no need to make the user
+      // pick from a list of one, and it makes the "already connected" state obvious.
+      if (list.length === 1) {
+        setData((prev) => (prev.byotCredentialId ? prev : { ...prev, byotCredentialId: list[0].id }));
+      }
+    });
+  };
 
   useEffect(() => {
     if (open) {
       api.getAgents().then(({ data: d }) => setAgents((d as any[]) ?? []));
+      loadCredentials();
     }
   }, [open]);
 
-  const reset = () => setData({ active: false, serviceProvider: "", agentId: "", purpose: "" });
+  const reset = () => setData({ active: false, serviceProvider: "", agentId: "", purpose: "", byotMode: "import" });
 
   const close = (v: boolean) => {
     if (!v) reset();
     onOpenChange(v);
   };
 
+  const isByot = data.serviceProvider === "BYOT";
+
   const create = () => {
     if (!data.purpose) return toast.error("Please select a purpose");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
-    onCreate?.(data);
+    if (isByot) {
+      if (!data.byotCredentialId) return toast.error("Please select (or connect) a Twilio account");
+      if (data.byotMode === "import" && !data.byotNumber?.trim()) return toast.error("Enter the phone number you already own");
+    }
+    // Trim so accidental leading/trailing whitespace never breaks the Twilio
+    // account-ownership match on a BYOT import.
+    onCreate?.(data.byotNumber ? { ...data, byotNumber: data.byotNumber.trim() } : data);
     close(false);
   };
 
@@ -83,7 +118,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
               value={data.purpose}
               onValueChange={(v) => setData({ ...data, purpose: v as Purpose, agentId: v === "outbound" ? "" : data.agentId })}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Purpose">
                 <SelectValue placeholder="Select type" />
               </SelectTrigger>
               <SelectContent>
@@ -97,7 +132,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
           <div>
             <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
             <Select value={data.serviceProvider} onValueChange={(v) => setData({ ...data, serviceProvider: v })}>
-              <SelectTrigger>
+              <SelectTrigger aria-label="Service Provider">
                 <SelectValue placeholder="Please select your phone number provider" />
               </SelectTrigger>
               <SelectContent>
@@ -106,10 +141,79 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
             </Select>
           </div>
 
-          {data.serviceProvider.toLowerCase() === "twilio" && (
+          {data.serviceProvider === "Twilio" && (
             <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
               covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
+            </div>
+          )}
+
+          {isByot && (
+            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">$1/month</span> platform fee. Twilio bills you
+                directly for the number and call minutes.
+              </p>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-semibold">Twilio account</label>
+                  {credentials.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Connected
+                    </span>
+                  )}
+                </div>
+                {credentials.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No Twilio account connected yet.</p>
+                ) : (
+                  <Select
+                    value={data.byotCredentialId || ""}
+                    onValueChange={(v) => setData({ ...data, byotCredentialId: v })}
+                  >
+                    <SelectTrigger aria-label="Twilio account">
+                      <SelectValue placeholder="Select a connected Twilio account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {credentials.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.label || c.account_sid}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <Button type="button" variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
+                  {credentials.length === 0 ? "Connect a Twilio account" : "Connect another Twilio account"}
+                </Button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-semibold">How do you want to get the number?</label>
+                <Select
+                  value={data.byotMode || "import"}
+                  onValueChange={(v) => setData({ ...data, byotMode: v as ByotMode })}
+                >
+                  <SelectTrigger aria-label="Number acquisition mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="import">I already own a number</SelectItem>
+                    <SelectItem value="purchase">Buy a new number on my Twilio account</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {data.byotMode !== "purchase" && (
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-semibold">Your phone number</label>
+                  <Input
+                    value={data.byotNumber || ""}
+                    onChange={(e) => setData({ ...data, byotNumber: e.target.value })}
+                    placeholder="+1XXXXXXXXXX"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -149,6 +253,8 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
             <Plus className="mr-1 h-4 w-4" /> Create
           </Button>
         </div>
+
+        <ConnectTwilioDialog open={connectOpen} onOpenChange={setConnectOpen} onConnected={loadCredentials} />
       </DialogContent>
     </Dialog>
   );
