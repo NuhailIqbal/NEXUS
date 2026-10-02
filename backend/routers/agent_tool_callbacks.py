@@ -17,6 +17,8 @@ from slowapi.util import get_remote_address
 from database import supabase
 from services.email_service import send_email
 from services.sms_service import send_sms
+from services.call_events import record_hit
+from services import calendar_service
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -65,6 +67,78 @@ async def _parse_tool_call(request: Request) -> tuple[str | None, dict, str | No
 
 def _result(tc_id: str | None, result: str) -> dict:
     return {"results": [{"toolCallId": tc_id, "result": result}]}
+
+
+@router.post("/trigger-event")
+@limiter.limit("120/minute")
+async def cb_trigger_event(request: Request):
+    """Records call events raised by the agent's `trigger_event` tool. Unlike the other
+    callbacks this handles every tool call in the request, since the model may raise
+    several events in one turn. Tolerant of both VAPI payload shapes (`toolCalls` with a
+    nested `function`, and `toolCallList` with flat name/arguments) and of junk arguments."""
+    import json
+    try:
+        body = await request.json()
+    except Exception:
+        return {"results": []}
+    if not isinstance(body, dict):
+        return {"results": []}
+
+    msg = body.get("message") if isinstance(body.get("message"), dict) else body
+    call = msg.get("call") if isinstance(msg.get("call"), dict) else {}
+    vapi_call_id = call.get("id")
+    assistant_id = call.get("assistantId") or msg.get("assistantId")
+    tool_calls = msg.get("toolCalls") or msg.get("tool_calls") or msg.get("toolCallList") or []
+    if not isinstance(tool_calls, list):
+        return {"results": []}
+
+    agent = None
+    if assistant_id and isinstance(assistant_id, str):
+        res = (
+            supabase.table("ai_agents")
+            .select("id, user_id")
+            .eq("vapi_assistant_id", assistant_id)
+            .limit(1)
+            .execute()
+        )
+        agent = res.data[0] if res.data else None
+
+    results = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        tc_id = tc.get("id") or tc.get("toolCallId")
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        args = fn.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        if not agent or not vapi_call_id:
+            results.append({"toolCallId": tc_id, "result": "Error: could not identify the call."})
+            continue
+        event = args.get("event")
+        note = args.get("note")
+        try:
+            customer = call.get("customer") if isinstance(call.get("customer"), dict) else {}
+            hit = record_hit(agent["user_id"], agent["id"], vapi_call_id, event,
+                             note if isinstance(note, str) else None, tc_id, call.get("type"),
+                             customer.get("number") if isinstance(customer.get("number"), str) else None, args)
+        except Exception as e:
+            logger.warning("trigger_event failed for call %s: %s", vapi_call_id, e)
+            hit = None
+        label = event if isinstance(event, str) else ""
+        if hit and hit.get("skipped"):
+            text = f"Event '{label}' is not enabled for this type of call, so it was ignored."
+        elif hit:
+            text = f"Event '{label}' recorded."
+        else:
+            text = f"Unknown event '{label}'."
+        results.append({"toolCallId": tc_id, "result": text})
+    return {"results": results}
 
 
 @router.post("/send-email")
@@ -141,24 +215,58 @@ async def cb_update_crm(request: Request):
     return _result(tc_id, f"Updated {n} contact(s): {list(safe_updates.keys())}.")
 
 
+async def _agent_context(request: Request, assistant_id: str | None):
+    """(agent row, VAPI call id) for the call that invoked a tool."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    msg = body.get("message") if isinstance(body, dict) and isinstance(body.get("message"), dict) else (body if isinstance(body, dict) else {})
+    call = msg.get("call") if isinstance(msg.get("call"), dict) else {}
+    agent = None
+    if assistant_id:
+        res = (
+            supabase.table("ai_agents")
+            .select("id, name, user_id")
+            .eq("vapi_assistant_id", assistant_id)
+            .limit(1)
+            .execute()
+        )
+        agent = res.data[0] if res.data else None
+    return agent, call.get("id")
+
+
+@router.post("/check-availability")
+@limiter.limit("60/minute")
+async def cb_check_availability(request: Request):
+    tc_id, args, assistant_id = await _parse_tool_call(request)
+    agent, _call_id = await _agent_context(request, assistant_id)
+    if not agent:
+        return _result(tc_id, "Error: could not identify the owning user.")
+    try:
+        text = await calendar_service.check_availability(
+            agent["user_id"], args.get("date"), args.get("days"), args.get("duration_minutes"))
+    except Exception as e:  # never let a bug surface as a dead line on a live call
+        logger.exception("check_availability failed: %s", e)
+        text = calendar_service.UNAVAILABLE
+    return _result(tc_id, text)
+
+
 @router.post("/book-slot")
 @limiter.limit("60/minute")
 async def cb_book_slot(request: Request):
     tc_id, args, assistant_id = await _parse_tool_call(request)
-    user_id = _user_id_from_assistant(assistant_id)
-    if not user_id:
+    agent, call_id = await _agent_context(request, assistant_id)
+    if not agent:
         return _result(tc_id, "Error: could not identify the owning user.")
-
-    # No calendar integration yet — log the request as a conversation note.
-    contact = args.get("contact_name") or "the caller"
-    start = args.get("start_iso") or "an unspecified time"
-    duration = args.get("duration_minutes", 30)
-    logger.info("Book-slot requested by user %s: %s @ %s for %sm", user_id, contact, start, duration)
-    return _result(
-        tc_id,
-        f"Noted: meeting with {contact} at {start} for {duration} minutes. "
-        "Calendar integration is not connected yet, so the slot was logged but not booked.",
-    )
+    try:
+        text = await calendar_service.book_slot(
+            agent["user_id"], args, agent_id=agent["id"], agent_name=agent.get("name"),
+            call_id=call_id, tool_call_id=tc_id)
+    except Exception as e:
+        logger.exception("book_slot failed: %s", e)
+        text = calendar_service.UNAVAILABLE
+    return _result(tc_id, text)
 
 
 @router.post("/webhook")

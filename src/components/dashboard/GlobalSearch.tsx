@@ -28,6 +28,8 @@ const PAGES: { label: string; to: string }[] = [
   { label: "Analytics — Channel", to: "/dashboard/analytics/channel" },
   { label: "Analytics — Campaign", to: "/dashboard/analytics/campaign" },
   { label: "Analytics — Scenario", to: "/dashboard/analytics/scenario" },
+  { label: "Call Events", to: "/dashboard/call-events" },
+  { label: "Call Events — Callbacks", to: "/dashboard/call-events/callbacks" },
   { label: "Automation", to: "/dashboard/automation" },
   { label: "Integrations", to: "/dashboard/integrations" },
   { label: "Billing", to: "/dashboard/billing" },

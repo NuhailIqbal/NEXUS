@@ -42,11 +42,14 @@ type Conversation = {
   stereo_recording_url: string | null;
   ai_summary: string | null;
   direction: string;
+  call_outcome: string | null;
 };
+
+type CallEventHit = { id: string; label: string | null; event_key: string; outcome: string | null; note: string | null; created_at: string };
 
 type StatItem = { label: string; count: number };
 
-type ColumnKey = "channel" | "direction" | "agent_name" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_time";
+type ColumnKey = "channel" | "direction" | "agent_name" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_outcome" | "call_time";
 
 const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "channel", label: "Channel" },
@@ -55,8 +58,9 @@ const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "phone", label: "Phone" },
   { key: "duration", label: "Duration", width: "w-36" },
   { key: "status", label: "Status", width: "w-36" },
-  { key: "direction", label: "Direction", width: "w-36" },
+  { key: "direction", label: "Type", width: "w-36" },
   { key: "qualified", label: "Qualified", width: "w-36" },
+  { key: "call_outcome", label: "Outcome", width: "w-40" },
   { key: "call_time", label: "Time" },
 ];
 
@@ -88,8 +92,9 @@ const Conversations = () => {
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({
-    channel: "", direction: "", agent_name: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_time: "",
+    channel: "", direction: "", agent_name: "", contact_name: "", phone: "", duration: "", status: "", qualified: "", call_outcome: "", call_time: "",
   });
+  const [events, setEvents] = useState<CallEventHit[]>([]);
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
 
   // Clicking a header cycles: ascending -> descending -> reset (no sort) -> ascending...
@@ -121,6 +126,10 @@ const Conversations = () => {
     setViewing(c);
     setPlayerTime(0);
     openIdRef.current = c.id;
+    setEvents([]);
+    api.getConversationEvents(c.id).then(({ data }) => {
+      if (openIdRef.current === c.id) setEvents(Array.isArray(data) ? (data as CallEventHit[]) : []);
+    });
     // VAPI's stored recording URL is a private, expiring path — fetch a fresh
     // playable (presigned) URL on open.
     setRecordingUrl(null);
@@ -174,6 +183,7 @@ const Conversations = () => {
     if (debouncedFilters.duration.trim()) p.set("duration", debouncedFilters.duration.trim());
     if (debouncedFilters.status) p.set("status", debouncedFilters.status);
     if (debouncedFilters.qualified) p.set("qualified", debouncedFilters.qualified);
+    if (debouncedFilters.call_outcome.trim()) p.set("call_outcome", debouncedFilters.call_outcome.trim());
     if (dateFilter) p.set("call_date", format(dateFilter, "yyyy-MM-dd"));
     return p;
   }, [debouncedFilters, dateFilter]);
@@ -345,7 +355,7 @@ const Conversations = () => {
                       onValueChange={(v) => setFilter("direction", v === "__all__" ? "" : v)}
                     >
                       <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Direction" />
+                        <SelectValue placeholder="Type" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All</SelectItem>
@@ -374,11 +384,11 @@ const Conversations = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                <td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">Loading...</td>
               </tr>
             ) : visibleConversations.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">
                   {conversations.length === 0 ? "No conversations found." : "No conversations match your filters."}
                 </td>
               </tr>
@@ -403,6 +413,13 @@ const Conversations = () => {
                   <td className="px-4 py-3 text-center">
                     {c.qualified ? (
                       <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Qualified</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {c.call_outcome ? (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{c.call_outcome}</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
@@ -486,13 +503,29 @@ const Conversations = () => {
               <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
                 <div><div className="text-xs text-muted-foreground">Phone</div><div className="font-mono">{viewing.phone || "—"}</div></div>
                 <div><div className="text-xs text-muted-foreground">Duration</div><div className="font-mono">{viewing.duration || "—"}</div></div>
-                <div><div className="text-xs text-muted-foreground">Direction</div><div className="capitalize">{viewing.direction}</div></div>
+                <div><div className="text-xs text-muted-foreground">Type</div><div className="capitalize">{viewing.direction}</div></div>
                 <div><div className="text-xs text-muted-foreground">Status</div><div>{viewing.status}</div></div>
                 <div><div className="text-xs text-muted-foreground">Qualified</div><div>{viewing.qualified ? "Yes" : "No"}</div></div>
+                <div><div className="text-xs text-muted-foreground">Outcome</div><div>{viewing.call_outcome || "—"}</div></div>
                 {viewing.transferred_to && (
                   <div className="col-span-2 sm:col-span-3"><div className="text-xs text-muted-foreground">Transferred to</div><div className="font-mono">{viewing.transferred_to}</div></div>
                 )}
               </div>
+
+              {events.length > 0 && (
+                <div>
+                  <div className="mb-1 text-sm font-semibold">Call Events</div>
+                  <ul className="divide-y divide-border rounded-md border border-border text-xs">
+                    {events.map((e) => (
+                      <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">{e.label || e.event_key}</span>
+                        {e.note && <span className="text-muted-foreground">{e.note}</span>}
+                        <span className="ml-auto text-muted-foreground">{format(new Date(e.created_at), "h:mm:ss a")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {viewing.ai_summary && (
                 <div>

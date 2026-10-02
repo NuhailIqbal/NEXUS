@@ -1,3 +1,4 @@
+import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -29,9 +30,9 @@ beforeEach(() => vi.clearAllMocks());
 describe("CalendarSettingsDialog", () => {
   it("shows the current settings", () => {
     setup();
-    expect(screen.getByLabelText("Timezone")).toHaveValue("Asia/Karachi");
-    expect(screen.getByLabelText("Day starts")).toHaveValue("09:00");
-    expect(screen.getByLabelText("Day ends")).toHaveValue("17:00");
+    expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Pakistan/);
+    expect(screen.getByLabelText("Day starts")).toHaveTextContent("9:00 AM");
+    expect(screen.getByLabelText("Day ends")).toHaveTextContent("5:00 PM");
     expect(screen.getByLabelText(/Meeting length/)).toHaveValue(30);
     for (const d of ["Mon", "Tue", "Wed", "Thu", "Fri"]) expect(screen.getByRole("button", { name: d })).toHaveAttribute("aria-pressed", "true");
     for (const d of ["Sat", "Sun"]) expect(screen.getByRole("button", { name: d })).toHaveAttribute("aria-pressed", "false");
@@ -69,29 +70,27 @@ describe("CalendarSettingsDialog", () => {
     expect(update.mock.calls[0][0].timezone).toBe("UTC");
   });
 
-  it("refuses an unknown timezone without calling the API", () => {
+  it("finds Eastern Time by typing EST", async () => {
     setup();
-    fireEvent.change(screen.getByLabelText("Timezone"), { target: { value: "Mars/Olympus" } });
-    save();
-    expect(screen.getByRole("alert")).toHaveTextContent(/timezone/i);
-    expect(update).not.toHaveBeenCalled();
+    await pick("Timezone", "est");
+    expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Eastern Time/);
   });
 
-  it("refuses no working days, a backwards day, and bad numbers", () => {
+  it("refuses no working days, a backwards day, and bad numbers", async () => {
     setup();
     for (const d of ["Mon", "Tue", "Wed", "Thu", "Fri"]) fireEvent.click(screen.getByRole("button", { name: d }));
     save();
     expect(screen.getByRole("alert")).toHaveTextContent(/working day/);
     fireEvent.click(screen.getByRole("button", { name: "Mon" }));
-    fireEvent.change(screen.getByLabelText("Day ends"), { target: { value: "08:00" } });
+    await choose("Day ends", "8:00 AM");
     save();
     expect(screen.getByRole("alert")).toHaveTextContent(/after start/);
-    fireEvent.change(screen.getByLabelText("Day ends"), { target: { value: "17:00" } });
+    await choose("Day ends", "5:00 PM");
     fireEvent.change(screen.getByLabelText(/Meeting length/), { target: { value: "" } });
     save();
     expect(screen.getByRole("alert")).toHaveTextContent(/Meeting length/);
     expect(update).not.toHaveBeenCalled();
-  });
+  }, 20000);
 
   it("shows a server error inline, keeps the dialog open, and clears it on the next edit", async () => {
     update.mockResolvedValue({ data: null, error: "That timezone isn't recognised." });

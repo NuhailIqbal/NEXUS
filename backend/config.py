@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str = ""
 
     @property
+    def google_calendar_configured(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def active_google_redirect_uri(self) -> str:
+        if self.google_redirect_uri:
+            return self.google_redirect_uri
+        base = (self.public_api_url or "http://localhost:8000").rstrip("/")
+        return f"{base}/calendar/google/callback"
+
+    @property
     def active_jwt_secret(self) -> str:
         """Secret used to sign/verify our own JWTs (prefers JWT_SECRET, falls back to Supabase's)."""
         return self.jwt_secret or self.supabase_jwt_secret
@@ -56,6 +67,8 @@ class Settings(BaseSettings):
     # Recurring phone-number billing: charge each Twilio number's monthly fee when its
     # next_billing_at date arrives. Set interval to 0 to disable.
     phone_billing_sweep_interval_seconds: int = 3600
+    # How often due callbacks are checked (only accounts that turned on auto-calling are acted on). 0 disables.
+    callback_sweep_interval_seconds: int = 60
 
     # Gemini
     gemini_api_key: str = ""
@@ -110,6 +123,13 @@ class Settings(BaseSettings):
     # Public URL of the FRONTEND app, used to build Stripe redirect (success/cancel) URLs
     # so users return to the deployed site, not localhost. e.g. https://app.edmnexus.ai
     public_app_url: str = ""
+    # Google Calendar (OAuth "Web application" client from Google Cloud Console >
+    # APIs & Services > Credentials). Calendar connect is disabled until id + secret are set.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Must exactly match an "Authorized redirect URI" on that OAuth client.
+    # Defaults to <PUBLIC_API_URL>/calendar/google/callback.
+    google_redirect_uri: str = ""
     # One-time welcome bonus (wallet dollars) granted to every NEW user on signup, so they
     # can set up + test an agent before reloading. Set to 0 to disable the promo.
     # (Admin platform_settings, when present, overrides these at runtime.)

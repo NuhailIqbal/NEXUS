@@ -107,7 +107,7 @@ describe("GoogleCalendarCard", () => {
     show();
     fireEvent.click(await screen.findByRole("button", { name: /Settings/ }));
     expect(await screen.findByText("Calendar settings")).toBeInTheDocument();
-    expect(screen.getByLabelText("Timezone")).toHaveValue("Asia/Karachi");
+    expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Pakistan/);
   });
 
   it("saved settings update the summary without a reload", async () => {

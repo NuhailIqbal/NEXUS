@@ -9,7 +9,10 @@ from models.schemas import AgentCreate, AgentUpdate, AgentTest, AgentVoiceTestSt
 from services import vapi_client
 from services.openai_client import chat_reply, analyze_website, OpenAIError
 from services.website_analyzer import fetch_website_text, WebsiteFetchError
-from services.agent_tools import provision_tools_for_agent
+from services.agent_tools import provision_tools_for_agent, PRESETS
+from services.call_events import (
+    resolve_agent_events, LibraryError, get_events, replace_events, sync_events_tool, prompt_directive,
+)
 from config import settings
 from routers.billing import account_block_reason, get_or_create_billing
 from routers.team import resolve_owner_id
@@ -41,6 +44,15 @@ async def list_agents(user=Depends(get_current_user)):
         .execute()
     )
     return {"data": result.data, "error": None}
+
+
+@router.get("/tool-presets")
+async def list_tool_presets(user=Depends(get_current_user)):
+    """The actions an agent can be given during a call (SMS, email, calendar...)."""
+    return {"data": [
+        {"key": k, "label": v["label"], "description": v["description"], "requires": v.get("requires")}
+        for k, v in PRESETS.items()
+    ], "error": None}
 
 
 def _compose_system_prompt(name: str, base_prompt: str | None, main_goal: str | None, knowledge_text: str | None) -> str:
@@ -82,8 +94,22 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
         "transfer_number": body.transfer_number,
     }
 
+    try:
+        events = resolve_agent_events(owner_id, [e.model_dump() for e in (body.call_events or [])])
+    except LibraryError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
     if settings.vapi_api_key:
         tool_ids = await provision_tools_for_agent(owner_id, body.selected_tool_keys or [])
+        if events:
+            try:
+                events_tool_id = await sync_events_tool(body.name, events, None)
+            except Exception as e:
+                logger.error("VAPI events tool error: %s", e)
+                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+            if events_tool_id:
+                tool_ids = (tool_ids or []) + [events_tool_id]
+                row["events_tool_id"] = events_tool_id
         # Standalone transferCall tool (shows up in VAPI's Tools library, attached by id)
         if body.transfer_number and body.transfer_number.strip():
             try:
@@ -102,18 +128,27 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
                 name=body.name,
                 voice=body.voice,
                 language=body.language,
-                system_prompt=composed_prompt,
+                system_prompt=composed_prompt + (prompt_directive(events) if row.get("events_tool_id") else ""),
                 first_message=body.first_message,
                 tool_ids=tool_ids or None,
             )
             vapi_agent = await vapi_client.create_assistant(payload)
             row["vapi_assistant_id"] = vapi_agent.get("id")
         except Exception as e:
+            # Don't leave the events tool orphaned in VAPI's Tools library.
+            if row.get("events_tool_id"):
+                try:
+                    await vapi_client.delete_tool(row["events_tool_id"])
+                except Exception:
+                    pass
             logger.error("VAPI error: %s", e)
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     result = supabase.table("ai_agents").insert(row).execute()
     agent = result.data[0] if result.data else None
+
+    if agent and events:
+        replace_events(owner_id, agent["id"], events)
 
     if agent and body.knowledge_text and body.knowledge_text.strip():
         try:
@@ -237,12 +272,22 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
     if transfer_tool_id:
         tool_ids = (tool_ids or []) + [transfer_tool_id]
+    events = get_events(agent_id)
+    events_tool_id = agent.get("events_tool_id")
+    if events:
+        try:
+            events_tool_id = await sync_events_tool(agent["name"], events, events_tool_id)
+        except Exception as e:
+            logger.error("VAPI events tool error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+        if events_tool_id:
+            tool_ids = (tool_ids or []) + [events_tool_id]
     try:
         payload = vapi_client.build_assistant_payload(
             name=agent["name"],
             voice=agent.get("voice"),
             language=agent.get("language"),
-            system_prompt=agent.get("system_prompt"),
+            system_prompt=(agent.get("system_prompt") or "") + (prompt_directive(events) if events_tool_id else ""),
             first_message=agent.get("first_message"),
             tool_ids=tool_ids or None,
         )
@@ -254,7 +299,8 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
 
     result = (
         supabase.table("ai_agents")
-        .update({"vapi_assistant_id": vapi_assistant_id, "transfer_tool_id": transfer_tool_id})
+        .update({"vapi_assistant_id": vapi_assistant_id, "transfer_tool_id": transfer_tool_id,
+                 "events_tool_id": events_tool_id})
         .eq("id", agent_id)
         .eq("user_id", owner_id)
         .execute()
@@ -275,6 +321,21 @@ async def get_agent(agent_id: str, user=Depends(get_current_user)):
     return {"data": result.data, "error": None}
 
 
+@router.get("/{agent_id}/events")
+async def list_agent_events(agent_id: str, user=Depends(get_current_user)):
+    owned = (
+        supabase.table("ai_agents")
+        .select("id")
+        .eq("id", agent_id)
+        .eq("user_id", resolve_owner_id(user["user_id"]))
+        .maybe_single()
+        .execute()
+    )
+    if not owned.data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"data": get_events(agent_id), "error": None}
+
+
 @router.patch("/{agent_id}")
 async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
@@ -283,10 +344,17 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         return {"data": None, "error": "No fields to update"}
     if "transfer_number" in updates:
         _validate_transfer_number(updates["transfer_number"])
+    # Call events arrive as the agent's full list; [] clears them.
+    new_events = None
+    if "call_events" in updates:
+        try:
+            new_events = resolve_agent_events(owner_id, updates["call_events"])
+        except LibraryError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
 
     agent_res = (
         supabase.table("ai_agents")
-        .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, name, selected_tool_keys, voice, language")
+        .select("vapi_assistant_id, system_prompt, transfer_number, transfer_tool_id, events_tool_id, name, selected_tool_keys, voice, language")
         .eq("id", agent_id)
         .eq("user_id", owner_id)
         .maybe_single()
@@ -337,10 +405,20 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
             # vapi_client.apply_language_directive). The transfer is a standalone VAPI
             # transferCall tool attached by id, so we recompute the full toolIds (preset
             # tools + transfer tool) to avoid dropping them.
-            if "system_prompt" in updates or "transfer_number" in updates or "language" in updates:
+            if ("system_prompt" in updates or "transfer_number" in updates or "language" in updates
+                    or "selected_tool_keys" in updates or new_events is not None):
+                events = new_events if new_events is not None else get_events(agent_id)
+                events_tool_id = agent.get("events_tool_id")
+                # Also (re)create the tool when events exist but it was never made — e.g. the
+                # events were saved before PUBLIC_API_URL was configured.
+                if new_events is not None or (events and not events_tool_id):
+                    events_tool_id = await sync_events_tool(
+                        updates.get("name") or agent.get("name"), events, events_tool_id
+                    )
+                    db_updates["events_tool_id"] = events_tool_id
                 preset_ids = await provision_tools_for_agent(
                     owner_id,
-                    updates.get("selected_tool_keys") or agent.get("selected_tool_keys") or [],
+                    (updates["selected_tool_keys"] if "selected_tool_keys" in updates else agent.get("selected_tool_keys")) or [],
                 )
                 transfer_tool_id = agent.get("transfer_tool_id")
                 if "transfer_number" in updates:
@@ -366,8 +444,12 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                 all_tool_ids = list(preset_ids or [])
                 if transfer_tool_id:
                     all_tool_ids.append(transfer_tool_id)
+                if events_tool_id:
+                    all_tool_ids.append(events_tool_id)
 
-                effective_prompt = updates.get("system_prompt", agent.get("system_prompt")) or ""
+                effective_prompt = (updates.get("system_prompt", agent.get("system_prompt")) or "") + (
+                    prompt_directive(events) if events_tool_id else ""
+                )
                 model_block: dict = {
                     "provider": "openai",
                     "model": "gpt-4o-mini",
@@ -388,6 +470,11 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
             logger.error("VAPI error: %s", e)
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
+    if new_events is not None:
+        replace_events(owner_id, agent_id, new_events)
+
+    if not db_updates:  # e.g. only call_events changed on an agent with no VAPI tool to record
+        return {"data": None, "error": None}
     result = (
         supabase.table("ai_agents")
         .update(db_updates)
@@ -402,13 +489,18 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
 async def delete_agent(agent_id: str, user=Depends(get_current_user)):
     agent_res = (
         supabase.table("ai_agents")
-        .select("vapi_assistant_id, transfer_tool_id")
+        .select("vapi_assistant_id, transfer_tool_id, events_tool_id")
         .eq("id", agent_id)
         .eq("user_id", resolve_owner_id(user["user_id"]))
         .maybe_single()
         .execute()
     )
     agent = agent_res.data
+    if agent and settings.vapi_api_key and agent.get("events_tool_id"):
+        try:
+            await vapi_client.delete_tool(agent["events_tool_id"])
+        except Exception:
+            pass
     if agent and settings.vapi_api_key and agent.get("vapi_assistant_id"):
         try:
             await vapi_client.delete_assistant(agent["vapi_assistant_id"])

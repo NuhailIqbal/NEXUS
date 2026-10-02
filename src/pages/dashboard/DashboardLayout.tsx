@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database, Phone,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow,
+  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -71,6 +71,7 @@ const NAV: NavItem[] = [
       { label: "Scenario", to: "/dashboard/analytics/scenario" },
     ],
   },
+  { label: "Call Events", to: "/dashboard/call-events", icon: Zap },
   { label: "Automation", to: "/dashboard/automation", icon: Workflow },
   { label: "Integrations", to: "/dashboard/integrations", icon: Plug },
   { label: "Billing", to: "/dashboard/billing", icon: CreditCard },

@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, Any
+from pydantic import BaseModel, StrictBool, model_validator
+from typing import Optional, Any, Literal
 
 
 # ── Response envelope ──
@@ -87,6 +87,58 @@ class IntegrationUpdate(BaseModel):
 
 # ── AI Agents ──
 
+class CallEventIn(BaseModel):
+    """One event on an agent: either a library event by id, or (older form) by name."""
+    event_id: Optional[str] = None
+    label: Optional[str] = None
+    event_key: Optional[str] = None
+    description: Optional[str] = None
+    outcome: Optional[str] = None
+    applies_to: Optional[Literal["both", "inbound", "outbound"]] = None
+    schedules_callback: Optional[StrictBool] = None
+
+    @model_validator(mode="after")
+    def _needs_id_or_label(self):
+        if not self.event_id and not (self.label or "").strip():
+            raise ValueError("each call event needs an event_id or a label")
+        return self
+
+
+class CallEventCreate(BaseModel):
+    label: str
+    description: Optional[str] = None
+    outcome: Optional[str] = None
+    applies_to: Literal["both", "inbound", "outbound"] = "both"
+    schedules_callback: StrictBool = False
+
+
+class CallEventUpdate(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = None
+    outcome: Optional[str] = None
+    applies_to: Optional[Literal["both", "inbound", "outbound"]] = None
+    schedules_callback: Optional[StrictBool] = None
+
+
+# ── Callbacks ──
+
+class CallbackSettingsUpdate(BaseModel):
+    # strict: the text "yes" must never switch on automatic calling by accident
+    auto_call: Optional[StrictBool] = None
+    timezone: Optional[str] = None
+    work_days: Optional[list[int]] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    default_time: Optional[str] = None
+    retry_minutes: Optional[int] = None
+    max_attempts: Optional[int] = None
+
+
+class CallbackUpdate(BaseModel):
+    due_local: Optional[str] = None
+    status: Optional[Literal["cancelled", "called"]] = None
+
+
 class AgentCreate(BaseModel):
     name: str
     voice: Optional[str] = None
@@ -100,6 +152,7 @@ class AgentCreate(BaseModel):
     knowledge_text: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
     transfer_number: Optional[str] = None
+    call_events: Optional[list[CallEventIn]] = None
 
 
 class AgentTest(BaseModel):
@@ -132,6 +185,20 @@ class AgentUpdate(BaseModel):
     website: Optional[str] = None
     selected_tool_keys: Optional[list[str]] = None
     transfer_number: Optional[str] = None
+    call_events: Optional[list[CallEventIn]] = None
+
+
+# ── Calendar ──
+
+class CalendarSettingsUpdate(BaseModel):
+    timezone: Optional[str] = None
+    work_days: Optional[list[int]] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    slot_minutes: Optional[int] = None
+    buffer_minutes: Optional[int] = None
+    min_notice_hours: Optional[int] = None
+    max_days_ahead: Optional[int] = None
 
 
 # ── Tools ──

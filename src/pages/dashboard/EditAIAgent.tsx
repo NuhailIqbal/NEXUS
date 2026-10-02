@@ -15,6 +15,8 @@ import {
   StepPrompt,
   StepTesting,
 } from "./CreateAIAgent";
+import { StepCallEvents } from "@/components/agents/StepCallEvents";
+import { toCallEventsPayload } from "@/components/agents/callEventTypes";
 
 type Agent = {
   id: string;
@@ -28,6 +30,7 @@ type Agent = {
   main_goal: string | null;
   website: string | null;
   transfer_number: string | null;
+  selected_tool_keys?: string[] | null;
 };
 
 // Same normalization the old Settings dialog used — agents created before the language
@@ -45,11 +48,13 @@ const EMPTY_FORM: FormState = {
   industry: "", language: "English", voice: "Elliot",
   knowledgeText: "", knowledgeFiles: [],
   systemPrompt: "", greeting: "",
+  callEvents: [],
+  toolKeys: [],
   testMessage: "",
 };
 
 const EMPTY_COMPLETED: Record<StepKey, boolean> = {
-  setup: false, knowledge: false, prompt: false, testing: false,
+  setup: false, knowledge: false, prompt: false, events: false, testing: false,
 };
 
 export default function EditAgentModal({
@@ -86,6 +91,8 @@ export default function EditAgentModal({
         return;
       }
       const a = data as Agent;
+      const eventsRes = await api.getAgentEvents(agentId);
+      if (cancelled) return;
       setForm({
         agentName: a.name ?? "",
         website: a.website ?? "",
@@ -99,6 +106,10 @@ export default function EditAgentModal({
         knowledgeFiles: [],
         systemPrompt: a.system_prompt ?? "",
         greeting: a.first_message ?? "",
+        callEvents: ((eventsRes.data ?? []) as { library_event_id: string | null }[])
+          .map((ev) => ev.library_event_id)
+          .filter((id): id is string => !!id),
+        toolKeys: a.selected_tool_keys ?? [],
         testMessage: "",
       });
       setStatus(a.status ?? "Active");
@@ -158,6 +169,8 @@ export default function EditAgentModal({
       main_goal: form.mainGoal || null,
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
+      call_events: toCallEventsPayload(form.callEvents),
+      selected_tool_keys: form.toolKeys,
     });
     if (error) {
       toast.error(error);
@@ -250,7 +263,7 @@ export default function EditAgentModal({
                   </div>
                 </div>
 
-                <ul className="grid grid-cols-4 gap-2 lg:grid-cols-1">
+                <ul className="grid grid-cols-5 gap-2 lg:grid-cols-1">
                   {STEPS.map((s, i) => {
                     const isActive = i === stepIndex;
                     const isDone = completed[s.key];
@@ -309,6 +322,9 @@ export default function EditAgentModal({
                 )}
                 {currentStep.key === "knowledge" && <StepKnowledge form={form} update={update} compact />}
                 {currentStep.key === "prompt" && <StepPrompt form={form} update={update} compact />}
+                {currentStep.key === "events" && (
+                  <StepCallEvents selectedIds={form.callEvents} onChange={(v) => update("callEvents", v)} compact />
+                )}
                 {currentStep.key === "testing" && <StepTesting form={form} update={update} compact />}
 
                 <div className="mt-6 flex items-center justify-between border-t border-border pt-4">

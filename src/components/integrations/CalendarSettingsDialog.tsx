@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { TimezoneSelect } from "@/components/common/TimezoneSelect";
+import { TimeSelect } from "@/components/common/TimeSelect";
 import { api } from "@/services/api";
 import {
   CALENDAR_LIMITS, DAY_LABELS, knownTimezones, validateCalendarSettings, type CalendarSettings,
@@ -68,8 +70,7 @@ export function CalendarSettingsDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="cal-tz">Timezone</Label>
-            <Input id="cal-tz" list="cal-tz-list" value={form.timezone} onChange={(e) => set("timezone", e.target.value)} />
-            <datalist id="cal-tz-list">{zones.map((z) => <option key={z} value={z} />)}</datalist>
+            <TimezoneSelect id="cal-tz" value={form.timezone} zones={zones} onChange={(tz) => set("timezone", tz)} />
           </div>
 
           <div className="space-y-1.5">
@@ -90,11 +91,11 @@ export function CalendarSettingsDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="cal-start">Day starts</Label>
-              <Input id="cal-start" type="time" value={form.start_time} onChange={(e) => set("start_time", e.target.value)} />
+              <TimeSelect id="cal-start" value={form.start_time} onChange={(v) => set("start_time", v)} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="cal-end">Day ends</Label>
-              <Input id="cal-end" type="time" value={form.end_time} onChange={(e) => set("end_time", e.target.value)} />
+              <TimeSelect id="cal-end" value={form.end_time} onChange={(v) => set("end_time", v)} />
             </div>
           </div>
 

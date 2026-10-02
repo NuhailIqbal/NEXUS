@@ -54,6 +54,9 @@ import {
   AnalyticsScenario,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
 import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
+import CallEvents from "./pages/dashboard/CallEvents";
+import CallEventsLayout from "./pages/dashboard/CallEventsLayout";
+import Callbacks from "./pages/dashboard/Callbacks";
 import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
 
 
@@ -117,6 +120,11 @@ const App = () => {
                   <Route path="analytics/channel" element={<AnalyticsChannel />} />
                   <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
                   <Route path="analytics/scenario" element={<AnalyticsScenario />} />
+                  <Route path="call-events" element={<CallEventsLayout />}>
+                    <Route index element={<CallEvents />} />
+                    <Route path="callbacks" element={<Callbacks />} />
+                  </Route>
+                  <Route path="callbacks" element={<Navigate to="/dashboard/call-events/callbacks" replace />} />
                   <Route path="automation" element={<AutomationList />} />
                   <Route path="automation/:flowId" element={<AutomationFlowEditor />} />
                   <Route path="billing" element={<BillingLayout />}>

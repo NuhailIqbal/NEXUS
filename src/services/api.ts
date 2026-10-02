@@ -17,7 +17,7 @@ async function getToken(): Promise<string | null> {
 async function request<T = any>(
   path: string,
   options: RequestInit = {},
-): Promise<{ data: T | null; error: string | null; meta?: any }> {
+): Promise<{ data: T | null; error: string | null; meta?: any; warnings?: string[] }> {
   const token = await getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -34,7 +34,7 @@ async function request<T = any>(
       return { data: null, error: body.detail || `Error ${res.status}` };
     }
     const body = await res.json();
-    return { data: body.data ?? body, error: body.error ?? null, meta: body.meta };
+    return { data: body.data ?? body, error: body.error ?? null, meta: body.meta, warnings: body.warnings };
   } catch (e: any) {
     return { data: null, error: e.message || "Network error" };
   }
@@ -93,11 +93,23 @@ export const api = {
   endVoiceTest: (assistantId: string) => del(`/agents/test-voice/${assistantId}`),
   analyzeAgentWebsite: (url: string) => post("/agents/analyze-website", { url }),
   updateAgent: (id: string, data: any) => patch(`/agents/${id}`, data),
-  // The Google Calendar connection
+  getAgentEvents: (id: string) => get(`/agents/${id}/events`),
+  // Agent tools (SMS, email, calendar...) and the Google Calendar connection
+  getToolPresets: () => get("/agents/tool-presets"),
   getCalendarStatus: () => get("/calendar/status"),
   getCalendarConnectUrl: (tz: string) => get(`/calendar/google/connect-url?tz=${encodeURIComponent(tz)}`),
   updateCalendarSettings: (data: Record<string, unknown>) => patch("/calendar/settings", data),
   disconnectCalendar: () => del("/calendar/google"),
+  // Callbacks (calls customers asked for) and their settings
+  getCallbacks: (status?: string) => get(`/callbacks${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  updateCallback: (id: string, data: { due_local?: string; status?: "cancelled" | "called" }) => patch(`/callbacks/${id}`, data),
+  getCallbackSettings: () => get("/callbacks/settings"),
+  updateCallbackSettings: (data: Record<string, unknown>) => patch("/callbacks/settings", data),
+  // Call event library (account-level events agents pick from)
+  getCallEvents: () => get("/call-events"),
+  createCallEvent: (data: { label: string; description?: string | null; outcome?: string | null; applies_to?: string }) => post("/call-events", data),
+  updateCallEvent: (id: string, data: { label?: string; description?: string | null; outcome?: string | null; applies_to?: string }) => patch(`/call-events/${id}`, data),
+  deleteCallEvent: (id: string) => del(`/call-events/${id}`),
   deleteAgent: (id: string) => del(`/agents/${id}`),
   syncAgentVapi: (id: string) => post(`/agents/${id}/sync-vapi`),
   uploadAgentKnowledge: async (agentId: string, file: File) => {
@@ -143,6 +155,7 @@ export const api = {
   // Conversations
   getConversations: (params?: string) => get(`/conversations${params ? `?${params}` : ""}`),
   getConversation: (id: string) => get(`/conversations/${id}`),
+  getConversationEvents: (id: string) => get(`/conversations/${id}/events`),
   getConversationTranscript: (id: string) => get(`/conversations/${id}/transcript`),
   getConversationRecordingUrl: (id: string) => get(`/conversations/${id}/recording-url`),
   getConversationStats: (params?: string) => get(`/conversations/stats${params ? `?${params}` : ""}`),
@@ -167,6 +180,7 @@ export const api = {
     patch(`/telephony/twilio-credentials/${id}`, data),
   deleteTwilioCredential: (id: string) => del(`/telephony/twilio-credentials/${id}`),
   createByotPhoneNumber: (data: any) => post("/telephony/phone-numbers/byot", data),
+
   // Telephony - Campaigns
   getCampaigns: () => get("/telephony/campaigns"),
   createCampaign: (data: any) => post("/telephony/campaigns", data),

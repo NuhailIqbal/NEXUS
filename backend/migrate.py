@@ -456,6 +456,169 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.team_members ADD COLUMN IF NOT EXISTS invite_token_expires_at timestamptz',
         'CREATE UNIQUE INDEX IF NOT EXISTS team_members_invite_token_idx '
         'ON public.team_members (invite_token) WHERE invite_token IS NOT NULL',
+        # Call events: per-agent signals the AI raises mid-call, bound to an outcome value.
+        # The agent's single `trigger_event` VAPI tool id lives on ai_agents.events_tool_id;
+        # the final outcome of a call is written to conversations.call_outcome at hangup.
+        'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS events_tool_id text',
+        'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS call_outcome text',
+        '''CREATE TABLE IF NOT EXISTS public.call_events (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            agent_id uuid NOT NULL REFERENCES public.ai_agents(id) ON DELETE CASCADE,
+            event_key text NOT NULL,
+            label text NOT NULL,
+            description text,
+            outcome text,
+            position integer DEFAULT 0 NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            UNIQUE (agent_id, event_key)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS public.call_event_hits (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            agent_id uuid REFERENCES public.ai_agents(id) ON DELETE SET NULL,
+            conversation_id uuid REFERENCES public.conversations(id) ON DELETE CASCADE,
+            vapi_call_id text NOT NULL,
+            event_id uuid REFERENCES public.call_events(id) ON DELETE SET NULL,
+            event_key text NOT NULL,
+            label text,
+            outcome text,
+            note text,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        'ALTER TABLE public.call_event_hits ADD COLUMN IF NOT EXISTS tool_call_id text',
+        'CREATE INDEX IF NOT EXISTS call_event_hits_call_idx ON public.call_event_hits (vapi_call_id, created_at)',
+        # A retried VAPI tool call (same toolCallId) must not double-count an event.
+        '''CREATE UNIQUE INDEX IF NOT EXISTS call_event_hits_tool_call_uidx
+            ON public.call_event_hits (vapi_call_id, tool_call_id) WHERE tool_call_id IS NOT NULL''',
+        'CREATE INDEX IF NOT EXISTS call_event_hits_conv_idx ON public.call_event_hits (conversation_id)',
+        # Event library: events are defined once per account and attached to agents. A
+        # call_events row links back via library_event_id and carries a copy of the
+        # definition; applies_to scopes it to inbound / outbound / both calls.
+        '''CREATE TABLE IF NOT EXISTS public.call_event_library (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            event_key text NOT NULL,
+            label text NOT NULL,
+            description text,
+            outcome text,
+            applies_to text DEFAULT 'both' NOT NULL CHECK (applies_to IN ('both', 'inbound', 'outbound')),
+            created_at timestamptz DEFAULT now() NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL,
+            UNIQUE (user_id, event_key)
+        )''',
+        '''ALTER TABLE public.call_events ADD COLUMN IF NOT EXISTS library_event_id uuid
+            REFERENCES public.call_event_library(id) ON DELETE CASCADE''',
+        '''ALTER TABLE public.call_events ADD COLUMN IF NOT EXISTS applies_to text DEFAULT 'both' NOT NULL
+            CHECK (applies_to IN ('both', 'inbound', 'outbound'))''',
+        'CREATE INDEX IF NOT EXISTS call_events_library_idx ON public.call_events (library_event_id)',
+        # Google Calendar: one connection per account (refresh token stored encrypted), plus an
+        # audit/idempotency record of every meeting an agent books.
+        '''CREATE TABLE IF NOT EXISTS public.calendar_connections (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+            provider text DEFAULT 'google' NOT NULL,
+            email text,
+            refresh_token_encrypted text NOT NULL,
+            calendar_id text DEFAULT 'primary' NOT NULL,
+            settings jsonb DEFAULT '{}'::jsonb NOT NULL,
+            status text DEFAULT 'connected' NOT NULL CHECK (status IN ('connected', 'reauth_required')),
+            created_at timestamptz DEFAULT now() NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS public.calendar_bookings (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            agent_id uuid REFERENCES public.ai_agents(id) ON DELETE SET NULL,
+            vapi_call_id text,
+            tool_call_id text,
+            event_id text,
+            html_link text,
+            start_at timestamptz NOT NULL,
+            end_at timestamptz NOT NULL,
+            attendee_name text,
+            attendee_email text,
+            notes text,
+            status text DEFAULT 'confirmed' NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        # A retried VAPI tool call (same toolCallId) must never create a second event.
+        '''CREATE UNIQUE INDEX IF NOT EXISTS calendar_bookings_tool_call_uidx
+            ON public.calendar_bookings (vapi_call_id, tool_call_id)
+            WHERE vapi_call_id IS NOT NULL AND tool_call_id IS NOT NULL''',
+        'CREATE INDEX IF NOT EXISTS calendar_bookings_user_idx ON public.calendar_bookings (user_id, start_at)',
+        # Callbacks: an event flagged "schedules a callback" (e.g. Callback Requested) records WHEN the
+        # caller asked to be called back. The row is only a record until the account turns on
+        # auto-calling (callback_settings.auto_call, off by default).
+        'ALTER TABLE public.call_event_library ADD COLUMN IF NOT EXISTS schedules_callback boolean DEFAULT false NOT NULL',
+        'ALTER TABLE public.call_events ADD COLUMN IF NOT EXISTS schedules_callback boolean DEFAULT false NOT NULL',
+        '''CREATE TABLE IF NOT EXISTS public.callbacks (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            agent_id uuid REFERENCES public.ai_agents(id) ON DELETE SET NULL,
+            vapi_call_id text,
+            tool_call_id text,
+            conversation_id uuid REFERENCES public.conversations(id) ON DELETE SET NULL,
+            contact_id uuid REFERENCES public.contacts(id) ON DELETE SET NULL,
+            contact_name text,
+            phone text,
+            due_at timestamptz NOT NULL,
+            timezone text DEFAULT 'UTC' NOT NULL,
+            time_source text DEFAULT 'default' NOT NULL CHECK (time_source IN ('caller', 'default', 'manual')),
+            requested_text text,
+            status text DEFAULT 'pending' NOT NULL
+                CHECK (status IN ('pending', 'calling', 'called', 'failed', 'cancelled', 'skipped')),
+            attempts integer DEFAULT 0 NOT NULL,
+            last_attempt_at timestamptz,
+            placed_call_id text,
+            last_error text,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        # A retried VAPI tool call (same toolCallId) must never create a second callback.
+        '''CREATE UNIQUE INDEX IF NOT EXISTS callbacks_tool_call_uidx
+            ON public.callbacks (vapi_call_id, tool_call_id)
+            WHERE vapi_call_id IS NOT NULL AND tool_call_id IS NOT NULL''',
+        'CREATE INDEX IF NOT EXISTS callbacks_due_idx ON public.callbacks (status, due_at)',
+        'CREATE INDEX IF NOT EXISTS callbacks_user_idx ON public.callbacks (user_id, due_at DESC)',
+        '''CREATE TABLE IF NOT EXISTS public.callback_settings (
+            user_id uuid NOT NULL PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+            auto_call boolean DEFAULT false NOT NULL,
+            timezone text DEFAULT 'UTC' NOT NULL,
+            work_days integer[] DEFAULT '{0,1,2,3,4}'::integer[] NOT NULL,
+            start_time text DEFAULT '09:00' NOT NULL,
+            end_time text DEFAULT '18:00' NOT NULL,
+            default_time text DEFAULT '10:00' NOT NULL,
+            retry_minutes integer DEFAULT 30 NOT NULL,
+            max_attempts integer DEFAULT 2 NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        # Backfill for events created before the library existed: the first definition of
+        # each (user, key) becomes the library entry, and every agent row with that key is
+        # linked to it. Idempotent - only touches rows that are still unlinked.
+        '''INSERT INTO public.call_event_library (user_id, event_key, label, description, outcome, applies_to)
+           SELECT DISTINCT ON (user_id, event_key) user_id, event_key, label, description, outcome, 'both'
+           FROM public.call_events WHERE library_event_id IS NULL
+           ORDER BY user_id, event_key, created_at
+           ON CONFLICT (user_id, event_key) DO NOTHING''',
+        '''UPDATE public.call_events ce SET library_event_id = l.id
+           FROM public.call_event_library l
+           WHERE ce.library_event_id IS NULL AND l.user_id = ce.user_id AND l.event_key = ce.event_key''',
+                # Automation Delay nodes longer than a minute: downstream nodes resume from here.
+        '''CREATE TABLE IF NOT EXISTS public.automation_pending_steps (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            flow_id uuid NOT NULL REFERENCES public.automation_flows(id) ON DELETE CASCADE,
+            run_id uuid,
+            node_id text NOT NULL,
+            conversation jsonb,
+            resume_at timestamptz NOT NULL,
+            status text DEFAULT 'pending' NOT NULL,
+            error text,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            completed_at timestamptz
+        )''',
+        'CREATE INDEX IF NOT EXISTS automation_pending_steps_due_idx ON public.automation_pending_steps (status, resume_at)',
         # BYOT (Bring Your Own Twilio): a number can reference a user-connected Twilio
         # account instead of the platform's own one; its provider value is 'twilio_byot'.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS twilio_credential_id uuid',

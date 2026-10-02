@@ -23,6 +23,7 @@ PRESETS: dict[str, dict] = {
         "label": "Send Email",
         "description": "Send a transactional email to a contact.",
         "callback_path": "/tools/internal/send-email",
+        "requires": "an email integration (Integrations page)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -37,6 +38,7 @@ PRESETS: dict[str, dict] = {
         "label": "Send SMS",
         "description": "Send a text message to a phone number via Twilio.",
         "callback_path": "/tools/internal/send-sms",
+        "requires": "a Twilio number (Phone Numbers page)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -46,18 +48,39 @@ PRESETS: dict[str, dict] = {
             "required": ["to", "message"],
         },
     },
-    "book_slot": {
-        "label": "Book Calendar Slot",
-        "description": "Schedule a meeting at a requested date and time.",
-        "callback_path": "/tools/internal/book-slot",
+    "check_availability": {
+        "label": "Check Availability",
+        "description": (
+            "Look up free meeting times on the business's calendar. Always call this before offering "
+            "or booking a time — never guess availability."
+        ),
+        "callback_path": "/tools/internal/check-availability",
+        "requires": "a connected Google Calendar",
         "parameters": {
             "type": "object",
             "properties": {
-                "contact_name": {"type": "string"},
-                "contact_email": {"type": "string"},
-                "start_iso": {"type": "string", "description": "ISO 8601 start time, e.g. 2026-07-01T15:00:00Z."},
-                "duration_minutes": {"type": "integer", "default": 30},
-                "notes": {"type": "string"},
+                "date": {"type": "string", "description": "First day to check as YYYY-MM-DD. Leave out to start from today."},
+                "days": {"type": "integer", "description": "How many days to look at, 1 to 7. Defaults to 3."},
+                "duration_minutes": {"type": "integer", "description": "Meeting length in minutes. Leave out for the default."},
+            },
+        },
+    },
+    "book_slot": {
+        "label": "Book Calendar Slot",
+        "description": (
+            "Book a meeting on the business's calendar. Use ONLY a start_iso returned by check_availability, "
+            "and confirm the time with the caller first."
+        ),
+        "callback_path": "/tools/internal/book-slot",
+        "requires": "a connected Google Calendar",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "contact_name": {"type": "string", "description": "The caller's name."},
+                "contact_email": {"type": "string", "description": "The caller's email, so they receive a calendar invite. Ask for it."},
+                "start_iso": {"type": "string", "description": "Exact start_iso value returned by check_availability."},
+                "duration_minutes": {"type": "integer", "description": "Meeting length in minutes. Leave out for the default."},
+                "notes": {"type": "string", "description": "Anything useful to know before the meeting."},
             },
             "required": ["contact_name", "start_iso"],
         },
@@ -82,6 +105,7 @@ PRESETS: dict[str, dict] = {
         "label": "Webhook Trigger",
         "description": "POST a custom JSON payload to a URL configured by the user.",
         "callback_path": "/tools/internal/webhook",
+        "requires": "a webhook URL (Integrations page)",
         "parameters": {
             "type": "object",
             "properties": {

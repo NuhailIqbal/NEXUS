@@ -23,6 +23,9 @@ from routers import (
     profile,
     webhooks,
     agent_tool_callbacks,
+    call_events,
+    calendar,
+    callbacks,
     billing,
     stripe_webhook,
     admin,
@@ -65,6 +68,16 @@ async def _start_phone_billing_sweep() -> None:
     if settings.phone_billing_sweep_interval_seconds > 0:
         from services.phone_billing import billing_sweep_loop
         asyncio.create_task(billing_sweep_loop())
+
+
+
+@app.on_event("startup")
+async def _start_callback_scheduler() -> None:
+    """Place due callbacks — only for accounts that turned on auto-calling (off by default)."""
+    import asyncio
+    if settings.callback_sweep_interval_seconds > 0:
+        from services.callback_scheduler import callback_loop
+        asyncio.create_task(callback_loop())
 
 
 app.state.limiter = limiter
@@ -161,6 +174,9 @@ app.include_router(team.router)
 app.include_router(profile.router)
 app.include_router(webhooks.router)
 app.include_router(agent_tool_callbacks.router)
+app.include_router(call_events.router)
+app.include_router(calendar.router)
+app.include_router(callbacks.router)
 app.include_router(billing.router)
 app.include_router(stripe_webhook.router)
 app.include_router(admin.router)
