@@ -8,6 +8,8 @@ Provider detection: integration.name is matched case-insensitively against
 the keywords below. Add a row to PROVIDERS to support a new provider.
 """
 
+import asyncio
+import smtplib
 import time
 import httpx
 from urllib.parse import quote
@@ -60,6 +62,34 @@ async def test_sendgrid(config: dict) -> dict:
         "GET", "https://api.sendgrid.com/v3/user/account",
         headers={"Authorization": f"Bearer {api_key}"},
     )
+
+
+def _smtp_probe_sync(host: str, port: int, username: str, password: str) -> None:
+    with smtplib.SMTP(host, port, timeout=10) as server:
+        server.starttls()
+        server.login(username, password)
+
+
+async def test_smtp(config: dict) -> dict:
+    host = (config.get("host") or "").strip()
+    username = (config.get("username") or "").strip()
+    password = (config.get("password") or "").strip()
+    try:
+        port = int(config.get("port") or 587)
+    except (TypeError, ValueError):
+        port = 587
+    missing = [n for n, v in (("host", host), ("username", username), ("password", password)) if not v]
+    if missing:
+        return {"ok": False, "message": f"Missing {', '.join(missing)}"}
+    started = time.perf_counter()
+    try:
+        await asyncio.to_thread(_smtp_probe_sync, host, port, username, password)
+        return {"ok": True, "latency_ms": int((time.perf_counter() - started) * 1000), "message": "Connection healthy"}
+    except smtplib.SMTPAuthenticationError:
+        return {"ok": False, "latency_ms": int((time.perf_counter() - started) * 1000),
+                "message": "Authentication failed — credentials rejected"}
+    except Exception as e:
+        return {"ok": False, "latency_ms": int((time.perf_counter() - started) * 1000), "message": f"SMTP error: {e}"}
 
 
 async def test_mailgun(config: dict) -> dict:
@@ -225,6 +255,7 @@ PROVIDERS = [
     ("sendinblue", test_brevo,      "Brevo"),
     ("sendgrid",   test_sendgrid,   "SendGrid"),
     ("mailgun",    test_mailgun,    "Mailgun"),
+    ("smtp",       test_smtp,       "SMTP"),
     ("twilio",     test_twilio,     "Twilio"),
     ("telnyx",     test_telnyx,     "Telnyx"),
     ("vonage",     test_vonage,     "Vonage"),
@@ -245,6 +276,9 @@ PROVIDERS = [
 # the moment they rename it away from something containing the keyword.
 PROVIDER_KEY_MAP = {
     "whitelistdata": (test_whitelistdata, "WhitelistData"),
+    "brevo": (test_brevo, "Brevo"),
+    "sendgrid": (test_sendgrid, "SendGrid"),
+    "smtp": (test_smtp, "SMTP"),
 }
 
 

@@ -67,6 +67,15 @@ export function paletteFor(kind: FlowNodeKind): Palette {
   return PALETTES[kind];
 }
 
+// Flows saved before the trigger was renamed still carry the old label.
+export function migrateNodeLabels<T extends { data: FlowNodeData }>(nodes: T[]): T[] {
+  return nodes.map((n) =>
+    n.data?.kind === "inbound-call" && n.data.label === "Inbound Call"
+      ? { ...n, data: { ...n.data, label: "Call Ended" } }
+      : n,
+  );
+}
+
 const baseHandle =
   "!h-3.5 !w-3.5 !border-2 !border-background !bg-muted-foreground hover:!bg-emerald-500 hover:!scale-125 transition-all !cursor-crosshair";
 
@@ -170,10 +179,8 @@ export const PALETTE_GROUPS: { title: string; items: { kind: FlowNodeKind; label
   {
     title: "Triggers",
     items: [
-      { kind: "event", label: "Event" },
       { kind: "now", label: "Now" },
-      { kind: "inbound-call", label: "Inbound Call" },
-      { kind: "internet-call", label: "Internet Call" },
+      { kind: "inbound-call", label: "Call Ended" },
     ],
   },
   {

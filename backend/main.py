@@ -70,6 +70,13 @@ async def _start_phone_billing_sweep() -> None:
         asyncio.create_task(billing_sweep_loop())
 
 
+@app.on_event("startup")
+async def _start_delayed_steps() -> None:
+    """Resume automation flows paused on a long Delay node once their time is up."""
+    import asyncio
+    from services.automation_engine import delayed_steps_loop
+    asyncio.create_task(delayed_steps_loop())
+
 
 @app.on_event("startup")
 async def _start_callback_scheduler() -> None:

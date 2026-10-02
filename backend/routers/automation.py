@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
 from database import supabase
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Literal, Optional
 from routers.team import resolve_owner_id
+from services import automation_engine
+import asyncio
+import uuid
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
 
@@ -39,18 +42,30 @@ def _snapshot_flow_version(user_id: str, flow_id: str, definition: dict) -> None
             supabase.table("automation_flow_versions").delete().eq("id", r["id"]).execute()
 
 
+FlowStatus = Literal["Active", "Paused"]
+
+
+def _check_uuid(*values: str, what: str = "Flow") -> None:
+    """Ids are uuid columns: a malformed one would raise a DB error (500), so reject it as not found."""
+    for v in values:
+        try:
+            uuid.UUID(str(v))
+        except ValueError:
+            raise HTTPException(status_code=404, detail=f"{what} not found")
+
+
 class FlowCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = None
     definition: Optional[dict] = None
-    status: str = "Active"
+    status: FlowStatus = "Active"
 
 
 class FlowUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = None
     definition: Optional[dict] = None
-    status: Optional[str] = None
+    status: Optional[FlowStatus] = None
 
 
 # ── Flows ──
@@ -77,6 +92,7 @@ async def create_flow(body: FlowCreate, user=Depends(get_current_user)):
 
 @router.get("/flows/{flow_id}")
 async def get_flow(flow_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id)
     result = (
         supabase.table("automation_flows")
         .select("*")
@@ -92,6 +108,7 @@ async def get_flow(flow_id: str, user=Depends(get_current_user)):
 
 @router.patch("/flows/{flow_id}")
 async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_user)):
+    _check_uuid(flow_id)
     owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
@@ -121,6 +138,7 @@ async def update_flow(flow_id: str, body: FlowUpdate, user=Depends(get_current_u
 
 @router.get("/flows/{flow_id}/versions")
 async def list_flow_versions(flow_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id)
     owner_id = resolve_owner_id(user["user_id"])
     owner = (
         supabase.table("automation_flows")
@@ -145,6 +163,7 @@ async def list_flow_versions(flow_id: str, user=Depends(get_current_user)):
 
 @router.get("/flows/{flow_id}/versions/{version_id}")
 async def get_flow_version(flow_id: str, version_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id, version_id)
     result = (
         supabase.table("automation_flow_versions")
         .select("*")
@@ -161,6 +180,7 @@ async def get_flow_version(flow_id: str, version_id: str, user=Depends(get_curre
 
 @router.post("/flows/{flow_id}/versions/{version_id}/restore")
 async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id, version_id)
     owner_id = resolve_owner_id(user["user_id"])
     version = (
         supabase.table("automation_flow_versions")
@@ -195,8 +215,41 @@ async def restore_flow_version(flow_id: str, version_id: str, user=Depends(get_c
     return {"data": result.data[0] if result.data else None, "error": None}
 
 
+_manual_runs: set = set()  # strong refs so background runs aren't garbage-collected
+
+
+@router.post("/flows/{flow_id}/run")
+async def run_flow_now(flow_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id)
+    """Runs a flow that starts with a Now trigger. Executes in the background (Delay
+    nodes can take minutes); progress and the outcome show up under Runs."""
+    owner_id = resolve_owner_id(user["user_id"])
+    result = (
+        supabase.table("automation_flows")
+        .select("*")
+        .eq("id", flow_id)
+        .eq("user_id", owner_id)
+        .maybe_single()
+        .execute()
+    )
+    flow = result.data
+    if not flow:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    try:
+        conversation, run_id = automation_engine.create_manual_run(owner_id, flow)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    task = asyncio.create_task(automation_engine.execute_manual_run(owner_id, flow, conversation, run_id))
+    _manual_runs.add(task)
+    task.add_done_callback(_manual_runs.discard)
+    return {"data": {"run_id": run_id}, "error": None}
+
+
 @router.delete("/flows/{flow_id}")
 async def delete_flow(flow_id: str, user=Depends(get_current_user)):
+    _check_uuid(flow_id)
     supabase.table("automation_flows").delete().eq("id", flow_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
@@ -211,6 +264,8 @@ async def list_runs(
     limit: int = Query(50, le=200),
     offset: int = 0,
 ):
+    if flow_id:
+        _check_uuid(flow_id)
     query = (
         supabase.table("automation_runs")
         .select("*")
@@ -248,6 +303,7 @@ async def runs_stats(user=Depends(get_current_user)):
 
 @router.get("/runs/{run_id}")
 async def get_run(run_id: str, user=Depends(get_current_user)):
+    _check_uuid(run_id, what="Run")
     result = (
         supabase.table("automation_runs")
         .select("*")

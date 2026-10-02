@@ -13,12 +13,13 @@ type Props = {
   node: Node<FlowNodeData> | null;
   agents: { id: string; name: string }[];
   phoneNumbers: { id: string; number: string }[];
+  emailIntegrations: { id: string; name: string }[];
   onClose: () => void;
   onSave: (id: string, data: FlowNodeData) => void;
   onDelete: (id: string) => void;
 };
 
-export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onDelete }: Props) {
+export function NodeEditPanel({ node, agents, phoneNumbers, emailIntegrations, onClose, onSave, onDelete }: Props) {
   const [label, setLabel] = useState("");
   const [config, setConfig] = useState<Record<string, string>>({});
 
@@ -40,11 +41,12 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
       case "sms":
         return (
           <>
-            <CredentialBanner
-              icon="📱"
-              text="Requires Twilio credentials"
-              hint="Add your Twilio SID + Token in"
-            />
+            <Field label="To number (optional)">
+              <Input value={config.to ?? ""} onChange={(e) => set("to", e.target.value)} placeholder="+1XXXXXXXXXX" />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Leave blank to text the contact from the call. Fill it to always text this number instead.
+              </p>
+            </Field>
             <Field label="Message">
               <Textarea rows={4} value={config.message ?? ""} onChange={(e) => set("message", e.target.value)} placeholder="Hi {{contact_name}}, thanks for your time today!" />
             </Field>
@@ -60,9 +62,9 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {phoneNumbers.map((p) => (
-                    <SelectItem key={p.id} value={p.number}>{p.number} (your number)</SelectItem>
+                    <SelectItem key={p.id} value={p.number}>{p.number}</SelectItem>
                   ))}
-                  <SelectItem value="__custom__">Custom Twilio number…</SelectItem>
+                  <SelectItem value="__custom__">Custom number…</SelectItem>
                 </SelectContent>
               </Select>
               {(!config.from || !phoneNumbers.some((p) => p.number === config.from)) && (
@@ -70,15 +72,14 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
                   className="mt-2"
                   value={config.from ?? ""}
                   onChange={(e) => set("from", e.target.value)}
-                  placeholder="+15551234567"
+                  placeholder="+1XXXXXXXXXX"
                 />
               )}
               <p className="mt-1 text-xs text-muted-foreground">
-                Your own purchased numbers send through the platform's Twilio account automatically.
-                A custom number must belong to the Twilio account connected above.
+                Your own purchased numbers send through the platform automatically.
+                A custom number must belong to your connected SMS provider account.
               </p>
             </Field>
-            <p className="text-xs text-muted-foreground">Variables: <code>{"{{contact_name}}"}</code>, <code>{"{{phone}}"}</code>, <code>{"{{status}}"}</code></p>
           </>
         );
       case "email":
@@ -86,12 +87,32 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
           <>
             <CredentialBanner
               icon="✉️"
-              text="Requires Brevo API key"
-              hint="Add your Brevo API key in"
+              text="Requires an email integration"
+              hint="Add a Brevo, SendGrid or SMTP integration in"
             />
+            <Field label="Send via">
+              <Select
+                value={config.integration_id || "__default__"}
+                onValueChange={(v) => set("integration_id", v === "__default__" ? "" : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={emailIntegrations.length ? "Select an integration" : "No email integrations yet"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">Default (first active integration)</SelectItem>
+                  {emailIntegrations.map((i) => (
+                    <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!emailIntegrations.length && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  No active email integrations found. Add one in Integrations first.
+                </p>
+              )}
+            </Field>
             <Field label="Subject"><Input value={config.subject ?? ""} onChange={(e) => set("subject", e.target.value)} placeholder="Follow-up from your call" /></Field>
             <Field label="Body"><Textarea rows={5} value={config.body ?? ""} onChange={(e) => set("body", e.target.value)} placeholder={"Hi {{contact_name}},\n\nThank you for speaking with us today..."} /></Field>
-            <p className="text-xs text-muted-foreground">Variables: <code>{"{{contact_name}}"}</code>, <code>{"{{phone}}"}</code>, <code>{"{{status}}"}</code></p>
           </>
         );
       case "condition":
@@ -126,16 +147,11 @@ export function NodeEditPanel({ node, agents, phoneNumbers, onClose, onSave, onD
             </Field>
           </div>
         );
-      case "event":
+      case "now":
         return (
-          <Field label="Event type">
-            <select value={config.event ?? "contact.created"} onChange={(e) => set("event", e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
-              <option value="contact.created">Contact created</option>
-              <option value="contact.updated">Contact updated</option>
-              <option value="form.submitted">Form submitted</option>
-              <option value="tag.added">Tag added</option>
-            </select>
-          </Field>
+          <p className="text-xs text-muted-foreground">
+            Runs the whole flow as designed when you press <strong>Run now</strong> in the editor.
+          </p>
         );
       case "connect-agent":
         return (

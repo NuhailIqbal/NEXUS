@@ -51,6 +51,7 @@ import {
   PALETTE_GROUPS,
   paletteFor,
   reactFlowTypeFor,
+  migrateNodeLabels,
   type FlowNodeData,
   type FlowNodeKind,
 } from "@/components/automation/flow-nodes";
@@ -84,7 +85,7 @@ function defaultGraph(): Snapshot {
         id: newId(),
         type: "trigger",
         position: { x: 80, y: 160 },
-        data: { kind: "event", label: "Update customer" },
+        data: { kind: "now", label: "Now" },
       },
     ],
     edges: [],
@@ -106,12 +107,12 @@ function loadGraph(id: string): Snapshot {
 // node graph itself. Derive that top-level field from whichever trigger node the
 // user actually placed, so saved flows can be matched by the engine at all.
 function deriveTrigger(nodes: Node<FlowNodeData>[]): { event: string } {
-  const trigger = nodes.find((n) => n.type === "trigger");
-  const kind = trigger?.data.kind;
-  if (kind === "inbound-call" || kind === "internet-call") {
-    return { event: "call_ended" };
-  }
-  return { event: "manual" };
+  // A flow may hold several triggers (e.g. Now + Call Ended): it must still fire on
+  // call end if any of them is a call trigger, not just the first one placed.
+  const hasCallTrigger = nodes.some(
+    (n) => n.type === "trigger" && (n.data.kind === "inbound-call" || n.data.kind === "internet-call"),
+  );
+  return { event: hasCallTrigger ? "call_ended" : "manual" };
 }
 
 function saveGraph(id: string, snap: Snapshot) {
@@ -137,6 +138,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const [descDraft, setDescDraft] = useState("");
   const [flowStatus, setFlowStatus] = useState("Active");
   const [togglingStatus, setTogglingStatus] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
 
   const initial = useMemo(() => loadGraph(flowId), [flowId]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>(initial.nodes);
@@ -153,6 +155,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
   const [phoneNumbers, setPhoneNumbers] = useState<{ id: string; number: string }[]>([]);
+  const [emailIntegrations, setEmailIntegrations] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
     api.getAgents().then(({ data }) => {
@@ -163,6 +166,14 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
     // Twilio integration must still be typed in by hand.
     api.getPhoneNumbers().then(({ data }) => {
       if (Array.isArray(data)) setPhoneNumbers(data.map((p: any) => ({ id: p.id, number: p.number })));
+    });
+    api.getIntegrations().then(({ data }) => {
+      if (Array.isArray(data))
+        setEmailIntegrations(
+          (data as { id: string; name: string; category: string; status: string }[])
+            .filter((i) => i.category === "email" && i.status === "Active")
+            .map((i) => ({ id: i.id, name: i.name }))
+        );
     });
   }, []);
 
@@ -194,7 +205,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       if (data.status) setFlowStatus(data.status);
       const def = data.definition;
       if (def && Array.isArray(def.nodes)) {
-        setNodes(def.nodes);
+        setNodes(migrateNodeLabels(def.nodes));
         setEdges(Array.isArray(def.edges) ? def.edges : []);
       }
       setLoadingFlow(false);
@@ -213,7 +224,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
       toast.error(error);
       return;
     }
-    setNodes(ver.definition.nodes || []);
+    setNodes(migrateNodeLabels(ver.definition.nodes || []));
     setEdges(ver.definition.edges || []);
     setHistoryOpen(false);
     toast.success(`Restored version ${ver.version_number}`);
@@ -325,6 +336,25 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
   );
 
   // The engine only runs flows whose status is "Active", so Paused stops future runs.
+  const hasNowTrigger = nodes.some((n) => n.data.kind === "now");
+
+  // Runs the *saved* flow, so save first to pick up unsaved edits.
+  const runNow = async () => {
+    if (!flowId || flowId === "new") {
+      toast.error("Save the flow first");
+      return;
+    }
+    setRunningNow(true);
+    await handleSave(true);
+    const { error } = await api.runFlowNow(flowId);
+    setRunningNow(false);
+    if (error) {
+      toast.error(`Could not run flow: ${error}`);
+      return;
+    }
+    toast.success("Flow started — check the Runs tab for the result");
+  };
+
   const togglePause = async () => {
     if (!flowId || flowId === "new") {
       toast.error("Save the flow first");
@@ -441,7 +471,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
                       <button
                         key={h.savedAt}
                         onClick={() => {
-                          setNodes(h.nodes);
+                          setNodes(migrateNodeLabels(h.nodes));
                           setEdges(h.edges);
                           setHistoryOpen(false);
                           toast.success("Restored local snapshot");
@@ -463,6 +493,16 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
           >
             <Save className="mr-1.5 h-4 w-4" /> Save
           </Button>
+          {hasNowTrigger && (
+            <Button variant="outline" onClick={runNow} disabled={loadingFlow || runningNow}>
+              {runningNow ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <PlayCircle className="mr-1.5 h-4 w-4" />
+              )}
+              Run now
+            </Button>
+          )}
           <Button
             variant={flowStatus === "Paused" ? "default" : "destructive"}
             onClick={togglePause}
@@ -568,6 +608,7 @@ function FlowEditorInner({ v2 = false }: { v2?: boolean }) {
             node={selected}
             agents={agents}
             phoneNumbers={phoneNumbers}
+            emailIntegrations={emailIntegrations}
             onClose={() => setSelected(null)}
             onSave={updateNodeData}
             onDelete={deleteNode}
@@ -813,7 +854,7 @@ function RunsTab({ flowId }: { flowId: string }) {
           </div>
         ) : runs.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
-            No runs yet. This flow's trigger has never fired — place or receive a real call
+            No runs yet. This flow's trigger has never fired. Place or receive a real call
             that matches its trigger to see a run appear here.
           </div>
         ) : (

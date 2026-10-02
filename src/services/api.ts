@@ -231,6 +231,7 @@ export const api = {
   getFlowVersions: (flowId: string) => get(`/automation/flows/${flowId}/versions`),
   getFlowVersion: (flowId: string, versionId: string) => get(`/automation/flows/${flowId}/versions/${versionId}`),
   restoreFlowVersion: (flowId: string, versionId: string) => post(`/automation/flows/${flowId}/versions/${versionId}/restore`),
+  runFlowNow: (flowId: string) => post(`/automation/flows/${flowId}/run`),
   getRuns: (params?: string) => get(`/automation/runs${params ? `?${params}` : ""}`),
   getRunsStats: () => get("/automation/runs/stats"),
 
