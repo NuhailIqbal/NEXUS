@@ -1,3 +1,8 @@
+/**
+ * Modal for a live in-browser test call with an agent, using the VAPI web SDK. Shows status,
+ * a running transcript and mute/end controls. Can link an unlinked agent through
+ * api.syncAgentVapi. Used by AIAgents (Test button) and CreateAIAgent.
+ */
 import { useEffect, useRef, useState } from "react";
 import { Mic, MicOff, PhoneOff, Bot, User, Loader2, AlertTriangle, PhoneCall, RefreshCw } from "lucide-react";
 import Vapi from "@vapi-ai/web";
@@ -13,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
+/** Minimal agent fields the modal needs; `vapi_assistant_id` is the linked voice assistant, if any. */
 export type VoiceAgentInfo = {
   id: string;
   name: string;
@@ -23,6 +29,7 @@ export type VoiceAgentInfo = {
   vapi_assistant_id?: string | null;
 };
 
+/** `onAgentSynced` fires after a successful sync with the agent id and its new assistant id. */
 export type LiveVoiceModalProps = {
   agent: VoiceAgentInfo | null;
   open: boolean;
@@ -33,8 +40,13 @@ export type LiveVoiceModalProps = {
 type Msg = { role: "user" | "assistant"; content: string };
 type CallStatus = "idle" | "connecting" | "ringing" | "in-call" | "ended" | "error";
 
-const PUBLIC_KEY = ((import.meta as any).env?.VITE_VAPI_PUBLIC_KEY ?? "").trim();
+// Public (browser-safe) VAPI web key from the Vite env; empty disables calling.
+const PUBLIC_KEY =((import.meta as any).env?.VITE_VAPI_PUBLIC_KEY ?? "").trim();
 
+/**
+ * Dialog component. Auto-starts a call when opened (and when the agent changes) and tears
+ * it down on close or unmount. All modal state is reset when it closes.
+ */
 export function LiveVoiceModal({
   agent,
   open,
@@ -50,11 +62,17 @@ export function LiveVoiceModal({
   const vapiRef = useRef<Vapi | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /** Stops the active VAPI session, if any, ignoring errors, and drops the reference. */
   const teardown = () => {
     try { vapiRef.current?.stop(); } catch {}
     vapiRef.current = null;
   };
 
+  /**
+   * Starts a web call. Assistant id precedence: explicit override (used right after a sync),
+   * then the id from a prior sync, then the agent's stored id. Final transcript messages are
+   * appended to the chat after Devanagari-to-Urdu script fixing. Failures set the error state.
+   */
   const startCall = async (assistantIdOverride?: string) => {
     if (!agent) return;
     if (!PUBLIC_KEY) {
@@ -104,6 +122,10 @@ export function LiveVoiceModal({
     }
   };
 
+  /**
+   * For agents with no linked assistant: asks the backend to create/sync one
+   * (api.syncAgentVapi), notifies the parent, then starts the call with the returned id.
+   */
   const syncToVapi = async () => {
     if (!agent) return;
     setSyncing(true);
@@ -122,11 +144,13 @@ export function LiveVoiceModal({
     await startCall(newId);
   };
 
+  /** Hangs up (or cancels a connecting call) and marks the call as ended. */
   const endCall = () => {
     teardown();
     setStatus("ended");
   };
 
+  /** Toggles the local microphone mute on the active session. */
   const toggleMute = () => {
     const vapi = vapiRef.current;
     if (!vapi) return;
@@ -172,7 +196,8 @@ export function LiveVoiceModal({
 
   const isLive = status === "in-call";
   const isBusy = status === "connecting" || status === "ringing";
-  const isNotLinked = status === "error" && !agent?.vapi_assistant_id && !syncedAssistantId;
+  // True when the error is because the agent has no voice assistant yet, so Sync is offered.
+  const isNotLinked =status === "error" && !agent?.vapi_assistant_id && !syncedAssistantId;
 
   return (
     <Dialog

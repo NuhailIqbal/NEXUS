@@ -1,3 +1,8 @@
+/**
+ * Dialog for saving a user's own Twilio Account SID and Auth Token (BYOT) via
+ * api.createTwilioCredential (POST /telephony/twilio-credentials).
+ * Opened from CreatePhoneNumberDialog; onConnected lets the parent refresh its account list.
+ */
 import { useState } from "react";
 import { X, Link2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +19,10 @@ type Props = {
   onConnected?: () => void;
 };
 
+/**
+ * Controlled credential form (open/onOpenChange). Calls onConnected after a successful save.
+ * The auth token is masked unless the user toggles reveal.
+ */
 export function ConnectTwilioDialog({ open, onOpenChange, onConnected }: Props) {
   const [accountSid, setAccountSid] = useState("");
   const [authToken, setAuthToken] = useState("");
@@ -21,6 +30,7 @@ export function ConnectTwilioDialog({ open, onOpenChange, onConnected }: Props) 
   const [saving, setSaving] = useState(false);
   const [revealed, setRevealed] = useState(false);
 
+  // Clears all fields (including the secret) and re-masks the token.
   const reset = () => {
     setAccountSid("");
     setAuthToken("");
@@ -28,11 +38,14 @@ export function ConnectTwilioDialog({ open, onOpenChange, onConnected }: Props) 
     setLabel("");
   };
 
+  // Dialog open-change handler: closing wipes the form so credentials don't linger in state.
   const close = (v: boolean) => {
     if (!v) reset();
     onOpenChange(v);
   };
 
+  // Requires SID and token, submits them trimmed (label optional), and on success closes the
+  // dialog and then notifies the parent. On API error the dialog stays open with the input kept.
   const save = async () => {
     if (!accountSid.trim() || !authToken.trim()) {
       toast.error("Account SID and Auth Token are both required");

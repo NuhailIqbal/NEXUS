@@ -1,3 +1,8 @@
+/**
+ * AI Agents list page (route /dashboard/ai-agents). Shows the account's agents as cards with
+ * search/status/category/date filters, and offers test (live web call), edit, duplicate and delete.
+ * Uses api.getAgents, api.deleteAgent, api.getAgentEvents and api.createAgent.
+ */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Settings, Copy, Trash2, PlayCircle } from "lucide-react";
@@ -21,6 +26,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+/** Agent row as returned by the agents API; only the fields this page reads or copies. */
 type Agent = {
   id: string;
   name: string;
@@ -36,6 +42,11 @@ type Agent = {
   user_id?: string | null;
 };
 
+/**
+ * Page component: loads the agent list once on mount and re-loads after delete, duplicate
+ * or an edit save. Filtering is done client-side. Hosts the delete/duplicate confirm dialogs,
+ * the LiveVoiceModal (Test) and the EditAgentModal (Settings).
+ */
 const AIAgents = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -50,6 +61,7 @@ const AIAgents = () => {
   const [pendingDelete, setPendingDelete] = useState<Agent | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<Agent | null>(null);
 
+  // Maps the agent's stored language label to a BCP-47 tag for browser speech synthesis.
   const LANG_MAP: Record<string, string> = {
     "English": "en-US",
     "Urdu": "ur-PK",
@@ -64,6 +76,11 @@ const AIAgents = () => {
     "Urdu (PK)": "ur-PK",
   };
 
+  /**
+   * Speaks `text` with the browser's speech synthesis, preferring a voice matching the agent's
+   * voice name, then its language. No-ops when unsupported; errors are swallowed.
+   * Not currently called by this page.
+   */
   const speak = (text: string, agent: Agent | null) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     try {
@@ -87,6 +104,7 @@ const AIAgents = () => {
     }
   };
 
+  /** Fetches the agent list; on error shows a toast and clears the list. */
   const load = async () => {
     const { data, error } = await api.getAgents();
     if (error) {
@@ -101,6 +119,7 @@ const AIAgents = () => {
     load();
   }, []);
 
+  /** Deletes the agent chosen in the confirm dialog (api.deleteAgent), then reloads the list. */
   const confirmDelete = async () => {
     if (!pendingDelete) return;
     const { error } = await api.deleteAgent(pendingDelete.id);
@@ -110,6 +129,10 @@ const AIAgents = () => {
     load();
   };
 
+  /**
+   * Creates a copy named "<name> (Copy)" via api.createAgent, reusing the source agent's
+   * prompt, voice, language, category, status, tool keys and call events, then reloads the list.
+   */
   const confirmDuplicate = async () => {
     if (!pendingDuplicate) return;
     const a = pendingDuplicate;
@@ -137,6 +160,7 @@ const AIAgents = () => {
     load();
   };
 
+  /** Opens the live voice test modal for the given agent. */
   const openTest = (a: Agent) => {
     setTestAgent(a);
   };
@@ -145,6 +169,7 @@ const AIAgents = () => {
     new Set(agents.map((a) => a.category).filter((c): c is string => !!c)),
   ).sort();
 
+  /** Converts a date-range filter label to the earliest allowed created_at; null means no limit. */
   const dateRangeCutoff = (range: string): Date | null => {
     const now = new Date();
     if (range === "Last 7 days") return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -310,6 +335,7 @@ const AIAgents = () => {
   );
 };
 
+/** One label/value line inside an agent card's details list. */
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between">
@@ -319,6 +345,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Stacked label/value pair. Currently unused in this file. */
 function InfoLine({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col">

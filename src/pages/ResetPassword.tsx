@@ -1,3 +1,9 @@
+/**
+ * "Set new password" page, routed at /reset-password?token=... (see App.tsx).
+ * Currently a non-functional stub: the form renders when a `token` query parameter is present,
+ * but submitting only shows a "contact your administrator" toast. The token is not validated
+ * and no API is called (api.resetPassword exists in the client but is not wired up here).
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +14,12 @@ import { useNavigate } from "react-router-dom";
 import Logo from "@/components/Logo";
 import { api } from "@/services/api";
 
+/**
+ * Reset-password screen. Shows "Invalid or expired reset link." unless a `token` query parameter
+ * is present, otherwise a new-password form.
+ * `token` is only a presence gate for the form; its value is never checked or sent anywhere.
+ * `loading` is never set to true and `navigate` is unused, since submitting does no work yet.
+ */
 const ResetPassword = () => {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,12 +27,15 @@ const ResetPassword = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // Reads the token from the URL after mount, so the very first render has token === null and
+  // briefly shows the invalid-link message before the effect's state update re-renders.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const t = params.get("token");
     if (t) setToken(t);
   }, []);
 
+  /** Form submit handler: stub that only shows an informational toast; the new password is not sent anywhere. */
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     // Email-link password reset is not available yet; direct users to support.

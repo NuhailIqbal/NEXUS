@@ -1,3 +1,9 @@
+/**
+ * Billing Overview tab (index route of /dashboard/billing, rendered inside BillingLayout).
+ * Shows the pay-as-you-go credit balance, auto-recharge state and cost summary cards.
+ * Uses api.getBillingStatus, api.getBillingCallCosts(summaryOnly), api.getWalletTransactions
+ * and api.topupConfirm (finalises a Stripe Checkout top-up on return).
+ */
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -10,6 +16,11 @@ import { AddFundsDialog } from "./AddFundsDialog";
 import { AutoRechargeDialog } from "./AutoRechargeDialog";
 import { BillingStatus } from "./types";
 
+/**
+ * Overview page component. Loads billing status, total call minutes and a promo flag in
+ * parallel, handles the Stripe top-up return URL, and hosts the AddFunds and
+ * AutoRecharge dialogs. No props.
+ */
 const BillingOverview = () => {
   const [searchParams] = useSearchParams();
   const [billing, setBilling] = useState<BillingStatus | null>(null);
@@ -19,7 +30,12 @@ const BillingOverview = () => {
   const [showTopup, setShowTopup] = useState(false);
   const [showAutoRecharge, setShowAutoRecharge] = useState(false);
 
+  /**
+   * Fetches status, call totals and wallet transactions concurrently and updates state.
+   * Also used as the refresh callback after a top-up or an auto-recharge save.
+   */
   const fetchAll = useCallback(async () => {
+    // summaryOnly=true: only the totals are needed here, not the per-call rows.
     const [statusRes, costsRes, txnRes] = await Promise.all([
       api.getBillingStatus(),
       api.getBillingCallCosts(true),
@@ -27,6 +43,7 @@ const BillingOverview = () => {
     ]);
     if (statusRes.data) setBilling(statusRes.data);
     if (costsRes.data) setTotalMinutes(costsRes.data.total_minutes || 0);
+    // A "promo" ledger entry means the welcome credit was granted; used for the badge.
     if (Array.isArray(txnRes.data)) setHasPromo(txnRes.data.some((t) => t.kind === "promo"));
     setLoading(false);
   }, []);
@@ -38,6 +55,7 @@ const BillingOverview = () => {
   useEffect(() => {
     const topup = searchParams.get("topup");
     if (!topup) return;
+    // Strip the query string so a refresh does not re-trigger the confirmation.
     const clean = () => window.history.replaceState({}, "", window.location.pathname);
     if (topup === "canceled") {
       toast.info("Top-up canceled. No funds added.");
@@ -66,6 +84,7 @@ const BillingOverview = () => {
     );
   }
 
+  // 0.35 is a display fallback used only until the backend returns rate_per_minute.
   const rate = billing?.rate_per_minute ?? 0.35;
   const autoOn = !!billing?.auto_recharge_enabled;
 

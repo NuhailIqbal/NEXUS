@@ -1,3 +1,9 @@
+/**
+ * Read-only notice for Viewer-role team members, rendered at the top of the dashboard <main>
+ * (DashboardLayout). Calls GET /team/me once on mount via api.getMyRole and renders nothing
+ * for owners and members. Purely informational: write requests from viewers are rejected
+ * by the backend's team-role middleware (403) regardless of what the UI shows.
+ */
 import { useEffect, useState } from "react";
 import { Eye } from "lucide-react";
 import { api } from "@/services/api";
@@ -10,6 +16,8 @@ const ViewerBanner = () => {
   const [isViewer, setIsViewer] = useState(false);
 
   useEffect(() => {
+    // `on` drops the response if the component unmounted before the request finished. The flag
+    // is only ever set to true here; role changes mid-session are handled by DashboardLayout's poll.
     let on = true;
     api.getMyRole().then(({ data }) => {
       if (on && data && !data.is_owner && data.role === "viewer") setIsViewer(true);

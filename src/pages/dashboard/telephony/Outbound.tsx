@@ -1,3 +1,9 @@
+/**
+ * Outbound campaigns dashboard page (routes telephony/outbound and telephony/campaigns).
+ * Uses api.getCampaigns/createCampaign/updateCampaign/deleteCampaign/startCampaign/
+ * pauseCampaign/resumeCampaign plus getAgents, getPhoneNumbers, getContacts and
+ * getAnalyticsOverview. Campaign creation is delegated to CreateCampaignDialog.
+ */
 import { useEffect, useState } from "react";
 import {
   Plus, PhoneOutgoing, Play, Pause as PauseIcon,
@@ -21,6 +27,7 @@ import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
+/** Campaign row from GET /telephony/campaigns; effectiveStatus is derived client-side. */
 type Campaign = {
   id: string;
   name: string;
@@ -33,12 +40,14 @@ type Campaign = {
   completed_count: number;
 };
 
+/** One row of the pre-launch checklist dialog. */
 type CheckItem = {
   label: string;
   status: "loading" | "pass" | "fail" | "warn";
   detail?: string;
 };
 
+/** Summary tile (icon, big value, label) used in the stats bar. */
 function StatCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: string | number; color: string }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4 lg:flex-col lg:items-start lg:gap-3 xl:flex-row xl:items-center xl:gap-4">
@@ -53,6 +62,7 @@ function StatCard({ icon: Icon, label, value, color }: { icon: any; label: strin
   );
 }
 
+/** Badge classes per displayed status; unknown statuses fall back to Inactive. */
 const STATUS_COLOR: Record<string, string> = {
   Active: "bg-green-500/15 text-green-600 border-green-500/20",
   Paused: "bg-yellow-500/15 text-yellow-600 border-yellow-500/20",
@@ -60,6 +70,10 @@ const STATUS_COLOR: Record<string, string> = {
   Completed: "bg-blue-500/15 text-blue-600 border-blue-500/20",
 };
 
+/**
+ * Campaign management page: stats, campaign cards, create/settings dialogs and the
+ * pre-launch checklist. Polls campaigns every 30s while mounted.
+ */
 const Outbound = () => {
   const [open, setOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -78,6 +92,7 @@ const Outbound = () => {
   // A campaign whose every contact has a completed call has nothing left to dial — shown as
   // "Completed" regardless of its underlying Active/Paused status, which otherwise never
   // changes on its own once every contact has been reached.
+  /** Adds effectiveStatus to each campaign (see the note above). */
   const withEffectiveStatus = (list: Campaign[]): Campaign[] =>
     list.map((c) => ({
       ...c,
@@ -85,6 +100,10 @@ const Outbound = () => {
         c.contacts_count > 0 && c.completed_count >= c.contacts_count ? "Completed" : c.status,
     }));
 
+  /**
+   * Loads campaigns, agent/phone-number name lookups and the qualified-calls total in
+   * parallel, then clears the initial loading state.
+   */
   const fetchCampaigns = async () => {
     const [campaignsRes, agentsRes, phonesRes, overviewRes] = await Promise.all([
       api.getCampaigns(), api.getAgents(), api.getPhoneNumbers(), api.getAnalyticsOverview(),
@@ -109,6 +128,7 @@ const Outbound = () => {
   const totalDialed   = campaigns.reduce((s, c) => s + (c.completed_count || 0), 0);
   const activeCampaigns = campaigns.filter((c) => c.effectiveStatus === "Active").length;
 
+  /** Pauses an Active campaign immediately; otherwise opens the pre-launch checks first. */
   const togglePlay = async (c: Campaign) => {
     if (c.status === "Active") {
       const { error } = await api.pauseCampaign(c.id);
@@ -120,6 +140,11 @@ const Outbound = () => {
     }
   };
 
+  /**
+   * Opens the checklist dialog and runs three checks in order, updating the list after
+   * each: agent exists and is synced to VAPI, phone number is active, and the assigned
+   * list has contacts with a phone number. Launch stays disabled until none fail.
+   */
   const openPreflight = async (c: Campaign) => {
     setPreflightTarget(c);
     const init: CheckItem[] = [
@@ -163,6 +188,10 @@ const Outbound = () => {
     setChecks([...results]);
   };
 
+  /**
+   * Starts (or resumes, if Paused) the campaign being checked and reports the outcome
+   * (dialed / failed / DNC-skipped counts) in a toast, then refreshes the list.
+   */
   const launchCampaign = async () => {
     if (!preflightTarget) return;
     setLaunching(true);
@@ -185,11 +214,13 @@ const Outbound = () => {
     fetchCampaigns();
   };
 
+  /** Opens the settings dialog pre-filled from the campaign. */
   const openSettings = (c: Campaign) => {
     setSettingsTarget(c);
     setSettingsForm({ name: c.name, agent_id: c.agent_id, status: c.status });
   };
 
+  /** PATCHes name, agent and status of the campaign being edited. */
   const saveSettings = async () => {
     if (!settingsTarget) return;
     const { error } = await api.updateCampaign(settingsTarget.id, settingsForm);
@@ -199,6 +230,7 @@ const Outbound = () => {
     fetchCampaigns();
   };
 
+  /** Deletes a campaign via the row actions menu. */
   const handleDelete = async (c: Campaign) => {
     const { error } = await api.deleteCampaign(c.id);
     if (error) return toast.error(error);

@@ -22,10 +22,17 @@ from services import calendar_service
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
+# These endpoints are called by VAPI mid-call, not by logged-in dashboard users: there is no
+# user JWT, and the /tools/internal/ prefix is exempt from TeamRoleGuard (main.py). The owning
+# account is derived from the assistant id in the payload. Failures are returned as result
+# text in a normal 200 response, so the model receives them as the tool's output and can
+# react on the live call. Rate limits are keyed by remote address.
 router = APIRouter(prefix="/tools/internal", tags=["Agent Tool Callbacks"])
 
 
 def _user_id_from_assistant(assistant_id: str) -> str | None:
+    """Map a VAPI assistant id to the owning account's user id via `ai_agents.vapi_assistant_id`.
+    Returns None when the id is empty or matches no agent."""
     if not assistant_id:
         return None
     res = (
@@ -45,6 +52,7 @@ async def _parse_tool_call(request: Request) -> tuple[str | None, dict, str | No
     except Exception:
         return None, {}, None
 
+    # The payload is usually nested under a top-level `message` key; fall back to the body itself.
     msg = body.get("message") or body
     call = msg.get("call") or {}
     assistant_id = call.get("assistantId") or msg.get("assistantId")
@@ -52,10 +60,13 @@ async def _parse_tool_call(request: Request) -> tuple[str | None, dict, str | No
     if not tool_calls:
         return None, {}, assistant_id
 
+    # Only the first tool call is handled, and its id is the one the reply must echo back.
     tc = tool_calls[0]
     tc_id = tc.get("id") or tc.get("toolCallId")
     fn = tc.get("function") or {}
     args = fn.get("arguments") or {}
+    # `arguments` may arrive as a JSON string instead of an object; unparseable JSON
+    # degrades to "no arguments" so each handler reports its own missing-field error.
     if isinstance(args, str):
         import json
         try:
@@ -66,6 +77,7 @@ async def _parse_tool_call(request: Request) -> tuple[str | None, dict, str | No
 
 
 def _result(tc_id: str | None, result: str) -> dict:
+    """Wrap `result` in the response envelope VAPI expects for a single tool call."""
     return {"results": [{"toolCallId": tc_id, "result": result}]}
 
 
@@ -92,6 +104,7 @@ async def cb_trigger_event(request: Request):
     if not isinstance(tool_calls, list):
         return {"results": []}
 
+    # Resolve the agent once; every tool call in this request belongs to the same call.
     agent = None
     if assistant_id and isinstance(assistant_id, str):
         res = (
@@ -117,11 +130,17 @@ async def cb_trigger_event(request: Request):
                 args = {}
         if not isinstance(args, dict):
             args = {}
+        # An event cannot be attributed without both the agent and the VAPI call id, so each
+        # tool call gets an error result instead of the whole request failing.
         if not agent or not vapi_call_id:
             results.append({"toolCallId": tc_id, "result": "Error: could not identify the call."})
             continue
         event = args.get("event")
         note = args.get("note")
+        # record_hit validates the event key against the agent's events (None if unknown),
+        # applies the inbound/outbound scope (returns skipped=True), de-duplicates retried tool
+        # calls, and schedules a callback when the event asks for one. The customer number
+        # is passed along for that callback.
         try:
             customer = call.get("customer") if isinstance(call.get("customer"), dict) else {}
             hit = record_hit(agent["user_id"], agent["id"], vapi_call_id, event,
@@ -129,6 +148,8 @@ async def cb_trigger_event(request: Request):
                              customer.get("number") if isinstance(customer.get("number"), str) else None, args)
         except Exception as e:
             logger.warning("trigger_event failed for call %s: %s", vapi_call_id, e)
+            # A storage error is logged and then reported to the model like an unknown event,
+            # so it never breaks the live call.
             hit = None
         label = event if isinstance(event, str) else ""
         if hit and hit.get("skipped"):
@@ -144,6 +165,10 @@ async def cb_trigger_event(request: Request):
 @router.post("/send-email")
 @limiter.limit("60/minute")
 async def cb_send_email(request: Request):
+    """VAPI callback for the `send_email` tool. Sends an email (to, subject, body) on behalf of
+    the agent's owner through their active email integration (Brevo, SendGrid or SMTP).
+    Called by VAPI, not by dashboard users; the subject defaults to "Follow-up" and any
+    failure is returned to the model as result text."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     user_id = _user_id_from_assistant(assistant_id)
     if not user_id:
@@ -166,6 +191,10 @@ async def cb_send_email(request: Request):
 @router.post("/send-sms")
 @limiter.limit("60/minute")
 async def cb_send_sms(request: Request):
+    """VAPI callback for the `send_sms` tool. Sends a text message (to, message) through
+    Twilio on behalf of the agent's owner. Called by VAPI, not by dashboard users; any
+    failure (for example no Twilio integration configured) is returned to the model as
+    result text."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     user_id = _user_id_from_assistant(assistant_id)
     if not user_id:
@@ -176,6 +205,9 @@ async def cb_send_sms(request: Request):
     if not to:
         return _result(tc_id, "Error: missing recipient phone number.")
 
+    # No From number is passed, so sms_service sends through the owner's Twilio integration
+    # (SID, token and From number from its config). Platform-purchased numbers are only used
+    # when a From number is supplied, which this callback never does.
     try:
         await send_sms(user_id, to, message)
         return _result(tc_id, f"SMS sent to {to}.")
@@ -187,6 +219,10 @@ async def cb_send_sms(request: Request):
 @router.post("/update-crm")
 @limiter.limit("60/minute")
 async def cb_update_crm(request: Request):
+    """VAPI callback for the `update_crm` tool. Updates the owner's contact(s) whose phone
+    exactly matches `contact_phone`, applying only the whitelisted fields (status, notes,
+    name, email) from `updates`. Writes the `contacts` table; called by VAPI, not by
+    dashboard users."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     user_id = _user_id_from_assistant(assistant_id)
     if not user_id:
@@ -197,11 +233,14 @@ async def cb_update_crm(request: Request):
     if not phone or not isinstance(updates, dict) or not updates:
         return _result(tc_id, "Error: contact_phone and a non-empty updates object are required.")
 
+    # Whitelist: the model may only touch these columns, never arbitrary ones.
     allowed = {"status", "notes", "name", "email"}
     safe_updates = {k: v for k, v in updates.items() if k in allowed}
     if not safe_updates:
         return _result(tc_id, f"Error: only these fields are updatable: {sorted(allowed)}.")
 
+    # Scoped to the owner's contacts and matched on the phone string as stored (no
+    # normalisation), so every contact of that owner with this exact number is updated.
     res = (
         supabase.table("contacts")
         .update(safe_updates)
@@ -221,6 +260,8 @@ async def _agent_context(request: Request, assistant_id: str | None):
         body = await request.json()
     except Exception:
         body = {}
+    # The body was already parsed by _parse_tool_call; Starlette caches it, so re-reading
+    # is cheap. Unlike _parse_tool_call, this tolerates non-dict payloads.
     msg = body.get("message") if isinstance(body, dict) and isinstance(body.get("message"), dict) else (body if isinstance(body, dict) else {})
     call = msg.get("call") if isinstance(msg.get("call"), dict) else {}
     agent = None
@@ -239,6 +280,10 @@ async def _agent_context(request: Request, assistant_id: str | None):
 @router.post("/check-availability")
 @limiter.limit("60/minute")
 async def cb_check_availability(request: Request):
+    """VAPI callback for the `check_availability` tool. Returns text listing free meeting
+    slots (each with an exact `start_iso`) on the owner's connected Google Calendar for the
+    model to offer; the logic lives in calendar_service.check_availability. Called by VAPI,
+    not by dashboard users."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     agent, _call_id = await _agent_context(request, assistant_id)
     if not agent:
@@ -255,6 +300,10 @@ async def cb_check_availability(request: Request):
 @router.post("/book-slot")
 @limiter.limit("60/minute")
 async def cb_book_slot(request: Request):
+    """VAPI callback for the `book_slot` tool. Books a meeting on the owner's Google Calendar
+    and records it in `calendar_bookings` (see calendar_service.book_slot). The VAPI call id
+    and tool call id are passed so a retried tool call confirms the existing booking instead
+    of double-booking. Called by VAPI, not by dashboard users."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     agent, call_id = await _agent_context(request, assistant_id)
     if not agent:
@@ -272,6 +321,10 @@ async def cb_book_slot(request: Request):
 @router.post("/webhook")
 @limiter.limit("60/minute")
 async def cb_webhook(request: Request):
+    """VAPI callback for the `webhook` tool. POSTs `{"event": event_name, "payload": payload}`
+    as JSON to a webhook URL taken from the owner's Active integrations. Only transport
+    errors are reported back; the target's HTTP status is not checked. Called by VAPI, not
+    by dashboard users."""
     tc_id, args, assistant_id = await _parse_tool_call(request)
     user_id = _user_id_from_assistant(assistant_id)
     if not user_id:
@@ -281,6 +334,9 @@ async def cb_webhook(request: Request):
     payload = args.get("payload") or {}
 
     # Find the user's first active webhook integration with a 'url' field.
+    # The integration type is not checked: any Active integration whose decrypted config has
+    # `webhookUrl` or `url` qualifies, and rows are not ordered, so if several match the
+    # one chosen is not deterministic. Rows that fail to decrypt are skipped.
     integrations = (
         supabase.table("integrations")
         .select("config_encrypted, name")

@@ -34,6 +34,7 @@ def _assistant_user_map() -> dict[str, str]:
 
 
 def _get_conversation(vapi_call_id: str) -> dict | None:
+    """Full conversations row for this vapi_call_id, or None if it is not stored."""
     r = supabase.table("conversations").select("*").eq("vapi_call_id", vapi_call_id).limit(1).execute()
     return r.data[0] if r.data else None
 
@@ -54,6 +55,8 @@ def _existing_by_call_id(call_ids: list[str]) -> dict[str, dict]:
 
 
 def _is_ended(call: dict) -> bool:
+    """True if VAPI reports the call as finished: status "ended", or an endedAt or
+    endedReason value is present. Only finished calls are imported."""
     status = (call.get("status") or "").lower()
     return status == "ended" or bool(call.get("endedAt")) or bool(call.get("endedReason"))
 
@@ -67,14 +70,17 @@ def _ended_recently(call: dict) -> bool:
         ended = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         return (datetime.now(timezone.utc) - ended).total_seconds() <= _RETRY_WINDOW_SECONDS
     except Exception:
+        # An unparseable timestamp counts as "not recent" so the call is not retried forever.
         return False
 
 
 async def run_global_sync() -> dict:
     """One sync pass: pull recent VAPI calls and import new/incomplete ones."""
+    # Nothing to do until VAPI credentials are configured.
     if not settings.vapi_api_key:
         return {"skipped": "no vapi_api_key"}
 
+    # Most recent calls first, capped at vapi_sync_limit; older calls are not scanned.
     calls = await vapi_client.list_calls(limit=settings.vapi_sync_limit)
     if not calls:
         return {"scanned": 0, "imported": 0, "updated": 0}
@@ -101,8 +107,11 @@ async def run_global_sync() -> dict:
     imported = updated = failed = 0
     for c in to_process:
         try:
+            # Re-fetch each call individually to get its full artifact (messages,
+            # recording, transcript), which the list response may not include.
             full = await vapi_client.get_call(c["id"])
             user_id = assistant_map[c["assistantId"]]
+            # import_vapi_call is synchronous (DB writes + billing), so run it off the event loop.
             res = await asyncio.to_thread(import_vapi_call, full, user_id)
             if res == "imported":
                 imported += 1
@@ -145,4 +154,6 @@ async def sync_loop() -> None:
             await run_global_sync()
         except Exception as e:
             logger.warning(f"vapi-sync: pass failed: {e}")
+        # Sleep after each pass (not before), so the first sync runs right at startup;
+        # a failed pass is logged and simply retried on the next tick.
         await asyncio.sleep(interval)

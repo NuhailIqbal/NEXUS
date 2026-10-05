@@ -18,6 +18,15 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+# Catalogue of built-in tools, keyed by the string the wizard stores in the agent's
+# `selected_tool_keys`. Per preset:
+#   label          shown in the UI; also the `tools.name` used to find an existing row, and the
+#                  base of the VAPI function name ("Send Email" -> "send_email")
+#   description    shown in the UI and sent to VAPI, where the model reads it to decide when to
+#                  call the tool (so the wording is part of the agent's behaviour)
+#   callback_path  route in routers/agent_tool_callbacks.py that VAPI POSTs to
+#   requires       optional UI hint shown as "Needs <requires>"; not enforced here
+#   parameters     JSON Schema of the arguments the model must supply
 PRESETS: dict[str, dict] = {
     "send_email": {
         "label": "Send Email",
@@ -119,6 +128,9 @@ PRESETS: dict[str, dict] = {
 
 
 def _vapi_tool_payload(preset: dict) -> dict:
+    """Build the VAPI tool-create body for a preset: a `function` tool whose `server.url` is
+    this backend's public URL plus the preset's callback path. The server block carries no
+    headers or secret; the callback identifies the owner from the assistant id in the payload."""
     base = settings.public_api_url.rstrip("/")
     return {
         "type": "function",
@@ -143,15 +155,20 @@ async def provision_tools_for_agent(user_id: str, selected_keys: list[str]) -> l
     Silently skips any preset whose provisioning fails so agent creation
     is not blocked.
     """
+    # Nothing to do without selected tools, a VAPI key, or a public URL for VAPI to call
+    # back (the callbacks are unreachable without public_api_url).
     if not selected_keys or not settings.vapi_api_key or not settings.public_api_url:
         return []
 
     tool_ids: list[str] = []
     for key in selected_keys:
+        # Unknown keys are ignored silently.
         preset = PRESETS.get(key)
         if not preset:
             continue
 
+        # Presets are matched per account by the `tools.name` equal to the preset label, so
+        # any row of that user with the same name is picked up, not only rows made here.
         existing = (
             supabase.table("tools")
             .select("id, vapi_tool_id")
@@ -160,10 +177,13 @@ async def provision_tools_for_agent(user_id: str, selected_keys: list[str]) -> l
             .execute()
         )
         row = (existing.data or [None])[0]
+        # An already-provisioned tool is reused as-is: edits to PRESETS (description,
+        # parameters) are not pushed to VAPI tools that already exist.
         if row and row.get("vapi_tool_id"):
             tool_ids.append(row["vapi_tool_id"])
             continue
 
+        # A failure here skips only this preset, so agent creation is never blocked.
         try:
             vapi_tool = await vapi_client.create_tool(_vapi_tool_payload(preset))
             vapi_tool_id = vapi_tool.get("id")
@@ -174,6 +194,8 @@ async def provision_tools_for_agent(user_id: str, selected_keys: list[str]) -> l
         if not vapi_tool_id:
             continue
 
+        # A local row without a VAPI id (never linked) is completed in place; otherwise a new
+        # row is inserted with the preset's label and description.
         if row:
             supabase.table("tools").update({"vapi_tool_id": vapi_tool_id, "status": "Active"}) \
                 .eq("id", row["id"]).execute()

@@ -1,3 +1,17 @@
+"""VAPI webhook receiver plus the helpers that turn VAPI call data into `conversations` rows.
+
+`POST /webhooks/vapi` is the endpoint VAPI calls for server events: end-of-call-report
+(or the legacy alias call-ended), status-update and call-started. The handlers create or
+update the call's `conversations` row, store transcript/recording/duration, charge the
+owner's wallet via `routers.billing.record_call_cost`, link call events, and schedule
+post-call AI work (Gemini summary + automation flows).
+
+`import_vapi_call` reuses the same extractors for call objects fetched from the VAPI REST
+API; it is called by `services/vapi_sync.py` (background poll) and by
+`POST /conversations/sync-from-vapi`.
+
+Tables read/written: ai_agents (assistant -> owner), contacts, phone_numbers, conversations.
+"""
 import hashlib
 import hmac
 import logging
@@ -19,6 +33,9 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
+    """Validate the x-vapi-signature header: a hex HMAC-SHA256 of the raw request body
+    keyed with VAPI_WEBHOOK_SECRET. Returns True without checking when no secret is
+    configured (development convenience)."""
     if not settings.vapi_webhook_secret:
         # In production, config.py refuses to start without the secret, so this
         # branch only fires in development. We still log a loud warning.
@@ -29,10 +46,15 @@ def _verify_signature(body: bytes, signature: str) -> bool:
         body,
         hashlib.sha256,
     ).hexdigest()
+    # Constant-time comparison so the check does not leak how much of the signature
+    # matched; a missing header becomes "" and therefore never matches.
     return hmac.compare_digest(expected, signature or "")
 
 
 def _find_user_for_assistant(vapi_assistant_id: str) -> str | None:
+    """Return the owner's user_id for the ai_agents row with this vapi_assistant_id,
+    or None if the id is empty or no agent matches. This is how a webhook (which carries
+    no user token) is attributed to an account."""
     if not vapi_assistant_id:
         return None
     result = (
@@ -48,18 +70,22 @@ def _find_user_for_assistant(vapi_assistant_id: str) -> str | None:
 
 
 def _extract_assistant_id(payload: dict) -> str | None:
+    """VAPI assistant id from message.call.assistantId, falling back to message.assistantId."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     return call_obj.get("assistantId") or msg.get("assistantId")
 
 
 def _extract_call_id(payload: dict) -> str | None:
+    """VAPI call id from message.call.id, falling back to message.callId."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     return call_obj.get("id") or msg.get("callId")
 
 
 def _extract_phone_number(payload: dict) -> str | None:
+    """The remote party's number (message.call.customer.number) — the callee on
+    outbound calls, the caller on inbound ones; None if VAPI did not report it."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     customer = call_obj.get("customer", {})
@@ -95,6 +121,7 @@ def _is_byot_call(payload: dict) -> bool:
 # A call counts as "qualified" when the AI handed it off to a human — VAPI
 # reports this via endedReason (e.g. "assistant-forwarded-call", "transfer").
 def _is_qualified(ended_reason: str) -> bool:
+    """True when the endedReason mentions a transfer or forward (case-insensitive)."""
     r = (ended_reason or "").lower()
     return "transfer" in r or "forwarded" in r
 
@@ -155,6 +182,8 @@ def _extract_recording_urls(payload: dict) -> tuple[str | None, str | None]:
 
 
 def _extract_transcript(payload: dict) -> str:
+    """Plain-text transcript, preferring message.artifact.transcript, then
+    message.transcript, then message.call.transcript; "" if none is present."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     artifact = msg.get("artifact") or {}
@@ -176,6 +205,7 @@ def _extract_transcript_messages(payload: dict) -> list[dict]:
         if role == "system":
             continue
         text = m.get("message")
+        # `message` may arrive as a list of parts; flatten it into one string.
         if isinstance(text, list):
             text = " ".join(str(x) for x in text)
         text = (text or "").strip()
@@ -203,6 +233,8 @@ def _extract_vapi_cost(payload: dict) -> float | None:
     leg is billed separately and estimated at charge time)."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
+    # Look at the message first, then the call object; in each, prefer a flat `cost`
+    # and fall back to `costBreakdown.total`.
     for src in (msg, call_obj):
         val = src.get("cost")
         if val is not None:
@@ -220,9 +252,13 @@ def _extract_vapi_cost(payload: dict) -> float | None:
 
 
 def _extract_duration_seconds(payload: dict) -> int | None:
+    """Call length in whole seconds, or None if it cannot be determined. Uses
+    message.durationSeconds / call.duration when set, otherwise derives it from the
+    startedAt/endedAt timestamps."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     val = msg.get("durationSeconds") or call_obj.get("duration")
+    # A zero/missing/unparseable value falls through to the timestamp calculation.
     if val:
         try:
             return int(float(val))
@@ -235,7 +271,10 @@ def _extract_duration_seconds(payload: dict) -> int | None:
         try:
             from datetime import datetime
             def _p(s: str):
+                """Parse an ISO-8601 timestamp; the trailing 'Z' is rewritten to +00:00
+                because datetime.fromisoformat only accepts 'Z' on Python 3.11+."""
                 return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            # Clamp at 0 so out-of-order timestamps never produce a negative duration.
             return max(0, int((_p(ended) - _p(started)).total_seconds()))
         except Exception:
             return None
@@ -255,6 +294,9 @@ def _call_to_payload(call: dict) -> dict:
 
 
 def _status_from_reason(ended_reason: str) -> str:
+    """Map a VAPI endedReason to a conversation status: "Failed", "No Answer" or
+    (default) "Completed". Same keyword rules as _handle_call_ended, minus its extra
+    check of the call object's own status field."""
     low = (ended_reason or "").lower()
     if "error" in low or "failed" in low:
         return "Failed"
@@ -279,6 +321,8 @@ def import_vapi_call(call: dict, user_id: str) -> str:
     summary = _extract_summary(payload)
     ended_reason = call.get("endedReason") or ""
 
+    # transcript and recording_url are always written; the optional fields below are
+    # included only when VAPI returned a value, so a re-import does not blank them out.
     row: dict = {
         "status": _status_from_reason(ended_reason),
         "transcript": transcript,
@@ -299,6 +343,8 @@ def import_vapi_call(call: dict, user_id: str) -> str:
         if dest:
             row["transferred_to"] = dest
 
+    # Upsert keyed on vapi_call_id: update the row if a webhook or an earlier sync
+    # already created it, otherwise insert a fully linked new one.
     if _conversation_id_for(vapi_call_id):
         supabase.table("conversations").update(row).eq("vapi_call_id", vapi_call_id).execute()
         result = "updated"
@@ -312,10 +358,13 @@ def import_vapi_call(call: dict, user_id: str) -> str:
         supabase.table("conversations").insert(base).execute()
         result = "imported"
 
+    # Link call-event hits to the conversation and record the final call outcome.
+    # The id is looked up again because a freshly inserted row's id is not captured above.
     finalize_call_events(vapi_call_id, _conversation_id_for(vapi_call_id))
 
     # Set the displayed call_cost and charge the wallet once (idempotent).
     if dur:
+        # Anything that is not an inbound call type (including web calls) is treated as outbound.
         direction = "inbound" if "inbound" in (call.get("type") or "").lower() else "outbound"
         record_call_cost(user_id, vapi_call_id, dur,
                          vapi_cost=_extract_vapi_cost(payload), direction=direction,
@@ -324,6 +373,8 @@ def import_vapi_call(call: dict, user_id: str) -> str:
 
 
 def _conversation_id_for(vapi_call_id: str) -> str | None:
+    """Return the id of the conversations row with this vapi_call_id, or None if there
+    is none. Used as the "does this call already have a row?" check throughout."""
     if not vapi_call_id:
         return None
     r = (
@@ -347,18 +398,22 @@ def _new_conversation_base(payload: dict, user_id: str) -> dict:
     phone = _extract_phone_number(payload)
     dir_label = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
 
+    # contact_name defaults to the raw number and is replaced below when the number
+    # matches a saved contact.
     row: dict = {
         "channel": "Phone",
         "direction": dir_label,
         "phone": phone,
         "contact_name": phone,
     }
+    # Link the agent via its VAPI assistant id (assumed to map to a single ai_agents row).
     if assistant_id:
         agent_row = (
             supabase.table("ai_agents").select("id").eq("vapi_assistant_id", assistant_id).limit(1).execute()
         )
         if agent_row.data:
             row["agent_id"] = agent_row.data[0]["id"]
+    # Exact phone-string match against this user's own contacts only.
     if phone:
         contact = (
             supabase.table("contacts").select("id, name").eq("user_id", user_id).eq("phone", phone).limit(1).execute()
@@ -379,6 +434,10 @@ def _create_conversation(payload: dict, user_id: str, vapi_call_id: str, status:
 
 
 async def _handle_call_started(payload: dict):
+    """Handle a "call-started" event: create an "In Progress" conversation row unless
+    one already exists. Skipped (with a warning) if the call id is missing or the
+    assistant does not belong to a known user. VAPI itself usually announces a call via
+    status-update instead (see _handle_status_update); this path serves legacy senders."""
     vapi_call_id = _extract_call_id(payload)
     user_id = _find_user_for_assistant(_extract_assistant_id(payload))
     if not user_id or not vapi_call_id:
@@ -391,6 +450,16 @@ async def _handle_call_started(payload: dict):
 
 
 async def _handle_call_ended(payload: dict):
+    """Handle an end-of-call-report (or legacy call-ended) event.
+
+    Extracts transcript, recording URLs, structured messages and duration; derives the
+    final status from endedReason; then updates the call's conversations row, or inserts
+    one if no earlier event created it (requires the assistant to map to a user).
+    Side effects: charges the owner's wallet once via record_call_cost (positive
+    duration only), links call-event hits, and schedules _post_call_ai as a background
+    task. Returns early, doing nothing, if the call id is missing or the call has neither
+    a row nor a resolvable owner.
+    """
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     vapi_call_id = _extract_call_id(payload)
@@ -403,7 +472,9 @@ async def _handle_call_ended(payload: dict):
     recording_url, stereo_recording_url = _extract_recording_urls(payload)
     transcript_messages = _extract_transcript_messages(payload)
     duration_seconds = _extract_duration_seconds(payload)
+    # The call object's own status string; only consulted for the "failed" check below.
     status = call_obj.get("status", "completed")
+    # end-of-call-report carries endedReason on the message; fall back to the call object.
     ended_reason = msg.get("endedReason") or call_obj.get("endedReason", "")
 
     duration_str = None
@@ -443,6 +514,7 @@ async def _handle_call_ended(payload: dict):
             updates["transferred_to"] = dest
         logger.info(f"call-ended qualified (transferred): {vapi_call_id} -> {dest or 'unknown'}")
 
+    # Row possibly created earlier by call-started / status-update.
     existing = (
         supabase.table("conversations")
         .select("id")
@@ -451,6 +523,7 @@ async def _handle_call_ended(payload: dict):
         .execute()
     )
 
+    # The owner is needed to insert a missing row, charge the call and run post-call work.
     user_id = _find_user_for_assistant(_extract_assistant_id(payload))
 
     if existing.data:
@@ -467,24 +540,36 @@ async def _handle_call_ended(payload: dict):
         conv_id = insert_result.data[0]["id"] if insert_result.data else None
         logger.info(f"call-ended inserted: {vapi_call_id}")
     else:
+        # No existing row and no owner to attach one to: nothing more we can do.
         return
 
+    # Charge only when the owner is known and the call had a positive duration.
+    # record_call_cost debits the wallet at most once per call, so webhook retries or a
+    # later re-import by the sync loop cannot double-charge.
     if user_id and duration_seconds:
         dur_int = int(float(duration_seconds))
         if dur_int > 0:
+            # Anything that is not an inbound call type (including web calls) is treated as outbound.
             direction = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
             cost = record_call_cost(user_id, vapi_call_id, dur_int,
                                     vapi_cost=_extract_vapi_cost(payload), direction=direction,
                                     is_byot=_is_byot_call(payload))
             logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
 
+    # Link call-event hits to this conversation and write the final call outcome.
     finalize_call_events(vapi_call_id, conv_id)
 
+    # Run the slow AI summary and automations in the background instead of making the
+    # webhook response wait for them; _post_call_ai catches and logs its own errors.
     asyncio.create_task(_post_call_ai(vapi_call_id, transcript, conv_id))
 
 
 async def _post_call_ai(vapi_call_id: str, transcript: str, conv_id: str):
+    """Background post-call step: generate a Gemini summary of the transcript into
+    conversations.ai_summary, then run the owner's post-call automation flows for this
+    conversation. Never raises; any failure is logged and swallowed."""
     try:
+        # Load the row stored by _handle_call_ended to get the owner and contact name.
         conv = (
             supabase.table("conversations")
             .select("*")
@@ -505,6 +590,7 @@ async def _post_call_ai(vapi_call_id: str, transcript: str, conv_id: str):
                 logger.info(f"AI summary written for {vapi_call_id}")
 
         if user_id:
+            # `conversation` is the row as read above, i.e. before ai_summary was written.
             await run_post_call_automations(user_id, conversation)
 
     except Exception as e:
@@ -512,6 +598,10 @@ async def _post_call_ai(vapi_call_id: str, transcript: str, conv_id: str):
 
 
 async def _handle_status_update(payload: dict):
+    """Handle a "status-update" event: mirror VAPI's call status onto the conversation
+    row. If the call has no row yet and the status is a live one (ringing, in-progress,
+    forwarding), create the row — status-update is normally the first event for a call.
+    Ignored when the call id or status is missing."""
     msg = payload.get("message", {})
     vapi_call_id = _extract_call_id(payload)
     status = msg.get("status", "")
@@ -524,6 +614,7 @@ async def _handle_status_update(payload: dict):
         "forwarding": "Forwarding",
         "ended": "Completed",
     }
+    # Any status not in the map is stored title-cased as-is.
     mapped = status_map.get(status, status.title())
 
     conv_id = _conversation_id_for(vapi_call_id)
@@ -534,6 +625,8 @@ async def _handle_status_update(payload: dict):
     # First signal we've seen for this call (VAPI doesn't send a "call-started"
     # event) — create the live row now and meter usage exactly once. The
     # end-of-call-report will later fill in transcript/recording/cost.
+    # Only live statuses may create a row; an "ended" update for an unknown call is
+    # ignored (the end-of-call-report inserts its own row if needed).
     if status in ("ringing", "in-progress", "forwarding"):
         user_id = _find_user_for_assistant(_extract_assistant_id(payload))
         if user_id:
@@ -547,8 +640,14 @@ async def vapi_webhook(
     request: Request,
     x_vapi_signature: str = Header(None),
 ):
+    """Receive VAPI server events. Authenticated by the HMAC signature in the
+    x-vapi-signature header (no user token) and rate limited to 120 requests per minute
+    per client IP. Routes end-of-call-report/call-ended, status-update and call-started
+    events to their handlers, which update conversations and trigger billing and
+    post-call work; other event types are acknowledged and ignored."""
     body = await request.body()
 
+    # Verify against the raw bytes before parsing JSON: the HMAC covers the exact body.
     if not _verify_signature(body, x_vapi_signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
@@ -567,6 +666,9 @@ async def vapi_webhook(
         await _handle_call_ended(payload)
     elif event_type == "status-update":
         await _handle_status_update(payload)
+    # Acknowledged but intentionally not processed here. Final transcripts arrive via
+    # the end-of-call-report; agent tool calls are served by the /tools/internal/*
+    # callback routes, not this endpoint.
     elif event_type == "transcript":
         pass
     elif event_type == "tool-calls":

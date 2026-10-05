@@ -1,3 +1,12 @@
+"""Analytics API: read-only aggregates for the dashboard Analytics pages, under /analytics.
+
+Endpoints: /overview (headline totals), /timeseries (per-day calls), /channel,
+/campaign and /agent breakdowns. Everything is computed on request from the account
+owner's rows in conversations, ai_agents, outbound_campaigns and contacts (see
+routers.team.resolve_owner_id); nothing is cached or stored, and most aggregation
+happens in Python over the fetched rows. Campaign progress figures come from
+routers.telephony._enrich_campaign_progress.
+"""
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from dependencies import get_current_user
@@ -56,6 +65,7 @@ async def timeseries(
 ):
     """Per-day calls / completed / total duration for the last `days` days."""
     now = datetime.now(timezone.utc)
+    # UTC midnight of the first day in the window; days - 1 so that today is the last day.
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     convos = (
@@ -67,19 +77,25 @@ async def timeseries(
     )
     rows = convos.data or []
 
+    # Pre-create one bucket per day so days without calls still appear, as zeros.
     buckets: dict[str, dict[str, int]] = {}
     for i in range(days):
         d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
         buckets[d] = {"calls": 0, "completed": 0, "duration_sec": 0}
 
     for r in rows:
+        # The created_at fallback never has a value here: the query above selects only
+        # status, duration and call_time.
         dt = _parse_dt(r.get("call_time")) or _parse_dt(r.get("created_at"))
         if not dt:
             continue
         key = dt.strftime("%Y-%m-%d")
+        # The query has no upper bound, so rows dated after the last day are dropped.
         if key not in buckets:
             continue
         buckets[key]["calls"] += 1
+        # Status is compared case-insensitively here, unlike the exact "Completed"
+        # match used by the other endpoints in this module.
         if (r.get("status") or "").lower() == "completed":
             buckets[key]["completed"] += 1
         buckets[key]["duration_sec"] += _duration_seconds(r.get("duration"))
@@ -99,6 +115,9 @@ async def timeseries(
 
 @router.get("/channel")
 async def channel_analytics(user=Depends(get_current_user)):
+    """Call totals per channel for the account (all time). Returns an object keyed by
+    channel name, not a list; each value has total, completed and failed counts, and
+    calls in any other status count only toward total."""
     convos = (
         supabase.table("conversations")
         .select("channel, status, duration")
@@ -122,6 +141,9 @@ async def channel_analytics(user=Depends(get_current_user)):
 
 @router.get("/campaign")
 async def campaign_analytics(user=Depends(get_current_user)):
+    """List the account's outbound campaigns with live progress: contacts_count and
+    completed_count recomputed from conversations, plus qualified_count (calls marked
+    qualified, i.e. transferred)."""
     owner_id = resolve_owner_id(user["user_id"])
     campaigns = (
         supabase.table("outbound_campaigns")
@@ -156,6 +178,8 @@ async def campaign_analytics(user=Depends(get_current_user)):
 
 @router.get("/agent")
 async def agent_analytics(user=Depends(get_current_user)):
+    """Per-agent call tallies (total, completed, failed, qualified) for every agent in
+    the account, including agents that have no calls yet."""
     owner_id = resolve_owner_id(user["user_id"])
     agents = (
         supabase.table("ai_agents")
@@ -167,6 +191,8 @@ async def agent_analytics(user=Depends(get_current_user)):
 
     result = []
     for agent in agent_list:
+        # One conversations query per agent, so the number of queries grows with the
+        # number of agents.
         convos = (
             supabase.table("conversations")
             .select("status, qualified")
@@ -190,6 +216,9 @@ async def agent_analytics(user=Depends(get_current_user)):
 
 @router.get("/overview")
 async def overview_analytics(user=Depends(get_current_user)):
+    """All-time headline numbers for the account: call totals (total, completed,
+    qualified, inbound, outbound), the qualified rate as a percentage, the number of
+    Active agents, and total campaign and contact counts."""
     owner_id = resolve_owner_id(user["user_id"])
     convos = (
         supabase.table("conversations")
@@ -217,6 +246,7 @@ async def overview_analytics(user=Depends(get_current_user)):
             "total_calls": total,
             "completed_calls": sum(1 for c in data if c.get("status") == "Completed"),
             "qualified_calls": qualified,
+            # Percentage of all calls, rounded to one decimal; 0 when there are no calls.
             "qualified_rate": round(qualified / total * 100, 1) if total else 0,
             "active_agents": agents.count or 0,
             "total_campaigns": campaigns.count or 0,

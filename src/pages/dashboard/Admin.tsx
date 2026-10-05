@@ -1,3 +1,11 @@
+/**
+ * Admin portal page: a password-gated, sidebar-driven console for platform operators
+ * (overview, users, agents, phone numbers, payments, revenue/agent/user reports, promotions
+ * and referrals). It authenticates with POST /admin/login and then calls the /admin/* API
+ * via the api.getAdmin* / api.*Admin* helpers, which send the token in the X-Admin-Auth
+ * header. Section state lives in this component (no sub-routes); App.tsx renders it as the
+ * catch-all route on the admin host (see lib/adminHost), separate from the user dashboard.
+ */
 import { useEffect, useState, Fragment } from "react";
 import {
   Users, Bot, PhoneOutgoing, CreditCard,
@@ -28,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { startImpersonation, openImpersonation } from "@/lib/impersonation";
 import ThemeToggle from "@/components/ThemeToggle";
 
+// One row of GET /admin/users: profile + billing state + usage counts for a single user.
 type AdminUser = {
   id: string;
   email: string;
@@ -45,6 +54,7 @@ type AdminUser = {
   stripe_customer_id: string | null;
 };
 
+// One row of GET /admin/agents; `synced` is true when the agent has a VAPI assistant id.
 type AdminAgent = {
   id: string;
   name: string;
@@ -58,6 +68,8 @@ type AdminAgent = {
   transfer_number: string | null;
 };
 
+// One row of GET /admin/phone-numbers. `expires_at`/`days_left` are derived server-side from
+// the number's next billing (renewal) date and are null when there is none.
 type AdminPhoneNumber = {
   id: string;
   number: string;
@@ -73,12 +85,14 @@ type AdminPhoneNumber = {
   owner_number_count: number;
 };
 
+// Response of GET /admin/stats: platform-wide headline counts.
 type AdminStats = {
   total_users: number;
   total_conversations: number;
   total_agents: number;
 };
 
+// Response of GET /admin/payments: per-user charge/balance rows and the most recent billed calls.
 type PaymentsUserRow = { email: string; name: string; status: string; total_charges: number; balance: number; stripe_customer_id: string | null };
 type PaymentsCallRow = { email: string; phone: string; contact_name: string; direction: string; duration: string; call_cost: number; call_time: string };
 type PaymentsData = {
@@ -87,13 +101,16 @@ type PaymentsData = {
   recent_calls: PaymentsCallRow[];
 };
 
+// Response of GET /admin/revenue: usage-revenue totals plus a 30-day daily series for the chart.
 type RevenueData = {
   totals: { usage_revenue: number; total_charges: number };
   timeseries: { day: string; label: string; revenue: number }[];
 };
 
+// One row of GET /admin/agents-report (per-agent call counts).
 type AgentReportRow = { id: string; name: string; owner_email: string; total_calls: number; completed: number; qualified: number };
 
+// Response of GET /admin/users-report: user counts, 30-day sign-up series and top users by activity.
 type UserReportTopUser = { email: string; name: string; conversations: number; agents: number };
 type UsersReportData = {
   totals: { total_users: number; active_users: number; disabled_users: number };
@@ -101,6 +118,9 @@ type UsersReportData = {
   top_users: UserReportTopUser[];
 };
 
+// A redeemable promo code (row of GET /admin/promo-codes). `expiry_days` is how long the
+// granted credit lasts after redemption; null means it never expires, and a null
+// `max_redemptions` means unlimited.
 type PromoCode = {
   id: string;
   code: string;
@@ -113,6 +133,7 @@ type PromoCode = {
   created_at: string;
 };
 
+// One row of GET /admin/referrals, with the referrer/referee emails resolved server-side.
 type ReferralRow = {
   id: string;
   referrer_id: string;
@@ -125,15 +146,20 @@ type ReferralRow = {
   referee_email: string;
 };
 
+// Identifiers of the admin sections; the `section` state selects which renderer is shown.
 type SectionKey =
   | "overview" | "users" | "agents" | "numbers"
   | "payments" | "promotions" | "referrals" | "revenue" | "agent-report" | "user-report";
 
+// Sidebar model: a NavLeaf selects a section directly; a NavGroup is a collapsible parent
+// whose children are NavLeafs.
 type NavLeaf = { key: SectionKey; label: string; icon: typeof Users };
 type NavGroup = { group: string; icon: typeof Users; children: NavLeaf[] };
 type NavEntry = NavLeaf | NavGroup;
+/** Type guard that tells a collapsible group apart from a plain leaf entry. */
 const isNavGroup = (e: NavEntry): e is NavGroup => "children" in e;
 
+/** Navigation tree rendered by both the desktop sidebar and the mobile section dropdown. */
 const NAV: NavEntry[] = [
   { key: "overview",     label: "Overview",       icon: LayoutDashboard },
   { key: "users",        label: "Users",          icon: Users },
@@ -151,6 +177,7 @@ const NAV: NavEntry[] = [
   { key: "referrals",    label: "Referrals",      icon: Share2 },
 ];
 
+/** Overview KPI tile: an icon, a large numeric value and a caption. Purely presentational. */
 function StatCard({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Users }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -169,20 +196,44 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: number; 
 
 // Admin dashboard — sidebar sections (users/agents/numbers/payments + reports).
 
+/**
+ * Admin portal root component. Shows a login form until an admin token is present, then the
+ * sidebar layout with one section at a time.
+ *
+ * API: api.adminLogin (POST /admin/login); on login it loads api.getAdminStats and
+ * api.getAdminUsers, and each other section's endpoint is fetched lazily the first time that
+ * section is opened. Mutations (add user, enable/disable, balance, rate/billing, delete,
+ * impersonate, promo settings/codes) call the matching api.*Admin* helpers and then refetch.
+ *
+ * Structure: every hook is declared before the login-gate early return (Rules of Hooks). The
+ * render* functions and small helper components at the bottom of the body are hoisted
+ * function declarations that close over this component's state, so they are only called from
+ * the JSX of the authenticated layout.
+ */
 const Admin = () => {
+  // The admin token is kept in sessionStorage, so it is per-tab and gone when the tab closes.
   const [authenticated, setAuthenticated] = useState(() => !!sessionStorage.getItem(ADMIN_TOKEN_KEY));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
 
+  // Active sidebar section (state only, no router involvement) and which sidebar groups
+  // are expanded, keyed by group name.
   const [section, setSection] = useState<SectionKey>("overview");
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  // True until the first stats + users fetch finishes (or the session turns out expired).
   const [loading, setLoading] = useState(true);
+  // Id of the user whose detail row is expanded in the Users table.
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  // Dollar amount in the "Add" balance box; a single value is enough because only one
+  // user row is expanded at a time.
   const [balanceAmount, setBalanceAmount] = useState(10);
+  // Id of the user whose custom-rate form is open, plus that form's draft values. The
+  // initial values mirror the backend defaults (0.35 $/min, 3.0 multiplier) and are
+  // replaced with the user's actual values when the editor is opened.
   const [editingRate, setEditingRate] = useState<string | null>(null);
   const [rateForm, setRateForm] = useState({ rate_per_minute: 0.35, cost_multiplier: 3.0, total_charges: 0 });
 
@@ -194,11 +245,15 @@ const Admin = () => {
   const [pendingDeleteUser, setPendingDeleteUser] = useState<{ id: string; label: string } | null>(null);
   const [addUserSaving, setAddUserSaving] = useState(false);
 
+  // Per-section data, each paired with a *Loaded flag. The lazy-load effect below fetches a
+  // section only while its flag is false, and the flag is set even when the request fails,
+  // so a failed fetch leaves an empty table instead of retrying in a loop.
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
 
   const [phoneNumbers, setPhoneNumbers] = useState<AdminPhoneNumber[]>([]);
   const [phoneNumbersLoaded, setPhoneNumbersLoaded] = useState(false);
+  // Owner key (email, falling back to name) whose "numbers owned" dialog is open.
   const [numbersModalOwner, setNumbersModalOwner] = useState<string | null>(null);
 
   const [payments, setPayments] = useState<PaymentsData | null>(null);
@@ -209,11 +264,15 @@ const Admin = () => {
   const [revenueLoaded, setRevenueLoaded] = useState(false);
   const [agentReportLoaded, setAgentReportLoaded] = useState(false);
   const [userReportLoaded, setUserReportLoaded] = useState(false);
+  // Promotions section: promoSettings is the platform_settings row from GET /admin/settings
+  // (the welcome-promo form edits it in place), promoKpis comes from GET /admin/promo-kpis.
   const [promoSettings, setPromoSettings] = useState<any>(null);
   const [promoKpis, setPromoKpis] = useState<any>(null);
   const [promoLoaded, setPromoLoaded] = useState(false);
   const [promoSaving, setPromoSaving] = useState(false);
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
+  // Draft of the "create promo code" form. expiry_days and max_redemptions are kept as
+  // strings so an empty input means "none" (sent as null by createCode).
   const [newCode, setNewCode] = useState({ code: "", amount: 20, expiry_days: "", max_redemptions: "" });
   const [creatingCode, setCreatingCode] = useState(false);
   const [referrals, setReferrals] = useState<ReferralRow[]>([]);
@@ -267,6 +326,11 @@ const Admin = () => {
   const [userReportPage, setUserReportPage] = useState(1);
   const [userReportPageSize, setUserReportPageSize] = useState(10);
 
+  /**
+   * Login form submit: exchanges username/password for an admin token via POST /admin/login,
+   * stores it in sessionStorage (where api.ts reads it for X-Admin-Auth) and switches to the
+   * authenticated layout. On failure it shows the server's message in the form.
+   */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const { data, error } = await api.adminLogin(username, password);
@@ -279,6 +343,7 @@ const Admin = () => {
     setLoginError("");
   };
 
+  /** Client-side logout: discards the stored token. No server call is made, so the signed token is not revoked. */
   const handleLogout = () => {
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     setAuthenticated(false);
@@ -286,9 +351,15 @@ const Admin = () => {
 
   // The admin session token (from /admin/login) is short-lived. If it has expired,
   // force a re-login instead of showing an empty dashboard.
+  /**
+   * True when an API error message looks like an admin-auth failure. The pattern matches the
+   * backend's get_admin_user rejections ("Admin login required", "Invalid or expired admin
+   * session", "Not an admin session") and generic 401/unauthorized text.
+   */
   const isAuthError = (err: string | null | undefined) =>
     !!err && /admin (login|session)|expired|not an admin|401|unauthor/i.test(err);
 
+  /** Drops the stale token, returns to the login form, ends the loading spinner and tells the admin why. */
   const forceReLogin = () => {
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     setAuthenticated(false);
@@ -296,6 +367,12 @@ const Admin = () => {
     toast.error("Admin session expired. Please log in again.");
   };
 
+  /**
+   * Loads the headline stats and the full user list in parallel (used by the Overview and
+   * Users sections). Runs on login and again after every user mutation to refresh the list.
+   * Only the stats response is checked for an auth failure (both calls share one token);
+   * a failed users fetch leaves the previous list in place.
+   */
   const fetchData = async () => {
     const [statsRes, usersRes] = await Promise.all([
       api.getAdminStats(),
@@ -312,6 +389,10 @@ const Admin = () => {
   }, [authenticated]);
 
   // Lazily load data the first time each section is opened.
+  // The effect also depends on the *Loaded flags, so it re-runs whenever one flips; the
+  // `!xLoaded` guards are what prevent refetching. The Overview shares the revenue and user
+  // report state with the Revenue Report and User Report sections, so data fetched there is
+  // reused later (the Overview itself does not display the revenue data it fetches).
   useEffect(() => {
     if (!authenticated) return; // don't fire admin calls until logged in (avoids 401 + stuck "loaded" flags)
     if (section === "overview") {
@@ -360,6 +441,8 @@ const Admin = () => {
     }
   }, [authenticated, section, agentsLoaded, phoneNumbersLoaded, paymentsLoaded, revenueLoaded, agentReportLoaded, userReportLoaded, promoLoaded, referralsLoaded]);
 
+  // Users table: each column key is handled by userText, which supplies the plain-text value
+  // used for filtering, sorting and matching.
   const USER_COLUMNS: { key: string; label: string }[] = [
     { key: "user", label: "User" },
     { key: "status", label: "Status" },
@@ -368,6 +451,11 @@ const Admin = () => {
     { key: "numbers", label: "Numbers" },
     { key: "calls", label: "Calls" },
   ];
+  /**
+   * Text value of one user/column cell for filtering and sorting. The status column reports
+   * "Disabled" for deactivated accounts (otherwise the billing status), and the rate falls
+   * back to 0.35, the backend's default per-minute rate.
+   */
   const userText = (u: AdminUser, key: string): string => {
     if (key === "user") return `${u.full_name || ""} ${u.email} ${u.company_name || ""}`;
     if (key === "status") return u.is_active ? u.status : "Disabled";
@@ -377,6 +465,9 @@ const Admin = () => {
     if (key === "calls") return String(u.total_conversations);
     return "";
   };
+  // Client-side filter -> sort -> paginate pipeline over the full user list. All column
+  // filters are ANDed: status is an exact match on the dropdown value, every other column
+  // is a case-insensitive substring match.
   const filteredUnsorted = users.filter((u) => USER_COLUMNS.every(({ key }) => {
     if (key === "status") {
       const v = userFilters.status;
@@ -385,6 +476,8 @@ const Admin = () => {
     const q = (userFilters[key] || "").trim().toLowerCase();
     return !q || userText(u, key).toLowerCase().includes(q);
   }));
+  // Sorts a copy (never the state array). Numeric columns compare as numbers, the rest as
+  // lower-cased text.
   const filteredSorted = !userSort.key ? filteredUnsorted : [...filteredUnsorted].sort((a, b) => {
     const numeric = ["balance", "rate", "numbers", "calls"].includes(userSort.key!);
     let cmp: number;
@@ -392,11 +485,20 @@ const Admin = () => {
     else cmp = userText(a, userSort.key!).toLowerCase().localeCompare(userText(b, userSort.key!).toLowerCase());
     return userSort.dir === "asc" ? cmp : -cmp;
   });
+  // The current page is clamped so it stays valid when filtering shrinks the result set.
+  // `filtered` is just the visible page slice (filteredSorted holds every match).
   const userTotalPages = Math.max(1, Math.ceil(filteredSorted.length / userPageSize));
   const userCurPage = Math.min(userPage, userTotalPages);
   const filtered = filteredSorted.slice((userCurPage - 1) * userPageSize, userCurPage * userPageSize);
+  // Header click cycles the sort for a column: ascending -> descending -> unsorted. Clicking
+  // a different column starts again at ascending.
   const toggleUserSort = (key: string) => setUserSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
 
+  /**
+   * "Create Account" in the Add User dialog: validates email/password client-side, then
+   * POST /admin/users. The backend creates an already-verified account (no email step) and
+   * grants the welcome credit. On success it closes/resets the dialog and refreshes the list.
+   */
   const handleAddUser = async () => {
     if (!addUserForm.email.trim() || !addUserForm.password.trim()) {
       return toast.error("Email and password are required");
@@ -418,6 +520,7 @@ const Admin = () => {
     fetchData();
   };
 
+  /** Flips the user's access via POST /admin/users/{id}/toggle-access (billing.is_active), then refreshes the list. */
   const handleToggleAccess = async (userId: string) => {
     const { error } = await api.toggleAccess(userId);
     if (error) return toast.error(error);
@@ -425,12 +528,18 @@ const Admin = () => {
     fetchData();
   };
 
+  /** Confirm action of the "Disable this account?" dialog; reuses the toggle call, then closes the dialog. */
   const confirmDisable = async () => {
     if (!pendingDisable) return;
     await handleToggleAccess(pendingDisable.id);
     setPendingDisable(null);
   };
 
+  /**
+   * Credits `balanceAmount` dollars to the user's wallet via POST /admin/users/{id}/balance
+   * (recorded in the wallet ledger as "Admin credit"; real, spendable balance). Toasts the
+   * resulting balance and refreshes the list.
+   */
   const handleAddBalance = async (userId: string) => {
     if (!balanceAmount) return toast.error("Enter an amount");
     const { data, error } = await api.adjustUserBalance(userId, balanceAmount, "Admin credit");
@@ -439,6 +548,11 @@ const Admin = () => {
     fetchData();
   };
 
+  /**
+   * Saves the custom-rate form (rate per minute, cost multiplier, total charges) through
+   * PATCH /admin/users/{id}, which writes straight to the user's billing row. This is the
+   * negotiated per-account pricing override; total_charges is the running charge counter.
+   */
   const handleSaveRate = async (userId: string) => {
     const { error } = await api.updateAdminUser(userId, rateForm);
     if (error) return toast.error(error);
@@ -447,6 +561,7 @@ const Admin = () => {
     fetchData();
   };
 
+  /** Generic partial billing update (PATCH /admin/users/{id}); used by the per-user status dropdown. */
   const handleUpdateBilling = async (userId: string, updates: Record<string, unknown>) => {
     const { error } = await api.updateAdminUser(userId, updates);
     if (error) return toast.error(error);
@@ -454,6 +569,10 @@ const Admin = () => {
     fetchData();
   };
 
+  /**
+   * "View as user": asks POST /admin/users/{id}/impersonate for a short-lived login token for
+   * that user and opens their dashboard in a new tab (same tab if the popup is blocked).
+   */
   const handleImpersonate = async (userId: string, email: string) => {
     // Open the blank tab synchronously (inside the click) so the popup blocker
     // doesn't kill it after the await. The admin portal and the dashboard are
@@ -474,10 +593,16 @@ const Admin = () => {
     }
   };
 
+  /** Only opens the "Permanently delete" confirmation dialog; nothing is deleted until confirmDeleteUser runs. */
   const handleDeleteUser = (userId: string, label: string) => {
     setPendingDeleteUser({ id: userId, label });
   };
 
+  /**
+   * Confirm action of the delete dialog: DELETE /admin/users/{id}. The backend removes the
+   * user's VAPI resources (best effort) and the account, which cascades to all their data.
+   * Collapses the expanded row and refreshes the list on success.
+   */
   const confirmDeleteUser = async () => {
     if (!pendingDeleteUser) return;
     const { error } = await api.deleteAdminUser(pendingDeleteUser.id);
@@ -517,6 +642,8 @@ const Admin = () => {
     );
   }
 
+  // Authenticated layout: desktop sidebar (lg and up), a mobile top bar with a section
+  // dropdown (below lg), a desktop top bar with the theme toggle, and the active section.
   return (
     <div className="flex min-h-screen bg-background">
       {/* Sidebar */}
@@ -646,7 +773,12 @@ const Admin = () => {
   );
 
   // ── Section renderers ──
+  // Everything below sits after the returns above. Function declarations are hoisted, so the
+  // JSX can call them, and they read this component's state through closure. Because the
+  // small components (SectionHeader, ReportLoading, MiniStat) are declared inside Admin,
+  // their identity changes on every render.
 
+  /** Page title and subtitle shown at the top of a section. */
   function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
     return (
       <div className="mb-6">
@@ -656,8 +788,10 @@ const Admin = () => {
     );
   }
 
+  /** Formats a dollar amount with two decimals; null/undefined renders as $0.00. */
   function money(n: number) { return `$${(n ?? 0).toFixed(2)}`; }
 
+  /** Centered spinner shown while a section's data is still loading. */
   function ReportLoading() {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -666,6 +800,7 @@ const Admin = () => {
     );
   }
 
+  /** Compact metric tile (value above caption) used by the payments, promotions, referrals and report sections. */
   function MiniStat({ label, value }: { label: string; value: string | number }) {
     return (
       <div className="rounded-xl border border-border bg-card p-5">
@@ -675,6 +810,11 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Payments section (data from GET /admin/payments, loaded lazily): total charges, a
+   * per-user charges/balance table and a table of the most recent billed calls. Each table
+   * has its own text/select filters, sort and pagination state held at the top of Admin.
+   */
   function renderPayments() {
     const PAY_USER_COLUMNS: { key: string; label: string }[] = [
       { key: "user", label: "User" }, { key: "status", label: "Status" },
@@ -685,10 +825,13 @@ const Admin = () => {
       if (key === "total_charges" || key === "balance") return String(u[key] ?? 0);
       return u[key] || "";
     };
+    // "contact" is a virtual column: the contact name, falling back to the phone number.
     const CALL_COLUMNS: { key: string; label: string }[] = [
       { key: "email", label: "User" }, { key: "contact", label: "Contact" }, { key: "direction", label: "Direction" },
       { key: "duration", label: "Duration" }, { key: "call_cost", label: "Cost" }, { key: "call_time", label: "Time" },
     ];
+    // Text used for filtering and sorting a call cell; the time is the localized string
+    // shown in the table.
     const callText = (c: PaymentsCallRow, key: string): string => {
       if (key === "contact") return c.contact_name || c.phone || "";
       if (key === "call_time") return c.call_time ? new Date(c.call_time).toLocaleString() : "";
@@ -696,6 +839,9 @@ const Admin = () => {
       return c[key] || "";
     };
 
+    // Derived table rows are computed only once the payments data has arrived; these empty
+    // defaults keep the JSX below valid before that. The select-filter options are the
+    // distinct status / direction values present in the data.
     let payUserRows: PaymentsUserRow[] = [];
     let payCallRows: PaymentsCallRow[] = [];
     let payUserTotalPages = 1, payUserCurPage = 1, payCallTotalPages = 1, payCallCurPage = 1;
@@ -725,6 +871,8 @@ const Admin = () => {
         const q = (payCallFilters[key] || "").trim().toLowerCase();
         return !q || callText(c, key).toLowerCase().includes(q);
       }));
+      // Unlike the user tables, every call column (including cost and time) is compared as
+      // lower-cased text; there is no numeric or date comparison here.
       const sortedCalls = !payCallSort.key ? filteredCalls : [...filteredCalls].sort((a, b) => {
         const cmp = callText(a, payCallSort.key!).toLowerCase().localeCompare(callText(b, payCallSort.key!).toLowerCase());
         return payCallSort.dir === "asc" ? cmp : -cmp;
@@ -830,9 +978,20 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Promotions section, loaded lazily from GET /admin/settings, /admin/promo-kpis and
+   * /admin/promo-codes. It has three parts: free-credit KPI tiles, the "Welcome promo"
+   * settings form (credit given to new signups), and the redeemable promo codes (a create
+   * form plus a sortable/filterable table). The codes table is built inside an inline
+   * function in the JSX so its sort/filter/page locals stay scoped to it. The create,
+   * enable/disable and delete handlers are the createCode/toggleCode/deleteCode functions below.
+   */
   function renderPromotions() {
+    // Empty-object fallbacks let the form and KPI tiles render before the data arrives.
     const s = promoSettings || {};
     const k = promoKpis || {};
+    // The number inputs write their raw string value into promoSettings while typing, so
+    // this coerces them back to numbers. On success the server's saved row replaces local state.
     const save = async () => {
       setPromoSaving(true);
       const { data, error } = await api.updateAdminSettings({
@@ -1030,11 +1189,18 @@ const Admin = () => {
     );
   }
 
+  /** Re-fetches only the promo code list (GET /admin/promo-codes) after a create, toggle or delete. */
   async function refreshPromoCodes() {
     const { data } = await api.getAdminPromoCodes();
     if (Array.isArray(data)) setPromoCodes(data);
   }
 
+  /**
+   * Creates a promo code via POST /admin/promo-codes. The code is upper-cased and the credit
+   * must be positive; blank expiry/max-redemption inputs are sent as null (credit never
+   * expires / unlimited redemptions). The backend also rejects codes shorter than 3
+   * characters and duplicates, and that error is shown as a toast.
+   */
   async function createCode() {
     const code = newCode.code.trim().toUpperCase();
     if (!code) return toast.error("Enter a code");
@@ -1053,12 +1219,17 @@ const Admin = () => {
     refreshPromoCodes();
   }
 
+  /** Enables or disables a promo code (PATCH /admin/promo-codes/{id} with the inverted `active` flag). */
   async function toggleCode(c: PromoCode) {
     const { error } = await api.updateAdminPromoCode(c.id, { active: !c.active });
     if (error) return toast.error(String(error));
     refreshPromoCodes();
   }
 
+  /**
+   * Deletes a promo code after a native confirm() prompt (DELETE /admin/promo-codes/{id}).
+   * Credit already granted to users is not clawed back.
+   */
   async function deleteCode(c: PromoCode) {
     if (!confirm(`Delete code ${c.code}? Credit already granted to users is not affected.`)) return;
     const { error } = await api.deleteAdminPromoCode(c.id);
@@ -1067,6 +1238,13 @@ const Admin = () => {
     refreshPromoCodes();
   }
 
+  /**
+   * Referrals section (GET /admin/referrals, loaded lazily): total/verified/pending counts
+   * and a table of every referral. Tracking only, no credit is granted. Any status other than
+   * "verified" is displayed as "Pending"; the status filter and sort use those display labels,
+   * and sorting is text-based for every column. The table is built in an inline function in
+   * the JSX so its sort/filter/page locals stay scoped to it.
+   */
   function renderReferrals() {
     const verifiedCount = referrals.filter((r) => r.status === "verified").length;
     return (
@@ -1153,6 +1331,12 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Revenue Report section (GET /admin/revenue, loaded lazily): two totals and a 30-day line
+   * chart of daily usage revenue. "Usage Revenue" sums per-call charges, while "Lifetime
+   * Charges" sums the billing rows' running total_charges counters, which also include
+   * one-off charges (e.g. phone-number fees) and manual admin edits, so the two can differ.
+   */
   function renderRevenue() {
     return (
       <div>
@@ -1183,6 +1367,11 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Agent Report section (GET /admin/agents-report, loaded lazily): per-agent total, completed
+   * and qualified call counts across all users, with text filters, sorting (the three count
+   * columns sort numerically) and pagination.
+   */
   function renderAgentReport() {
     const AR_COLUMNS: { key: string; label: string }[] = [
       { key: "name", label: "Agent" }, { key: "owner_email", label: "Owner" }, { key: "total_calls", label: "Total Calls" },
@@ -1246,6 +1435,13 @@ const Admin = () => {
     );
   }
 
+  /**
+   * User Report section (GET /admin/users-report, loaded lazily): total/active/disabled user
+   * tiles, a 30-day sign-up line chart and a "top users by activity" table (the backend caps
+   * it to the 20 users with the most conversations). The table is built in an inline function
+   * in the JSX so its sort/filter/page locals stay scoped to it; the user column filters on
+   * name and email together.
+   */
   function renderUserReport() {
     return (
       <div>
@@ -1334,6 +1530,12 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Overview section: stat cards for users, conversations and agents (GET /admin/stats) plus
+   * phone numbers, a lifetime-charges tile and the 30-day sign-up chart (from the lazily
+   * loaded user report). The phone-number and lifetime-charge totals are summed client-side
+   * from the already-loaded users list rather than coming from the stats endpoint.
+   */
   function renderOverview() {
     const totalNumbers = users.reduce((s, u) => s + (u.phone_numbers || 0), 0);
     const totalCharges = users.reduce((s, u) => s + (u.total_charges || 0), 0);
@@ -1384,6 +1586,12 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Agents section (GET /admin/agents, loaded lazily): every AI agent across all users with
+   * its owner, industry, voice, status, whether it is synced to VAPI and creation date.
+   * Industry, status and sync state use select filters (industry options come from the data);
+   * the other columns use text filters. Sorting compares the displayed text for every column.
+   */
   function renderAgents() {
     const AGENT_COLUMNS: { key: string; label: string }[] = [
       { key: "name", label: "Agent" },
@@ -1488,8 +1696,18 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Numbers section (GET /admin/phone-numbers, loaded lazily): one row per owner showing how
+   * many numbers they hold, their total monthly fee and the soonest renewal date. Clicking a
+   * row opens a dialog listing that owner's individual numbers (provider, status, purchase
+   * date, expiry, monthly fee). Rows are grouped client-side from the flat number list, and
+   * filters/sorts operate on the group figures rather than the raw rows.
+   */
   function renderNumbers() {
+    // Date cell formatter; a missing date renders as an em dash.
     const fmt = (d: string | null) => (d ? new Date(d).toLocaleDateString() : "—");
+    // Label and colour class for a number's days-until-renewal: negative means expired
+    // (red), 0 to 5 days is "due soon" (yellow), otherwise muted. No label when days_left is null.
     const daysMeta = (dl: number | null) => {
       const expired = dl != null && dl < 0;
       const dueSoon = dl != null && dl >= 0 && dl <= 5;
@@ -1505,6 +1723,8 @@ const Admin = () => {
       if (!groupMap.has(key)) groupMap.set(key, { owner_email: n.owner_email, owner_name: n.owner_name, numbers: [] });
       groupMap.get(key)!.numbers.push(n);
     }
+    // Per-owner aggregates. `soonest` is the number with the fewest days_left (an expired
+    // number has a negative value, so it wins), or null when none has a renewal date.
     const allGroups = Array.from(groupMap.values()).map((g) => {
       const totalMonthly = g.numbers.reduce((s, n) => s + (n.monthly_cost ?? 0), 0);
       const withDays = g.numbers.filter((n) => n.days_left != null);
@@ -1514,6 +1734,8 @@ const Admin = () => {
       return { ...g, count: g.numbers.length, totalMonthly, soonest };
     });
 
+    // Filters are case-insensitive substring matches against the text shown in each cell
+    // (e.g. "Free" for a zero fee, "3 days left", "expired"), not against the raw numbers.
     const q = (numberFilters.owner || "").trim().toLowerCase();
     const countQ = (numberFilters.count || "").trim().toLowerCase();
     const totalMonthlyQ = (numberFilters.totalMonthly || "").trim().toLowerCase();
@@ -1532,6 +1754,8 @@ const Admin = () => {
       }
       return true;
     });
+    // Owners with no renewal date sort as Infinity, i.e. last when ascending. Any other
+    // sort key falls through to sorting by owner name (email if there is no name).
     const sortKey = numberSort.key;
     const sorted = !sortKey ? filtered : [...filtered].sort((a, b) => {
       let cmp = 0;
@@ -1546,6 +1770,7 @@ const Admin = () => {
     const groups = sorted.slice((page - 1) * numberPageSize, page * numberPageSize);
     const toggleSort = (key: string) => setNumberSort((s) => s.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : { key: null, dir: "asc" });
 
+    // The owner group whose dialog is open; the dialog's `open` state is derived from this.
     const activeGroup = numbersModalOwner ? groupMap.get(numbersModalOwner) ?? null : null;
 
     return (
@@ -1667,6 +1892,14 @@ const Admin = () => {
     );
   }
 
+  /**
+   * Users section (data from the users list loaded by fetchData): a filterable, sortable,
+   * paginated table of all accounts. Clicking a row expands a detail panel with the admin
+   * actions: enable/disable access, add wallet balance, change billing status, set a custom
+   * rate, "view as user" (impersonation) and delete. Buttons inside the panel call
+   * stopPropagation so they do not collapse the row. Also hosts the Add User dialog and the
+   * two confirmation dialogs; disabling and deleting are confirmed, re-enabling is not.
+   */
   function renderUsers() {
     return (
       <div>

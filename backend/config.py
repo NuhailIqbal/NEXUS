@@ -1,3 +1,12 @@
+"""
+Backend configuration.
+
+Defines `Settings` (pydantic-settings), populated from real environment variables and an
+optional `.env` file, and the module-level `settings` singleton imported by nearly every
+other backend module. Importing this module also logs the system-SMTP status and, when
+ENVIRONMENT=production, logs warnings for missing or insecure configuration (it never
+raises). No database or network access happens here.
+"""
 import logging
 from pathlib import Path
 from pydantic import model_validator
@@ -11,10 +20,21 @@ _ENV_CANDIDATES = [
     _HERE / ".env",
     _HERE.parent / ".env",
 ]
+# First candidate that exists wins. If none exists, _ENV_FILE is None and settings come
+# only from the process environment (the normal case in containers).
 _ENV_FILE = next((str(p) for p in _ENV_CANDIDATES if p.exists()), None)
 
 
 class Settings(BaseSettings):
+    """Typed backend configuration.
+
+    Each field is read from the environment variable of the same name (case-insensitive),
+    falling back to the default declared here. Unknown variables are ignored
+    (`extra="ignore"`), so frontend-only VITE_* entries in a shared .env do not break
+    startup. The Supabase fields are legacy and kept only for the transition to plain
+    PostgreSQL + own JWT auth.
+    """
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",
@@ -40,10 +60,16 @@ class Settings(BaseSettings):
 
     @property
     def google_calendar_configured(self) -> bool:
+        """True when both the Google OAuth client id and secret are set (calendar connect is disabled otherwise)."""
         return bool(self.google_client_id and self.google_client_secret)
 
     @property
     def active_google_redirect_uri(self) -> str:
+        """OAuth redirect URI sent to Google: GOOGLE_REDIRECT_URI if set, else `<PUBLIC_API_URL>/calendar/google/callback`.
+
+        PUBLIC_API_URL falls back to http://localhost:8000 when empty. The result must
+        exactly match an authorized redirect URI on the Google OAuth client.
+        """
         if self.google_redirect_uri:
             return self.google_redirect_uri
         base = (self.public_api_url or "http://localhost:8000").rstrip("/")
@@ -87,6 +113,7 @@ class Settings(BaseSettings):
 
     @property
     def active_stripe_publishable_key(self) -> str:
+        """Stripe publishable key served to the frontend (GET /billing/config); prefers STRIPE_PUBLISHABLE_KEY over the legacy VITE_ name."""
         return self.stripe_publishable_key or self.vite_stripe_public_key
 
     # reCAPTCHA v2 ("I'm not a robot" checkbox) on the sign-up page — cuts down on bot/
@@ -150,6 +177,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _normalize_smtp_from(self) -> "Settings":
+        """Post-validation hook: when SMTP credentials are set and the From address is empty or still the built-in default, use the SMTP username as the From address."""
         # Gmail rejects a From address that doesn't match the authenticated account.
         if self.system_smtp_username and (
             not self.system_email_from or self.system_email_from == "noreply@edmnexus.ai"
@@ -159,10 +187,15 @@ class Settings(BaseSettings):
 
     @property
     def system_smtp_configured(self) -> bool:
+        """True when both an SMTP username and password are set; otherwise verification links are returned/logged instead of emailed."""
         return bool(self.system_smtp_username and self.system_smtp_password)
 
     @property
     def admin_email_list(self) -> list[str]:
+        """ADMIN_EMAILS split on commas into lower-cased, trimmed addresses (blank entries dropped).
+
+        Currently unused: admin access is granted via verify_admin_login and the admin JWT, not by email.
+        """
         return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     def verify_admin_login(self, username: str, password: str) -> bool:
@@ -176,16 +209,21 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins(self) -> list[str]:
+        """CORS_ORIGINS split on commas into trimmed origins; passed to CORSMiddleware in main.py."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def is_production(self) -> bool:
+        """True when ENVIRONMENT is "production" (case-insensitive); gates the startup warnings at the bottom of this module."""
         return self.environment.lower() == "production"
 
 
+# Process-wide singleton, imported as `from config import settings`. It is built once at
+# import time, so changes to the environment or .env only take effect after a restart.
 settings = Settings()
 
 _log = logging.getLogger(__name__)
+# Report at import time whether system emails (signup/verification) can actually be sent.
 if settings.system_smtp_configured:
     _log.info(
         "System SMTP ready (%s via %s:%s)",
@@ -204,8 +242,12 @@ if settings.is_production:
         _log.warning("VAPI_WEBHOOK_SECRET not set — VAPI webhook signature verification is disabled")
     if not settings.recaptcha_secret_key:
         _log.warning("RECAPTCHA_SECRET_KEY not set — sign-up is NOT protected by reCAPTCHA")
+    # The CORS_ORIGINS default is the local dev origins, so leaving it unset trips this check.
     if not settings.cors_origins or "localhost" in settings.cors_origins:
         _log.warning("CORS_ORIGINS is not set to a production domain")
+    # The password checks below compare against the built-in development default. The
+    # optional second/third accounts are empty (disabled) by default, so their warnings
+    # only fire if someone explicitly set them to that same default.
     if settings.admin_password == "test123":
         _log.warning("ADMIN_PASSWORD is still the default — set a strong ADMIN_PASSWORD in production")
     if settings.admin_password_2 == "test123":

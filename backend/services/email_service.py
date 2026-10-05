@@ -1,3 +1,16 @@
+"""Outbound email for the platform, in two independent paths.
+
+1. send_system_email: platform transactional mail (email verification in routers/auth.py,
+   team invites in routers/team.py), sent over the platform's own SMTP account from
+   settings.system_smtp_*. Not tied to any user's integrations.
+2. send_email: mail sent on behalf of a user (the agent "send_email" tool in
+   routers/agent_tool_callbacks.py and the email node in services/automation_engine.py),
+   using that user's Active email row in the `integrations` table (Brevo, SendGrid or SMTP).
+   Credentials are stored encrypted in integrations.config_encrypted.
+
+Failures are raised, mostly as ValueError with a readable message (low-level httpx errors from
+the Brevo/SendGrid HTTP calls are not wrapped); callers decide how to surface them.
+"""
 import asyncio
 import smtplib
 import httpx
@@ -13,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def _send_sync(msg: MIMEMultipart, to: str) -> None:
+    """Blocking SMTP delivery of an already-built message through the platform's SMTP
+    account (STARTTLS, then login). Run in a worker thread by send_system_email. The `to`
+    argument is not used; the recipient comes from msg["To"]."""
     with smtplib.SMTP(settings.system_smtp_host, settings.system_smtp_port, timeout=15) as server:
         server.starttls()
         server.login(settings.system_smtp_username, settings.system_smtp_password)
@@ -25,6 +41,8 @@ async def send_system_email(to: str, subject: str, html: str, text: str = "") ->
     (dev fallback) if no SMTP credentials are configured (caller should surface the link)."""
     if not to or "@" not in to:
         raise ValueError(f"Invalid email address: '{to}'")
+    # Without platform SMTP credentials nothing is sent and no error is raised; the False
+    # return lets callers (e.g. email verification) fall back to showing the link directly.
     if not settings.system_smtp_configured:
         logger.warning("system SMTP credentials not set — email to %s NOT sent (dev fallback).", to)
         return False
@@ -33,10 +51,13 @@ async def send_system_email(to: str, subject: str, html: str, text: str = "") ->
     msg["From"] = f"{settings.system_email_from_name} <{settings.system_email_from}>"
     msg["To"] = to
     msg["Subject"] = subject
+    # Plain-text part first and HTML last: in multipart/alternative, clients show the last
+    # part they support. The plain part falls back to a space so it is never empty.
     msg.attach(MIMEText(text or " ", "plain"))
     msg.attach(MIMEText(html, "html"))
 
     try:
+        # smtplib is blocking, so it runs in a thread to keep the event loop free.
         await asyncio.to_thread(_send_sync, msg, to)
     except (smtplib.SMTPException, OSError) as e:
         raise ValueError(f"SMTP send to {to} failed: {e}") from e
@@ -46,6 +67,13 @@ async def send_system_email(to: str, subject: str, html: str, text: str = "") ->
 
 
 async def _get_email_config(user_id: str, integration_id: str | None = None) -> dict | None:
+    """Load and decrypt the user's email integration config from the `integrations` table.
+
+    Considers only rows owned by `user_id` with category "email" and status "Active"; if
+    `integration_id` is given, only that row. Returns the first row whose config decrypts and
+    has an `apiKey` (Brevo/SendGrid) or `host` (SMTP), with the row's name added under
+    "_integration_name" (used to detect the provider). Returns None if nothing usable is found.
+    """
     query = (
         supabase.table("integrations")
         .select("id, config_encrypted, name")
@@ -66,11 +94,16 @@ async def _get_email_config(user_id: str, integration_id: str | None = None) -> 
                     config["_integration_name"] = row.get("name", "")
                     return config
             except Exception:
+                # Skip a row whose config cannot be decrypted (e.g. encrypted under a
+                # different key) and try the next one.
                 continue
     return None
 
 
 async def _send_via_brevo(config: dict, to: str, subject: str, body: str) -> None:
+    """Send a plain-text email through Brevo's transactional API (POST /v3/smtp/email).
+    Uses config["apiKey"] and config["fromEmail"] (default sender address if unset).
+    Raises ValueError if Brevo responds with a non-2xx status."""
     api_key = config["apiKey"]
     from_email = config.get("fromEmail") or "noreply@edmnexus.ai"
 
@@ -91,6 +124,9 @@ async def _send_via_brevo(config: dict, to: str, subject: str, body: str) -> Non
 
 
 async def _send_via_sendgrid(config: dict, to: str, subject: str, body: str) -> None:
+    """Send a plain-text email through SendGrid's v3 Mail Send API.
+    Uses config["apiKey"] and config["fromEmail"] (default sender address if unset).
+    Raises ValueError if SendGrid responds with a non-2xx status."""
     api_key = config["apiKey"]
     from_email = config.get("fromEmail") or "noreply@edmnexus.ai"
 
@@ -102,6 +138,7 @@ async def _send_via_sendgrid(config: dict, to: str, subject: str, body: str) -> 
                 "personalizations": [{"to": [{"email": to}]}],
                 "from": {"email": from_email, "name": "EDM Nexus"},
                 "subject": subject,
+                # A single space stands in for an empty body so the content value is never empty.
                 "content": [{"type": "text/plain", "value": body or " "}],
             },
         )
@@ -111,6 +148,8 @@ async def _send_via_sendgrid(config: dict, to: str, subject: str, body: str) -> 
 
 
 def _smtp_send_sync(host: str, port: int, username: str, password: str, from_email: str, to: str, subject: str, body: str) -> None:
+    """Blocking plain-text SMTP delivery using a user's own SMTP credentials (STARTTLS,
+    then login). Run in a worker thread by _send_via_smtp."""
     msg = MIMEMultipart("alternative")
     msg["From"] = from_email
     msg["To"] = to
@@ -123,11 +162,16 @@ def _smtp_send_sync(host: str, port: int, username: str, password: str, from_ema
 
 
 async def _send_via_smtp(config: dict, to: str, subject: str, body: str) -> None:
+    """Send a plain-text email through the user's own SMTP server, taken from config
+    (host, port, username, password, optional fromEmail). Raises ValueError if host,
+    username or password is missing, or if the SMTP send fails."""
     host = (config.get("host") or "").strip()
     username = (config.get("username") or "").strip()
     password = (config.get("password") or "").strip()
+    # With no fromEmail configured, the sender defaults to the SMTP login username.
     from_email = config.get("fromEmail") or username
     try:
+        # 587 is the standard STARTTLS submission port; used when the port is absent or not numeric.
         port = int(config.get("port") or 587)
     except (TypeError, ValueError):
         port = 587
@@ -135,6 +179,7 @@ async def _send_via_smtp(config: dict, to: str, subject: str, body: str) -> None
         raise ValueError("SMTP integration is missing host, username or password")
 
     try:
+        # smtplib is blocking, so it runs in a thread to keep the event loop free.
         await asyncio.to_thread(_smtp_send_sync, host, port, username, password, from_email, to, subject, body)
     except (smtplib.SMTPException, OSError) as e:
         raise ValueError(f"SMTP send to {to} failed: {e}") from e
@@ -142,6 +187,21 @@ async def _send_via_smtp(config: dict, to: str, subject: str, body: str) -> None
 
 
 async def send_email(user_id: str, to: str, subject: str, body: str, integration_id: str | None = None) -> bool:
+    """Send a plain-text email on behalf of a user through one of their email integrations.
+
+    Args:
+        user_id: Owner whose Active email integration is used.
+        to: Recipient address (only a basic "@" check is done).
+        subject: Subject line.
+        body: Plain-text body.
+        integration_id: Optional specific integration (the automation email node can pick
+            one). If set, only that integration is used; if it is not found or not usable
+            the call fails instead of falling back to another provider.
+
+    Returns True on success. Raises ValueError for an invalid recipient, a missing
+    integration, or a provider/SMTP failure. Callers: the agent send_email tool callback and
+    the automation engine's email node.
+    """
     if not to or "@" not in to:
         raise ValueError(f"Invalid email address: '{to}'")
 
@@ -155,6 +215,8 @@ async def send_email(user_id: str, to: str, subject: str, body: str, integration
             "Go to Integrations and add a Brevo, SendGrid or SMTP integration."
         )
 
+    # The provider comes from config["provider"] if present, otherwise from keywords in the
+    # integration's name. If it cannot be determined, Brevo is assumed (the final else below).
     match = detect_provider(config.get("_integration_name", ""), "email", config)
     label = match[0] if match else "Brevo"
 

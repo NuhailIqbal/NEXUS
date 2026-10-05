@@ -1,3 +1,8 @@
+/**
+ * Shared types, limits and helpers for call events, used by the Call Events page, the event
+ * dialog, the agent wizard step and the agent duplicate flow.
+ */
+/** Which call directions an event applies to. */
 export type CallEventScope = "both" | "inbound" | "outbound";
 
 /** A call event in the account-level library (GET /call-events). */
@@ -13,12 +18,14 @@ export type LibraryEvent = {
   agents?: { id: string; name: string }[];
 };
 
+/** Display text for each scope. */
 export const SCOPE_LABEL: Record<CallEventScope, string> = {
   both: "Inbound & outbound",
   inbound: "Inbound only",
   outbound: "Outbound only",
 };
 
+// Limits: events selectable per agent, and max lengths of the dialog's text fields.
 export const MAX_CALL_EVENTS = 20;
 export const MAX_LABEL = 60;
 export const MAX_OUTCOME = 60;

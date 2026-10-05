@@ -1,3 +1,8 @@
+/**
+ * Outbound call logs page (route telephony/outbound-logs).
+ * Uses api.getConversations, getConversationStats, getConversationRecordingUrl and
+ * getConversationTranscript, all scoped to direction=outbound.
+ */
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { PhoneOutgoing, Loader2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +21,7 @@ import { api } from "@/services/api";
 import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
 import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
 
+/** Conversation row as returned by GET /conversations (direction=outbound). */
 type CallLog = {
   id: string;
   status: string;
@@ -33,6 +39,7 @@ type CallLog = {
   direction?: string;
 };
 
+/** Maps a call status to its badge colour classes. */
 const colorFor = (s: string) =>
   s === "Completed" ? "bg-success/15 text-success" :
   s === "Failed" || s === "Unsuccessful" ? "bg-destructive/15 text-destructive" :
@@ -40,6 +47,7 @@ const colorFor = (s: string) =>
   s === "In Progress" || s === "Initiated" ? "bg-info/15 text-info" :
   "bg-muted text-muted-foreground";
 
+/** Sortable/filterable table columns. */
 type ColumnKey = "contact_name" | "agent_name" | "status" | "duration" | "call_time";
 
 const COLUMNS: { key: ColumnKey; label: string }[] = [
@@ -50,6 +58,7 @@ const COLUMNS: { key: ColumnKey; label: string }[] = [
   { key: "call_time", label: "Time" },
 ];
 
+/** Display text for a column, used for client-side sorting of the current page. */
 function textFor(c: CallLog, key: ColumnKey): string {
   if (key === "contact_name") return c.contact_name || c.phone || "Unknown";
   if (key === "duration") return c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "");
@@ -59,6 +68,10 @@ function textFor(c: CallLog, key: ColumnKey): string {
 const STATUS_OPTIONS = ["Initiated", "Ringing", "In Progress", "Completed", "Failed", "Unsuccessful"];
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Paged outbound call log table with server-side filters, aggregate stats and a
+ * details dialog (summary, recording, transcript). Silently refreshes every 30s.
+ */
 const OutboundLogs = () => {
   const [logs, setLogs] = useState<CallLog[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -69,6 +82,8 @@ const OutboundLogs = () => {
   const [playerTime, setPlayerTime] = useState(0);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const playerRef = useRef<CallAudioPlayerHandle | null>(null);
+  // Tracks which call's detail dialog is open so late async responses for a
+  // previously opened call are ignored.
   const openIdRef = useRef<string | null>(null);
 
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
@@ -79,6 +94,7 @@ const OutboundLogs = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  /** Cycles a column through ascending, descending, then unsorted. */
   const toggleSort = (key: ColumnKey) => {
     if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
     if (sortDir === "asc") { setSortDir("desc"); return; }
@@ -86,12 +102,17 @@ const OutboundLogs = () => {
   };
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
+  // Filters are sent to the server, so typing is debounced to avoid a request per keystroke.
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedFilters(filters), 400);
     return () => clearTimeout(t);
   }, [filters]);
 
+  /**
+   * Fetches the current page and the outbound stats. With silent=true (background poll)
+   * the loading spinner is not shown.
+   */
   const fetchLogs = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     const p = new URLSearchParams();
@@ -122,11 +143,14 @@ const OutboundLogs = () => {
     return () => clearInterval(t);
   }, [fetchLogs]);
 
+  // Go back to page 1 when filters or page size change.
   useEffect(() => { setPage(1); }, [debouncedFilters, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  // Clamp the page if the total shrinks (e.g. after a refresh).
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
+  // Sorting is client-side and only covers the rows of the current page.
   const visibleLogs = useMemo(() => {
     if (!sortKey) return logs;
     return [...logs].sort((a, b) => {
@@ -138,9 +162,14 @@ const OutboundLogs = () => {
     });
   }, [logs, sortKey, sortDir]);
 
+  /**
+   * Opens the detail dialog: fetches a signed recording URL when a recording exists and
+   * lazily loads the transcript/summary if the list row lacks transcript messages.
+   */
   const openDetail = async (log: CallLog) => {
     setDetail(log);
     setPlayerTime(0);
+    // Guard against responses arriving after the user opened a different call or closed the dialog.
     openIdRef.current = log.id;
     setRecordingUrl(null);
     if (log.recording_url || log.stereo_recording_url) {

@@ -1,3 +1,18 @@
+"""Async client for the VAPI REST API (https://api.vapi.ai) and the payload builders NEXUS uses with it.
+
+Two halves:
+  1. One thin function per VAPI endpoint we use (assistants, calls, tools, files, phone
+     numbers). Each opens a short-lived httpx client, authenticates with
+     settings.vapi_api_key and raises VapiAPIError on any non-2xx response. Functions
+     that do not pass a timeout get httpx's default (5 seconds).
+  2. Pure helpers that build request bodies: voice / language / transcriber resolution,
+     per-language prompt directives, and the assistant, transfer-tool and fallback-assistant
+     payloads.
+
+Used by routers (agents, telephony, tools, conversations, admin) and services (agent_tools,
+call_events, agent_events_sync, automation_engine, callback_scheduler, vapi_sync).
+This module touches no database tables; it only talks to VAPI over HTTP.
+"""
 import httpx
 from config import settings
 
@@ -5,6 +20,7 @@ BASE_URL = "https://api.vapi.ai"
 
 
 def _headers():
+    """Bearer-token and JSON content-type headers for a VAPI request (key read from settings at call time)."""
     return {
         "Authorization": f"Bearer {settings.vapi_api_key}",
         "Content-Type": "application/json",
@@ -17,6 +33,12 @@ class VapiAPIError(Exception):
 
 
 def _check(response: httpx.Response) -> None:
+    """Raise VapiAPIError for any non-2xx response.
+
+    The message is "<status> <reason> — <body>" with the body cut to its first 500
+    characters. Routers (e.g. routers/agents.py) log this text and return a generic
+    error to the client instead of passing it through.
+    """
     if 200 <= response.status_code < 300:
         return
     body = response.text[:500] if response.text else ""
@@ -24,6 +46,9 @@ def _check(response: httpx.Response) -> None:
 
 
 async def create_assistant(payload: dict) -> dict:
+    """POST /assistant: create an assistant and return VAPI's JSON (its "id" is what
+    NEXUS stores as ai_agents.vapi_assistant_id). Build the payload with
+    build_assistant_payload()."""
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(f"{BASE_URL}/assistant", headers=_headers(), json=payload)
         _check(r)
@@ -31,6 +56,9 @@ async def create_assistant(payload: dict) -> dict:
 
 
 async def update_assistant(assistant_id: str, payload: dict) -> dict:
+    """PATCH /assistant/{id}: change only the top-level keys present in `payload`.
+    Callers that touch the model send a complete "model" block (messages and toolIds
+    together), see update_agent in routers/agents.py."""
     async with httpx.AsyncClient() as client:
         r = await client.patch(f"{BASE_URL}/assistant/{assistant_id}", headers=_headers(), json=payload)
         _check(r)
@@ -38,12 +66,14 @@ async def update_assistant(assistant_id: str, payload: dict) -> dict:
 
 
 async def delete_assistant(assistant_id: str) -> None:
+    """DELETE /assistant/{id}. Returns nothing; raises VapiAPIError on failure (including an unknown id)."""
     async with httpx.AsyncClient() as client:
         r = await client.delete(f"{BASE_URL}/assistant/{assistant_id}", headers=_headers())
         _check(r)
 
 
 async def get_assistant(assistant_id: str) -> dict:
+    """GET /assistant/{id}: fetch an assistant's current configuration as VAPI stores it."""
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{BASE_URL}/assistant/{assistant_id}", headers=_headers())
         _check(r)
@@ -68,6 +98,8 @@ async def get_call(call_id: str) -> dict:
 
 
 async def create_tool(payload: dict) -> dict:
+    """POST /tool: create a standalone tool (for example a function tool or a transferCall tool).
+    Attach it to an assistant by putting the returned "id" in the assistant's model.toolIds."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{BASE_URL}/tool", headers=_headers(), json=payload)
         _check(r)
@@ -75,6 +107,8 @@ async def create_tool(payload: dict) -> dict:
 
 
 async def update_tool(tool_id: str, payload: dict) -> dict:
+    """PATCH /tool/{id}. VAPI rejects a "type" key on updates, so callers drop it from
+    the create payload first (see sync_events_tool in services/call_events.py)."""
     async with httpx.AsyncClient() as client:
         r = await client.patch(f"{BASE_URL}/tool/{tool_id}", headers=_headers(), json=payload)
         _check(r)
@@ -82,15 +116,20 @@ async def update_tool(tool_id: str, payload: dict) -> dict:
 
 
 async def delete_tool(tool_id: str) -> None:
+    """DELETE /tool/{id}. Returns nothing; raises VapiAPIError on failure."""
     async with httpx.AsyncClient() as client:
         r = await client.delete(f"{BASE_URL}/tool/{tool_id}", headers=_headers())
         _check(r)
 
 
 async def upload_file(file_bytes: bytes, filename: str) -> dict:
+    """POST /file: multipart upload of a document (agent knowledge files). Returns VAPI's
+    file object, whose "id" identifies the file in later calls."""
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{BASE_URL}/file",
+            # Authorization only, deliberately not _headers(): its JSON Content-Type
+            # would override the multipart boundary httpx generates for `files=`.
             headers={"Authorization": f"Bearer {settings.vapi_api_key}"},
             files={"file": (filename, file_bytes)},
         )
@@ -99,12 +138,16 @@ async def upload_file(file_bytes: bytes, filename: str) -> dict:
 
 
 async def delete_file(file_id: str) -> None:
+    """DELETE /file/{id}: remove a file uploaded with upload_file(). Raises VapiAPIError on failure."""
     async with httpx.AsyncClient() as client:
         r = await client.delete(f"{BASE_URL}/file/{file_id}", headers=_headers())
         _check(r)
 
 
 async def create_call(payload: dict) -> dict:
+    """POST /call: start an outbound call. The payload is assembled by the callers
+    (routers/telephony.py, services/automation_engine.py, services/callback_scheduler.py);
+    the returned JSON's "id" is the VAPI call id, which get_call() accepts."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{BASE_URL}/call", headers=_headers(), json=payload)
         _check(r)
@@ -112,6 +155,8 @@ async def create_call(payload: dict) -> dict:
 
 
 async def list_phone_numbers() -> list:
+    """GET /phone-number: every number on the VAPI account behind settings.vapi_api_key
+    (not filtered per NEXUS user)."""
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{BASE_URL}/phone-number", headers=_headers())
         _check(r)
@@ -119,6 +164,7 @@ async def list_phone_numbers() -> list:
 
 
 async def get_phone_number(phone_id: str) -> dict:
+    """GET /phone-number/{id}: one VAPI phone number (phone_id is phone_numbers.vapi_phone_id)."""
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{BASE_URL}/phone-number/{phone_id}", headers=_headers())
         _check(r)
@@ -126,6 +172,9 @@ async def get_phone_number(phone_id: str) -> dict:
 
 
 async def create_phone_number(payload: dict) -> dict:
+    """POST /phone-number: register a number with VAPI, optionally pointing it at an
+    assistant via "assistantId". The provider-specific payload ("vapi" or "twilio") is
+    built in routers/telephony.py."""
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{BASE_URL}/phone-number", headers=_headers(), json=payload)
         _check(r)
@@ -133,6 +182,8 @@ async def create_phone_number(payload: dict) -> dict:
 
 
 async def update_phone_number(phone_id: str, payload: dict) -> dict:
+    """PATCH /phone-number/{id}. Mainly used to re-route inbound calls by changing
+    "assistantId" (a real agent, the shared balance-fallback assistant, or None to detach)."""
     async with httpx.AsyncClient() as client:
         r = await client.patch(f"{BASE_URL}/phone-number/{phone_id}", headers=_headers(), json=payload)
         _check(r)
@@ -140,6 +191,7 @@ async def update_phone_number(phone_id: str, payload: dict) -> dict:
 
 
 async def delete_phone_number(phone_id: str) -> None:
+    """DELETE /phone-number/{id}: remove the number from VAPI. Raises VapiAPIError on failure."""
     async with httpx.AsyncClient() as client:
         r = await client.delete(f"{BASE_URL}/phone-number/{phone_id}", headers=_headers())
         _check(r)
@@ -159,7 +211,10 @@ _VAPI_VOICE_IDS = [
     "Elliot", "Savannah", "Rohan", "Emma", "Clara", "Nico", "Kai",
     "Sagar", "Godfrey", "Neil", "Layla", "Sid", "Naina",
 ]
+# Lower-cased name -> canonical casing. Not referenced elsewhere at the moment;
+# _VOICE_REGISTRY below is what _resolve_voice actually looks names up in.
 _VAPI_VOICE_CANONICAL = {v.lower(): v for v in _VAPI_VOICE_IDS}
+# Fallback for English agents whose voice is blank or unrecognized (see _resolve_voice).
 _DEFAULT_VAPI_VOICE = "Elliot"
 
 # ElevenLabs premade voices — used for Urdu (and any other non-English language) via
@@ -173,11 +228,13 @@ _URDU_VOICE_IDS = {
     "zara": "21m00Tcm4TlvDq8ikWAM",  # female (ElevenLabs "Rachel")
     "ali": "pNInz6obpgDQGcFmaJgB",   # male (ElevenLabs "Adam")
 }
+# Fallback for non-English agents whose voice is blank or unrecognized (see _resolve_voice).
 _DEFAULT_URDU_VOICE = _URDU_VOICE_IDS["zara"]
 
 # Every voice name the app recognizes, regardless of which language an agent is set
 # to — lets an agent's voice be picked independently from the full catalog (matching
 # the AI Voices page) rather than only from whichever short list matched its language.
+# Keys are lower-cased voice names; values are ready-to-send VAPI "voice" blocks.
 _VOICE_REGISTRY: dict[str, dict] = {
     name.lower(): {"provider": "vapi", "voiceId": name} for name in _VAPI_VOICE_IDS
 }
@@ -198,7 +255,10 @@ def _resolve_voice(voice: str | None, language: str | None = None) -> dict:
     provider key configured on the VAPI account/dashboard for the ElevenLabs voices."""
     raw = (voice or "").strip().lower()
     if raw in _VOICE_REGISTRY:
+        # Copy so a caller that edits the block cannot mutate the shared registry entry.
         return dict(_VOICE_REGISTRY[raw])
+    # Unknown voice: only English falls back to a built-in Vapi voice; every other
+    # language gets the ElevenLabs multilingual default below.
     if _resolve_language(language) in ("en", "en-US", "en-GB"):
         return {"provider": "vapi", "voiceId": _DEFAULT_VAPI_VOICE}
     return {"provider": "11labs", "voiceId": _DEFAULT_URDU_VOICE, "model": "eleven_multilingual_v2"}
@@ -224,6 +284,8 @@ def _resolve_language(language: str | None) -> str:
         "urdu (pk)": "ur",
         "multilingual": "multi",
     }
+    # Anything not in the table is passed through unchanged when it is short enough to
+    # be a language code already (e.g. "fr", "pt-BR"); longer free text falls back to "en".
     return lookup.get(raw.lower(), raw if len(raw) <= 5 else "en")
 
 
@@ -302,6 +364,9 @@ import re
 
 
 def _tool_name_slug(agent_name: str | None) -> str:
+    """Turn an agent name into a token safe to embed in a tool function name: runs of
+    non-alphanumeric characters become a single "_", ends are trimmed, and an empty
+    result (or a missing name) becomes "agent"."""
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", (agent_name or "agent").strip()).strip("_")
     return slug or "agent"
 
@@ -317,8 +382,13 @@ def build_transfer_tool_payload(agent_name: str | None, number: str) -> dict:
         "function": {"name": f"transfer_call_tool_{_tool_name_slug(agent_name)}"},
         "destinations": [{
             "type": "number",
+            # E.164 format is validated when the agent is saved (see
+            # _validate_transfer_number in routers/agents.py); only whitespace is trimmed here.
             "number": number.strip(),
+            # VAPI template variable, filled in at call time with the customer's own
+            # phone number; used as the caller ID of the transferred leg.
             "callerId": "{{customer.number}}",
+            # Spoken to the caller just before the transfer starts.
             "message": "Please hold while I connect you.",
             "description": "Transfer to this destination",
         }],
@@ -329,12 +399,15 @@ def build_fallback_assistant_payload() -> dict:
     """A minimal, shared assistant used to answer inbound calls for accounts whose
     wallet balance is empty. Plays a short message and hangs up — `maxDurationSeconds`
     ends the call reliably without depending on the model invoking an end-call tool."""
+    # Created once by routers/telephony.py (_get_or_create_fallback_assistant_id); its id
+    # is cached in platform_settings.fallback_assistant_id and shared by every account.
     return {
         "name": "NEXUS — Balance Unavailable",
         "firstMessage": (
             "We're sorry, this line is temporarily unavailable because the account "
             "balance is empty. Please contact the account owner. Goodbye."
         ),
+        # Minimal model config; the system message keeps it quiet after the firstMessage.
         "model": {
             "provider": "openai",
             "model": "gpt-4o-mini",
@@ -344,6 +417,7 @@ def build_fallback_assistant_payload() -> dict:
         },
         "transcriber": {"provider": "deepgram", "language": "en"},
         "voice": _resolve_voice(None),
+        # Hard limits so the call always ends: 15 s total, or 5 s of silence.
         "maxDurationSeconds": 15,
         "silenceTimeoutSeconds": 5,
     }
@@ -352,11 +426,27 @@ def build_fallback_assistant_payload() -> dict:
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
                              system_prompt: str = None, first_message: str = None,
                              tool_ids: list[str] | None = None) -> dict:
+    """Build the POST /assistant body for one NEXUS agent.
+
+    Args:
+        name: assistant name shown in VAPI.
+        voice: voice name from the catalog (any casing); blank/unknown falls back per language.
+        language: UI label or language code; drives the transcriber, voice fallback and
+            any language directive prepended to the prompt.
+        system_prompt: the system message; defaults to a generic "You are {name}" prompt.
+        first_message: what the assistant says first; the key is omitted when empty.
+        tool_ids: VAPI tool ids to attach through model.toolIds.
+
+    Always uses OpenAI gpt-4o-mini, a Deepgram transcriber, and call recording plus
+    transcripts. Adds the webhook "server" block only when settings.public_api_url is set.
+    """
     content = system_prompt or f"You are {name}, a helpful AI assistant."
     model: dict = {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "messages": [
+            # The language directive is applied here, to the copy sent to VAPI only;
+            # the prompt stored on the agent row never contains it.
             {"role": "system", "content": apply_language_directive(content, language)}
         ],
     }
@@ -383,6 +473,8 @@ def build_assistant_payload(name: str, voice: str = None, language: str = "en",
     if settings.public_api_url:
         base = settings.public_api_url.rstrip("/")
         server: dict = {"url": f"{base}/webhooks/vapi"}
+        # Sent only when configured; routers/webhooks.py verifies requests against the
+        # same secret (HMAC-SHA256 signature header), and skips the check when it is empty.
         if settings.vapi_webhook_secret:
             server["secret"] = settings.vapi_webhook_secret
         payload["server"] = server

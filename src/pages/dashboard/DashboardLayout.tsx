@@ -1,3 +1,9 @@
+/**
+ * Authenticated shell for every /dashboard/* route: the layout route in App.tsx, so each
+ * dashboard page renders inside its <Outlet />. Provides the sidebar navigation (NAV), the top
+ * bar (global search, theme toggle, notification bell, user menu) and the per-account banners.
+ * Uses AuthContext for the session and GET /team/me (api.getMyRole) for the role label.
+ */
 import { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
@@ -25,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+/** One sidebar entry: either a direct link (`to`) or a collapsible group (`children`). */
 type NavItem = {
   label: string;
   to?: string;
@@ -32,6 +39,7 @@ type NavItem = {
   children?: { label: string; to: string }[];
 };
 
+/** Sidebar menu definition, rendered in order by Sidebar. Group labels double as the keys of its open/closed state. */
 const NAV: NavItem[] = [
   { label: "Quick Setup", to: "/dashboard/quick-setup", icon: LayoutDashboard },
   { label: "AI Agents", to: "/dashboard/ai-agents", icon: Bot },
@@ -80,12 +88,21 @@ const NAV: NavItem[] = [
   { label: "Support", to: "/dashboard/support", icon: LifeBuoy },
 ];
 
+/**
+ * Layout route component for /dashboard. Waits for AuthContext to resolve, then redirects to
+ * /login if nobody is signed in; until then it shows a loading placeholder instead of the
+ * dashboard. Below the lg breakpoint the sidebar is an off-canvas drawer toggled by `mobileOpen`.
+ * Polls the caller's team role (GET /team/me) every 20 seconds to keep the role label current
+ * and to sign out a collaborator whose access the account owner has revoked.
+ */
 const DashboardLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
   const [roleLabel, setRoleLabel] = useState("Account Owner");
 
+  // Auth guard: `loading` must be false first, otherwise a page refresh (session still being
+  // restored) would bounce a signed-in user to /login.
   useEffect(() => {
     if (!loading && !user) {
       navigate("/login");
@@ -100,6 +117,9 @@ const DashboardLayout = () => {
   useEffect(() => {
     if (!user) return;
 
+    // Fetches the caller's role and updates the label shown in the user menu. api.* calls
+    // resolve with `data: null` on failure instead of throwing, and a failed poll is ignored so
+    // a transient network error can never trigger the removed-from-team sign-out below.
     const pollRole = () => {
       api.getMyRole().then(({ data }) => {
         if (!data) return;
@@ -113,11 +133,15 @@ const DashboardLayout = () => {
       });
     };
 
+    // Re-checked every 20s so a revoked collaborator is signed out without having to reload.
     pollRole();
     const interval = setInterval(pollRole, 20000);
     return () => clearInterval(interval);
   }, [user, signOut, navigate]);
 
+  // Render nothing but a placeholder until a user exists, so protected content never flashes
+  // for a signed-out visitor while the redirect effect above runs. All hooks stay above this
+  // early return to keep their call order stable.
   if (loading || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30">
@@ -126,6 +150,8 @@ const DashboardLayout = () => {
     );
   }
 
+  // Name shown in the sidebar and user menu: full name if set, else the email, else a generic
+  // label. The avatar shows the first letters of up to the first two words of that name.
   const displayName =
     user.user_metadata?.full_name || user.email || "User";
   const initials = displayName
@@ -137,6 +163,7 @@ const DashboardLayout = () => {
     .toUpperCase();
   const profile = { name: displayName, email: user.email ?? "", avatar: initials, role: roleLabel };
 
+  /** Signs out through AuthContext (which also clears any impersonation flag), then returns to /login. Shared by the sidebar and the user menu. */
   const handleSignOut = async () => {
     await signOut();
     toast.success("Signed out");
@@ -224,6 +251,11 @@ const DashboardLayout = () => {
 };
 
 type SidebarProfile = { name: string; email: string; avatar: string; role: string };
+/**
+ * Fixed left navigation built from NAV, with the signed-in user's card on top and Sign Out at
+ * the bottom. `mobileOpen` slides it in on small screens; every link calls `onClose` so the
+ * drawer closes after navigating. Groups open/close locally (see `openGroups`).
+ */
 function Sidebar({
   mobileOpen,
   onClose,
@@ -237,6 +269,8 @@ function Sidebar({
 }) {
   const location = useLocation();
   const path = location.pathname;
+  // Groups whose child matches the current URL start expanded. This only seeds the initial
+  // state; after mount, expansion is controlled solely by the user's clicks.
   const initialOpen = NAV.reduce<Record<string, boolean>>((acc, item) => {
     if (item.children) {
       acc[item.label] = item.children.some((c) => path.startsWith(c.to));
@@ -245,6 +279,8 @@ function Sidebar({
   }, {});
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(initialOpen);
 
+  // True on an exact match or a nested path. Matching on `to + "/"` (not a bare prefix) keeps
+  // e.g. /telephony/inbound from also lighting up for /telephony/inbound-logs.
   const isActive = (to?: string) => {
     if (!to) return false;
     return path === to || path.startsWith(to + "/");
@@ -328,6 +364,9 @@ function Sidebar({
                 </li>
               );
             }
+            // Leaf item: only group entries lack `to`, and those returned above, so `to` is set.
+            // `end` limits matching to the exact path for a link to the bare /dashboard route
+            // (no NAV entry uses that today).
             return (
               <li key={item.label}>
                 <NavLink

@@ -21,6 +21,12 @@ async def _http_test(method: str, url: str, *, headers: dict | None = None,
                      auth: tuple[str, str] | None = None,
                      params: dict | None = None,
                      timeout: float = 10.0) -> dict:
+    """Shared prober: send one HTTP request and translate the outcome into a result dict. Never raises.
+
+    Returns `{"ok", "latency_ms", "message"}`. Any 2xx is healthy; 401/403 means the credentials
+    were rejected; other statuses include the first 200 characters of the response body in the
+    message; timeouts and other network errors are reported as failures. `auth` is HTTP Basic.
+    """
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -42,9 +48,15 @@ async def _http_test(method: str, url: str, *, headers: dict | None = None,
                 "message": f"Network error: {e}"}
 
 
+# Despite the test_ prefix, the functions below are runtime connection probes (dispatched through
+# PROVIDERS / run_test), not pytest tests. Each takes the saved integration config and returns
+# {"ok", "message", optionally "latency_ms"}; run_test adds `provider` and a default `latency_ms`.
+# Several probes accept alternate spellings of a credential key (e.g. apiKey or api_key).
+
 # ── Email providers ──
 
 async def test_brevo(config: dict) -> dict:
+    """Probe Brevo (formerly Sendinblue) via GET /v3/account using the `apiKey`."""
     api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
     if not api_key:
         return {"ok": False, "message": "Missing apiKey"}
@@ -55,6 +67,7 @@ async def test_brevo(config: dict) -> dict:
 
 
 async def test_sendgrid(config: dict) -> dict:
+    """Probe SendGrid via GET /v3/user/account using the `apiKey` as a bearer token."""
     api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
     if not api_key:
         return {"ok": False, "message": "Missing apiKey"}
@@ -65,12 +78,21 @@ async def test_sendgrid(config: dict) -> dict:
 
 
 def _smtp_probe_sync(host: str, port: int, username: str, password: str) -> None:
+    """Blocking SMTP check: connect, upgrade with STARTTLS, then log in.
+
+    Raises the smtplib exception on failure. STARTTLS only: servers that need implicit TLS
+    (e.g. port 465) are not supported by this probe.
+    """
     with smtplib.SMTP(host, port, timeout=10) as server:
         server.starttls()
         server.login(username, password)
 
 
 async def test_smtp(config: dict) -> dict:
+    """Probe an SMTP server by logging in with `host`, `username`, `password` and an optional `port` (default 587).
+
+    Distinguishes a rejected login from other connection errors. Sends no email.
+    """
     host = (config.get("host") or "").strip()
     username = (config.get("username") or "").strip()
     password = (config.get("password") or "").strip()
@@ -83,6 +105,7 @@ async def test_smtp(config: dict) -> dict:
         return {"ok": False, "message": f"Missing {', '.join(missing)}"}
     started = time.perf_counter()
     try:
+        # smtplib is synchronous; run it in a worker thread so it doesn't block the event loop.
         await asyncio.to_thread(_smtp_probe_sync, host, port, username, password)
         return {"ok": True, "latency_ms": int((time.perf_counter() - started) * 1000), "message": "Connection healthy"}
     except smtplib.SMTPAuthenticationError:
@@ -93,6 +116,7 @@ async def test_smtp(config: dict) -> dict:
 
 
 async def test_mailgun(config: dict) -> dict:
+    """Probe Mailgun with HTTP Basic auth (user "api"). `region` "eu" selects the EU API host; `domain` is optional."""
     api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
     domain = (config.get("domain") or "").strip()
     region = (config.get("region") or "us").strip().lower()
@@ -107,6 +131,7 @@ async def test_mailgun(config: dict) -> dict:
 # ── Voice / SMS providers ──
 
 async def test_twilio(config: dict) -> dict:
+    """Probe Twilio by fetching the account resource, authenticating with account `sid` and auth `token`."""
     sid = (config.get("sid") or config.get("accountSid") or "").strip()
     token = (config.get("token") or config.get("authToken") or "").strip()
     if not sid or not token:
@@ -118,6 +143,7 @@ async def test_twilio(config: dict) -> dict:
 
 
 async def test_telnyx(config: dict) -> dict:
+    """Probe Telnyx by listing one phone number with the `apiKey` as a bearer token."""
     api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
     if not api_key:
         return {"ok": False, "message": "Missing apiKey"}
@@ -130,6 +156,7 @@ async def test_telnyx(config: dict) -> dict:
 
 
 async def test_vonage(config: dict) -> dict:
+    """Probe Vonage (formerly Nexmo) by reading the account balance; the key and secret go in the query string."""
     api_key = (config.get("apiKey") or config.get("api_key") or "").strip()
     api_secret = (config.get("apiSecret") or config.get("api_secret") or "").strip()
     if not api_key or not api_secret:
@@ -143,6 +170,7 @@ async def test_vonage(config: dict) -> dict:
 # ── CRM / SaaS providers ──
 
 async def test_hubspot(config: dict) -> dict:
+    """Probe HubSpot by listing one contact with the `accessToken` (or `apiKey`) as a bearer token."""
     token = (config.get("accessToken") or config.get("apiKey") or "").strip()
     if not token:
         return {"ok": False, "message": "Missing accessToken"}
@@ -153,6 +181,10 @@ async def test_hubspot(config: dict) -> dict:
 
 
 async def test_salesforce(config: dict) -> dict:
+    """Probe Salesforce by reading the REST API `limits` resource (API v59.0) at `instanceUrl` with the `accessToken`.
+
+    `instanceUrl` defaults to https://login.salesforce.com; a trailing slash is stripped.
+    """
     token = (config.get("accessToken") or "").strip()
     instance = (config.get("instanceUrl") or "https://login.salesforce.com").strip().rstrip("/")
     if not token:
@@ -164,6 +196,7 @@ async def test_salesforce(config: dict) -> dict:
 
 
 async def test_openai(config: dict) -> dict:
+    """Probe OpenAI by listing models with the `apiKey` as a bearer token."""
     api_key = (config.get("apiKey") or "").strip()
     if not api_key:
         return {"ok": False, "message": "Missing apiKey"}
@@ -174,6 +207,7 @@ async def test_openai(config: dict) -> dict:
 
 
 async def test_stripe(config: dict) -> dict:
+    """Probe Stripe by reading the account balance (read-only) with the `secretKey` as a bearer token."""
     key = (config.get("secretKey") or config.get("apiKey") or "").strip()
     if not key:
         return {"ok": False, "message": "Missing secretKey"}
@@ -184,6 +218,11 @@ async def test_stripe(config: dict) -> dict:
 
 
 async def test_slack(config: dict) -> dict:
+    """Probe a Slack incoming webhook by posting a test message.
+
+    Side effect: the message "EDM Nexus test ping" appears in the webhook's channel. Healthy only
+    on HTTP 200. Does its own request instead of `_http_test`, which can't send a JSON body.
+    """
     url = (config.get("webhookUrl") or "").strip()
     if not url:
         return {"ok": False, "message": "Missing webhookUrl"}
@@ -200,6 +239,10 @@ async def test_slack(config: dict) -> dict:
 
 
 async def test_zapier(config: dict) -> dict:
+    """Probe a Zapier webhook by POSTing a small test payload; any 2xx counts as accepted.
+
+    Side effect: the payload is delivered to the user's webhook, so it may trigger their Zap.
+    """
     url = (config.get("webhookUrl") or "").strip()
     if not url:
         return {"ok": False, "message": "Missing webhookUrl"}
@@ -216,6 +259,7 @@ async def test_zapier(config: dict) -> dict:
 
 
 async def test_gemini(config: dict) -> dict:
+    """Probe Google Gemini by listing models; the `apiKey` is sent as the `key` query parameter."""
     api_key = (config.get("apiKey") or "").strip()
     if not api_key:
         return {"ok": False, "message": "Missing apiKey"}
@@ -249,6 +293,9 @@ async def test_whitelistdata(config: dict) -> dict:
 
 # ── Provider registry & dispatcher ──
 
+# Order matters: detect_provider returns the first entry whose keyword appears in the lowercased
+# "<integration name> <category>" text. Several keywords can map to one prober (brevo/sendinblue,
+# vonage/nexmo). Add a row here to support a new provider.
 PROVIDERS = [
     # (keyword matched against integration.name, lowercased), prober, friendly label
     ("brevo",      test_brevo,      "Brevo"),
@@ -283,6 +330,12 @@ PROVIDER_KEY_MAP = {
 
 
 def detect_provider(integration_name: str, category: str = "", config: dict | None = None) -> tuple[str, callable] | None:
+    """Identify which provider an integration is; returns `(label, prober)` or None if unrecognised.
+
+    Checked in order: the `provider` marker inside `config` (PROVIDER_KEY_MAP), then a keyword
+    search over the integration's name and category (PROVIDERS). Also used by
+    services/email_service.py to pick which email provider to send through.
+    """
     provider_key = (config or {}).get("provider")
     if provider_key in PROVIDER_KEY_MAP:
         prober, label = PROVIDER_KEY_MAP[provider_key]
@@ -294,6 +347,7 @@ def detect_provider(integration_name: str, category: str = "", config: dict | No
     return None
 
 
+# Human-readable list of supported providers, shown in the "Provider not recognised" message.
 SUPPORTED_LABELS = ", ".join(sorted({label for _, _, label in PROVIDERS}))
 
 
@@ -317,5 +371,6 @@ async def run_test(integration_name: str, config: dict, category: str = "") -> d
     label, prober = match
     result = await prober(config or {})
     result["provider"] = label
+    # Probes that fail validation before any request (e.g. "Missing apiKey") have no timing; keep the response shape stable.
     result.setdefault("latency_ms", None)
     return result

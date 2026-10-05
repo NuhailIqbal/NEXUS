@@ -1,3 +1,9 @@
+/**
+ * Custom audio player for call recordings: play/pause, playback speed, download,
+ * and a decorative click-to-seek waveform with a time ruler.
+ * Exposes a `seek()` handle so the transcript can jump the audio to a turn.
+ * Used in the conversation detail dialog (pages/dashboard/Conversations.tsx).
+ */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Play, Pause, Download, Loader2, AudioLines } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -14,6 +20,7 @@ type Props = {
   className?: string;
 };
 
+/** Formats seconds as m:ss; non-finite or negative input is treated as 0. */
 const fmt = (s: number) => {
   if (!isFinite(s) || s < 0) s = 0;
   const m = Math.floor(s / 60);
@@ -24,6 +31,11 @@ const fmt = (s: number) => {
 // Deterministic, speech-like envelope so the waveform looks organic (bursts +
 // quiet gaps) and is stable for a given recording — no audio decoding needed,
 // which keeps it robust for cross-origin / authenticated recording URLs.
+/**
+ * Returns `count` bar heights (0.05-1) for the waveform, generated from a
+ * pseudo-random sequence seeded by the `src` string. The waveform is purely
+ * decorative and does not reflect the real audio amplitude.
+ */
 const useBars = (src: string | null | undefined, count = 100) =>
   useMemo(() => {
     let x = (src || "seed").split("").reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 2147483647, 7) || 1;
@@ -43,8 +55,15 @@ const useBars = (src: string | null | undefined, count = 100) =>
     return bars;
   }, [src, count]);
 
+/** Playback rates the speed button cycles through. */
 const SPEEDS = [1, 1.5, 2];
 
+/**
+ * Props: `src` (playable recording URL; a placeholder is shown when empty),
+ * `onTimeUpdate` (called with the playback position on every timeupdate).
+ * Controlled via ref (CallAudioPlayerHandle.seek). Resets all playback state when
+ * `src` changes; on load failure it shows an error with a link to open the URL.
+ */
 const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeUpdate, className }, ref) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -55,6 +74,7 @@ const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeU
   const [speedIdx, setSpeedIdx] = useState(0);
   const bars = useBars(src);
 
+  // Lets the parent (transcript click) seek and auto-play; play() failures are ignored.
   useImperativeHandle(ref, () => ({
     seek: (seconds: number) => {
       const a = audioRef.current;
@@ -65,6 +85,7 @@ const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeU
     },
   }));
 
+  // A new recording was loaded: reset UI state (the <audio> element reloads itself).
   useEffect(() => {
     setPlaying(false);
     setCurrent(0);
@@ -74,6 +95,7 @@ const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeU
     setSpeedIdx(0);
   }, [src]);
 
+  // Play/pause; a rejected play() (e.g. unsupported or blocked source) marks the player as errored.
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
@@ -81,6 +103,7 @@ const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeU
     else a.play().then(() => setPlaying(true)).catch(() => setErrored(true));
   };
 
+  // Seeks to a 0-1 fraction of the duration (waveform click); does not change play state.
   const seekToFraction = (frac: number) => {
     const a = audioRef.current;
     if (!a || !duration) return;
@@ -89,6 +112,7 @@ const CallAudioPlayer = forwardRef<CallAudioPlayerHandle, Props>(({ src, onTimeU
     setCurrent(t);
   };
 
+  // Advances to the next entry in SPEEDS (wrapping) and applies it to the audio element.
   const cycleSpeed = () => {
     const next = (speedIdx + 1) % SPEEDS.length;
     setSpeedIdx(next);

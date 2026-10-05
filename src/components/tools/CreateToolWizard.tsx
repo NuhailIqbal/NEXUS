@@ -1,3 +1,8 @@
+/**
+ * Four-step modal wizard (General Info, Parameters, Platform Settings, Review & Save) for
+ * creating or editing a custom API tool. Purely a form: it makes no API calls and hands the
+ * validated ToolWizardData to the parent's onSave. Used by src/pages/dashboard/Tools.tsx.
+ */
 import { useEffect, useState } from "react";
 import {
   Check,
@@ -60,6 +65,7 @@ export type ToolWizardData = {
   bodyProperties: ToolBodyProperty[];
 };
 
+/** Blank form state used when the wizard opens; initialData is merged over it. */
 const emptyData: ToolWizardData = {
   name: "",
   description: "",
@@ -79,9 +85,11 @@ const STEPS = [
   { id: 4, label: "Review & Save", icon: Eye },
 ];
 
-const NAME_PATTERN = /^[a-z_]+$/;
+// Tool names must be lowercase letters and underscores only; parameter names also allow digits and dashes.
+const NAME_PATTERN =/^[a-z_]+$/;
 const PARAM_NAME_PATTERN = /^[a-z0-9_-]+$/;
 
+/** Short random id used as a React key for parameter, header and body-property rows. Not globally unique. */
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -94,10 +102,15 @@ interface Props {
   mode: "create" | "edit";
 }
 
+/**
+ * Wizard dialog. Props: open/onOpenChange control visibility, initialData pre-fills the form
+ * (edit mode), onSave receives the validated data, mode switches titles and button labels.
+ */
 export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode }: Props) {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<ToolWizardData>(emptyData);
 
+  // Reset to step 1 and reload the form every time the dialog opens (or initialData changes).
   useEffect(() => {
     if (open) {
       setStep(1);
@@ -105,7 +118,8 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
     }
   }, [open, initialData]);
 
-  const validateStep = (s: number): string | null => {
+  /** Validates one step's fields; returns an error message, or null when the step is valid. */
+  const validateStep =(s: number): string | null => {
     if (s === 1) {
       if (!data.name.trim()) return "Tool name is required";
       if (!NAME_PATTERN.test(data.name))
@@ -134,6 +148,7 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
     return null;
   };
 
+  /** Advances one step only if the current step validates; otherwise shows the error as a toast. */
   const goNext = () => {
     const err = validateStep(step);
     if (err) {
@@ -143,6 +158,10 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
     setStep((s) => Math.min(4, s + 1));
   };
 
+  /**
+   * Re-validates steps 1-3 (a user can reach review by going back and editing), jumping to the
+   * first invalid step; if all pass, calls onSave and closes the dialog.
+   */
   const handleSave = () => {
     for (let s = 1; s <= 3; s++) {
       const err = validateStep(s);
@@ -214,6 +233,7 @@ export function CreateToolWizard({ open, onOpenChange, initialData, onSave, mode
   );
 }
 
+/** Progress indicator showing the four STEPS; earlier steps render as done, the current one highlighted. */
 function Stepper({ currentStep }: { currentStep: number }) {
   return (
     <div className="bg-muted/40 px-3 py-4 sm:px-6 sm:py-5">
@@ -260,6 +280,7 @@ function Stepper({ currentStep }: { currentStep: number }) {
   );
 }
 
+/** Collapsible help panel (closed by default) with a title and explanatory children. */
 function InfoBox({ title, children }: { title: string; children?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
@@ -284,6 +305,7 @@ function InfoBox({ title, children }: { title: string; children?: React.ReactNod
   );
 }
 
+/** Icon, title and optional description heading used at the top of wizard sections. */
 function SectionHeader({
   icon: Icon,
   title,
@@ -306,6 +328,7 @@ function SectionHeader({
   );
 }
 
+/** Step 1: name (forced to lowercase as typed), description and active toggle. */
 function StepGeneral({
   data,
   setData,
@@ -369,6 +392,7 @@ function StepGeneral({
   );
 }
 
+/** Step 2: manage the list of parameters the agent collects from the caller and sends to the API. */
 function StepParameters({
   data,
   setData,
@@ -386,6 +410,7 @@ function StepParameters({
     }));
   };
 
+  // Despite the "Build with AI" label, this makes no AI call: it appends two hard-coded sample parameters.
   const buildWithAI = () => {
     setData((d) => ({
       ...d,
@@ -438,6 +463,7 @@ function StepParameters({
   );
 }
 
+/** Expandable editor for a single parameter (name, type, description, default, required, enum values). */
 function ParamCard({
   param,
   onChange,
@@ -449,6 +475,7 @@ function ParamCard({
 }) {
   const [enumInput, setEnumInput] = useState("");
 
+  /** Appends the trimmed enum input to the parameter's allowed values and clears the input. */
   const addEnum = () => {
     const v = enumInput.trim();
     if (!v) return;
@@ -561,6 +588,7 @@ function ParamCard({
   );
 }
 
+/** Step 3: HTTP method, API URL, content type, headers and request-body properties. */
 function StepPlatform({
   data,
   setData,
@@ -675,6 +703,7 @@ function StepPlatform({
   );
 }
 
+/** Step 4: read-only summary of the entered data before saving. */
 function StepReview({ data }: { data: ToolWizardData }) {
   return (
     <div className="space-y-4">

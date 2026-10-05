@@ -1,20 +1,35 @@
+/**
+ * Celebration overlay shown by the Create AI Agent wizard (CreateAIAgent.tsx) once the agent has
+ * been saved. Fires canvas-confetti while it is open and links back to the AI Agents list.
+ * It is a plain fixed-position element with dialog ARIA attributes, not the shadcn Dialog,
+ * and makes no API calls.
+ */
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import confetti from "canvas-confetti";
 import { Check, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+/** Props: `open` controls visibility, `agentName` is shown as a badge when non-empty. */
 interface AgentCreatedSuccessModalProps {
   open: boolean;
   agentName: string;
   onClose: () => void;
 }
 
+/**
+ * Renders nothing while `open` is false. While open it plays a confetti animation (see the
+ * effect below). Both "Go to My Agents" and "Close" call `onClose`; the parent's handler hides
+ * the modal and navigates to /dashboard/ai-agents.
+ */
 export function AgentCreatedSuccessModal({
   open,
   agentName,
   onClose,
 }: AgentCreatedSuccessModalProps) {
+  // Runs the confetti each time the modal opens: one central burst, then smaller bursts from the
+  // left and right edges every 250 ms for 3 seconds. The cleanup stops the timer if the modal
+  // closes or unmounts early, so no bursts fire after it is gone.
   useEffect(() => {
     if (!open) return;
 

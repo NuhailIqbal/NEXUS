@@ -1,3 +1,9 @@
+/**
+ * Dashboard "Lists" page: card grid of contact lists with contact counts.
+ * Supports create (CreateListDialog), view members, rename and delete.
+ * API: GET/POST /lists, PATCH/DELETE /lists/:id, GET /contacts (via `api`).
+ * Rendered from src/App.tsx under the dashboard layout.
+ */
 import { useEffect, useState, useCallback } from "react";
 import { Plus, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +22,7 @@ import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
+/** List as shown in the UI; `count` comes from the API's contact_count. */
 type ListItem = {
   id: string;
   name: string;
@@ -23,12 +30,14 @@ type ListItem = {
   createdAt: string;
 };
 
+/** Minimal contact row shown in the "view list" dialog. */
 type ListContact = {
   id: string;
   name: string;
   phone: string;
 };
 
+/** Lists page component: loads lists on mount and manages the create, view and rename dialogs. */
 const Lists = () => {
   const [open, setOpen] = useState(false);
   const [lists, setLists] = useState<ListItem[]>([]);
@@ -39,6 +48,7 @@ const Lists = () => {
   const [editTarget, setEditTarget] = useState<ListItem | null>(null);
   const [editForm, setEditForm] = useState<Partial<ListItem>>({});
 
+  /** Loads lists from GET /lists into state; called on mount and after every mutation. */
   const fetchLists = useCallback(async () => {
     const { data, error } = await api.getLists();
     if (error) {
@@ -63,6 +73,7 @@ const Lists = () => {
     fetchLists();
   }, [fetchLists]);
 
+  /** Deletes a list via the API, then reloads. Shows a toast either way. */
   const handleDelete = async (l: ListItem) => {
     const { error } = await api.deleteList(l.id);
     if (error) {
@@ -73,6 +84,10 @@ const Lists = () => {
     fetchLists();
   };
 
+  /**
+   * Opens the details dialog and loads the list's members. There is no per-list endpoint
+   * used here: all contacts are fetched and filtered client-side by list_id.
+   */
   const openView = async (l: ListItem) => {
     setViewTarget(l);
     setViewContacts([]);
@@ -90,11 +105,13 @@ const Lists = () => {
     );
   };
 
+  /** Opens the rename dialog with the current name pre-filled. */
   const openEdit = (l: ListItem) => {
     setEditTarget(l);
     setEditForm({ name: l.name });
   };
 
+  /** Renames the list via PATCH /lists/:id (name only), then closes the dialog and reloads. */
   const saveEdit = async () => {
     if (!editTarget) return;
     const patch = { name: editForm.name ?? editTarget.name };

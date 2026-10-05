@@ -1,3 +1,14 @@
+"""Telephony API mounted at /telephony: phone numbers, BYOT Twilio credentials,
+single outbound calls, outbound campaigns and inbound (AI receptionist) queues.
+
+Every route requires an authenticated user and is scoped to the account owner
+(team sub-users resolve to their owner via resolve_owner_id). Talks to Supabase
+tables (phone_numbers, outbound_campaigns, inbound_queues, contacts,
+conversations, ai_agents, billing, notifications, platform_settings), VAPI
+(assistants, phone numbers, calls), Twilio (number purchase/release), Stripe
+Checkout (low-balance number purchases) and the DNC screening service.
+Also exports sync_inbound_routing_for_balance, called from routers/billing.py.
+"""
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -26,6 +37,8 @@ from routers.billing import (
 )
 from routers.team import resolve_owner_id
 
+# Number of contacts screened and dialed concurrently per batch in start_campaign;
+# batches themselves run one after another to cap simultaneous provider requests.
 CAMPAIGN_BATCH_SIZE = 20
 
 logger = logging.getLogger(__name__)
@@ -37,6 +50,7 @@ def _notify_suppressed(user_id: str, campaign_id: str, campaign_name: str, count
     number. Best-effort: a notification must never affect the campaign's outcome."""
     from routers.billing import _insert_notification
 
+    # The campaign id is part of the kind, so the dedup lookup below is per campaign.
     kind = f"dnc_suppressed_{campaign_id}"
     try:
         already = (
@@ -80,6 +94,8 @@ async def _get_or_create_fallback_assistant_id() -> str | None:
     assistant_id = assistant.get("id")
     if not assistant_id:
         return None
+    # platform_settings is a single-row table keyed id=1: update the existing row if
+    # there is one, otherwise create it.
     if rows:
         supabase.table("platform_settings").update({"fallback_assistant_id": assistant_id}).eq("id", 1).execute()
     else:
@@ -103,14 +119,20 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
     if not numbers:
         return
 
+    # The fallback assistant is only needed when suspending; restoring uses each
+    # number's own agent.
     fallback_id = await _get_or_create_fallback_assistant_id() if block else None
 
+    # suspended_for_balance marks numbers this routine repointed, so that a restore
+    # only touches those and a repeated suspend is a no-op.
     for n in numbers:
         vapi_phone_id = n.get("vapi_phone_id")
         if not vapi_phone_id:
             continue  # not yet synced to VAPI — nothing to repoint
 
         if block:
+            # Already suspended, or no fallback assistant available (VAPI not configured
+            # or its creation failed) — nothing to repoint to.
             if n.get("suspended_for_balance") or not fallback_id:
                 continue
             try:
@@ -142,6 +164,7 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
 
 @router.get("/phone-numbers")
 async def list_phone_numbers(user=Depends(get_current_user)):
+    """List the account's phone numbers, newest first."""
     result = (
         supabase.table("phone_numbers")
         .select("*")
@@ -153,6 +176,8 @@ async def list_phone_numbers(user=Depends(get_current_user)):
 
 
 async def _resolve_assistant_id(user_id: str, agent_id: str | None) -> str | None:
+    """Return the VAPI assistant id for an agent owned by user_id, or None when no agent
+    was given, it isn't found/owned, or it hasn't been synced to VAPI yet."""
     if not agent_id:
         return None
     agent = (
@@ -178,6 +203,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
     (Twilio), and the BYOT endpoint (twilio_byot).
     """
     provider = (provider or "vapi").lower()
+    # Base phone_numbers row; each provider branch below adds its own fields
+    # (vapi_phone_id, twilio_sid, monthly_cost, next_billing_at, ...) before inserting it.
     row: dict = {
         "user_id": user_id,
         "number": number or "",
@@ -191,15 +218,21 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
     if label:
         row["label"] = label
 
+    # Resolved up front so the number can be created in VAPI already routed to the
+    # agent for inbound calls; None when no agent is given or it isn't synced yet.
     assistant_id = await _resolve_assistant_id(user_id, agent_id)
 
     if provider == "twilio_byot":
+        # Bring-your-own-Twilio: the number lives on the user's own Twilio account.
+        # get_credentials returns None for a credential that doesn't exist or belongs
+        # to someone else, which doubles as the ownership check.
         creds = twilio_byot_service.get_credentials(credential_id, user_id)
         if not creds:
             raise HTTPException(status_code=404, detail="Twilio credential not found")
         account_sid, auth_token = creds
 
         if mode == "purchase":
+            # Buys a new US number on the user's own Twilio account (not the platform's).
             try:
                 purchased = await twilio_service.buy_us_number(
                     sms=True, voice=True, area_code=area_code,
@@ -226,6 +259,9 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
             row["number"] = number
             row["twilio_sid"] = sid
 
+        # Register the Twilio number in VAPI (using the user's own Twilio credentials) so
+        # it can place and receive calls. Skipped when VAPI isn't configured, in which
+        # case the row is stored without a vapi_phone_id.
         if settings.vapi_api_key:
             try:
                 vapi_payload: dict = {
@@ -258,6 +294,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
                         )
                 raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
+        # No charge now: the hosting fee is billed monthly by the recurring phone-billing
+        # sweep, starting one month from provisioning.
         row["twilio_credential_id"] = credential_id
         row["monthly_cost"] = monthly_cost or BYOT_PHONE_NUMBER_MONTHLY_COST
         from services.phone_billing import _add_one_month
@@ -266,6 +304,8 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
         result = supabase.table("phone_numbers").insert(row).execute()
         return result.data[0] if result.data else row
 
+    # VAPI-native number: VAPI picks and owns the number (area_code is only a preference).
+    # With no VAPI key configured, a "vapi" number skips provisioning and is stored as-is.
     if provider == "vapi" and settings.vapi_api_key:
         try:
             vapi_payload: dict = {"provider": "vapi"}
@@ -281,6 +321,9 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
             raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     elif provider == "twilio":
+        # Platform-owned Twilio account (server credentials): buy a number, then import it
+        # into VAPI. Unlike the BYOT branch, a failed VAPI import here does not release
+        # the purchased Twilio number.
         if not settings.twilio_account_sid or not settings.twilio_auth_token:
             raise HTTPException(status_code=400, detail="Twilio account is not configured on the server.")
         try:
@@ -320,6 +363,8 @@ def _phone_checkout_session(user, body) -> dict:
     stripe.api_key = settings.stripe_secret_key
     billing = get_or_create_billing(owner_id)
     customer_id = billing.get("stripe_customer_id")
+    # Lazily create the Stripe customer and cache its id on the billing row so later
+    # checkouts (and the ownership check in confirm_phone_checkout) reuse it.
     if not customer_id:
         customer = stripe.Customer.create(email=user.get("email"), metadata={"user_id": owner_id})
         customer_id = customer.id
@@ -327,6 +372,9 @@ def _phone_checkout_session(user, body) -> dict:
 
     app_base = (settings.public_app_url or "http://localhost:8080").rstrip("/")
     base = getattr(body, "success_url", None) or f"{app_base}/dashboard/telephony/phone-numbers"
+    # Everything confirm_phone_checkout needs to provision the number after payment is
+    # carried in the session metadata. Stripe metadata values are strings, so missing
+    # values are stored as "" and turned back into None on the confirm side.
     metadata = {
         "type": "phone_number",
         "user_id": owner_id,
@@ -342,6 +390,9 @@ def _phone_checkout_session(user, body) -> dict:
         metadata["inbound_name"] = receptionist_name
         metadata["inbound_max_wait_seconds"] = str(getattr(body, "max_wait_seconds", None) or 120)
         metadata["inbound_overflow_action"] = getattr(body, "overflow_action", None) or "voicemail"
+    # One-time payment for the first month, in cents. In the URLs below, the doubled
+    # braces in the f-string produce a literal {CHECKOUT_SESSION_ID}, which Stripe
+    # replaces with the real session id on redirect.
     session = stripe.checkout.Session.create(
         customer=customer_id,
         payment_method_types=["card"],
@@ -363,12 +414,18 @@ def _phone_checkout_session(user, body) -> dict:
 
 @router.post("/phone-numbers")
 async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_user)):
+    """Add a phone number to the account. provider "vapi" (default) creates a free
+    VAPI-native number; "twilio" buys a Twilio number, paid from the wallet when the
+    balance covers it, otherwise the response is {needs_payment: true, checkout_url,
+    session_id} for a Stripe Checkout that is completed via /phone-numbers/confirm."""
     owner_id = resolve_owner_id(user["user_id"])
     provider = (body.provider or "vapi").lower()
 
     if provider == "twilio":
         # Enough balance → pay from the wallet and provision immediately.
         if has_balance(owner_id, PHONE_NUMBER_MONTHLY_COST):
+            # Provision first, debit second: if the purchase fails (it raises), the
+            # wallet is never charged.
             row = await _provision_phone_number(
                 user_id=owner_id,
                 provider="twilio",
@@ -402,6 +459,7 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
 
 
 class PhoneConfirm(BaseModel):
+    """Request body for /phone-numbers/confirm: the Stripe Checkout session id."""
     session_id: str
 
 
@@ -481,12 +539,17 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
 
 @router.get("/twilio-credentials")
 async def list_twilio_credentials(user=Depends(get_current_user)):
+    """List the account's saved Twilio (BYOT) credentials. The auth token is never
+    returned; each entry carries only a masked version."""
     owner_id = resolve_owner_id(user["user_id"])
     return {"data": twilio_byot_service.list_credentials(owner_id), "error": None}
 
 
 @router.post("/twilio-credentials")
 async def create_twilio_credential(body: TwilioCredentialCreate, user=Depends(get_current_user)):
+    """Save the user's own Twilio Account SID and Auth Token. The pair is validated
+    against Twilio first and stored encrypted; responds 400 if it is rejected or
+    can't be verified."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
         row = await twilio_byot_service.save_credentials(
@@ -499,6 +562,9 @@ async def create_twilio_credential(body: TwilioCredentialCreate, user=Depends(ge
 
 @router.patch("/twilio-credentials/{credential_id}")
 async def update_twilio_credential(credential_id: str, body: TwilioCredentialUpdate, user=Depends(get_current_user)):
+    """Partially update a saved Twilio credential (SID, token and/or label). Changing
+    the SID or token re-validates against Twilio; 400 if invalid, 404 if the
+    credential doesn't exist or isn't owned by this account."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
         row = await twilio_byot_service.update_credentials(
@@ -514,6 +580,7 @@ async def update_twilio_credential(credential_id: str, body: TwilioCredentialUpd
 
 @router.delete("/twilio-credentials/{credential_id}")
 async def delete_twilio_credential(credential_id: str, user=Depends(get_current_user)):
+    """Delete a saved Twilio credential. Responds 400 if a phone number still uses it."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
         twilio_byot_service.delete_credentials(credential_id, owner_id)
@@ -552,7 +619,12 @@ async def create_byot_phone_number(body: PhoneNumberByotCreate, user=Depends(get
 
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
+    """Update a phone number's agent assignment and/or status. When the agent changes
+    (including unassigning it), the number's VAPI routing is updated first, so inbound
+    calls reach the new agent; a VAPI failure aborts the update with a 502."""
     owner_id = resolve_owner_id(user["user_id"])
+    # model_fields_set tells an explicit agent_id of null (unassign) apart from the
+    # field being omitted; exclude_none below cannot.
     agent_cleared = "agent_id" in body.model_fields_set and not body.agent_id
     updates = body.model_dump(exclude_none=True)
     if agent_cleared:
@@ -564,6 +636,9 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
     if not updates:
         return {"data": None, "error": "No fields to update"}
 
+    # Mirror the agent change onto the VAPI phone number (only if it was ever synced to
+    # VAPI). An agent without a vapi_assistant_id leaves the payload empty: there is no
+    # assistantId to push.
     if "agent_id" in updates and settings.vapi_api_key:
         existing = (
             supabase.table("phone_numbers")
@@ -588,6 +663,8 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
                 if agent.data and agent.data.get("vapi_assistant_id"):
                     vapi_update["assistantId"] = agent.data["vapi_assistant_id"]
             else:
+                # Unassigned: clear the assistant on VAPI so the number stops answering
+                # with the old agent.
                 vapi_update["assistantId"] = None
             try:
                 await vapi_client.update_phone_number(vapi_phone_id, vapi_update)
@@ -607,6 +684,10 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
 
 @router.delete("/phone-numbers/{number_id}")
 async def release_phone_number(number_id: str, user=Depends(get_current_user)):
+    """Delete a phone number: remove its VAPI import (best-effort), release a
+    platform-purchased Twilio number on Twilio so it stops billing, then delete the
+    row. BYOT numbers are never released on the user's Twilio account. Returns
+    success even if the number doesn't exist or isn't owned by this account."""
     owner_id = resolve_owner_id(user["user_id"])
     existing = (
         supabase.table("phone_numbers")
@@ -617,6 +698,7 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
         .execute()
     )
     if existing.data and existing.data.get("vapi_phone_id") and settings.vapi_api_key:
+        # Best-effort: a VAPI failure must not block deleting our own record.
         try:
             await vapi_client.delete_phone_number(existing.data["vapi_phone_id"])
         except Exception:
@@ -658,6 +740,11 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
 
 @router.post("/call")
 async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_user)):
+    """Place one outbound call to a phone number with the given agent, optionally from
+    one of the account's own phone numbers. Rejected if the account is blocked
+    (including trial accounts), the wallet balance is empty, or the number fails DNC
+    screening. Returns the VAPI call id and initial status; the call is billed when it
+    ends, not here."""
     owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="Voice service not configured")
@@ -666,6 +753,7 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
     block_reason = outbound_call_block_reason(billing)
     if block_reason:
         raise HTTPException(status_code=403, detail=block_reason)
+    # Outbound calls require a positive wallet balance (checked before dialing).
     if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
@@ -692,6 +780,8 @@ async def make_outbound_call(body: OutboundCallCreate, user=Depends(get_current_
         "customer": {"number": body.phone_number},
     }
 
+    # Caller-ID number: only attached when it belongs to this account and is synced to
+    # VAPI; otherwise phoneNumberId is simply left out of the payload.
     if body.phone_number_id:
         phone = (
             supabase.table("phone_numbers")
@@ -752,6 +842,8 @@ def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
         return
     from collections import defaultdict
 
+    # Two queries load all of the account's contacts and conversations once, instead of
+    # querying per campaign; campaigns are then matched in memory by list_id.
     contacts = (
         supabase.table("contacts").select("id, list_id, phone").eq("user_id", user_id).execute().data or []
     )
@@ -763,6 +855,8 @@ def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
     convos = (
         supabase.table("conversations").select("contact_id, phone, status").eq("user_id", user_id).execute().data or []
     )
+    # A Completed conversation counts toward a contact either by contact_id or, for
+    # calls logged without one, by phone number (compared via _phone_key).
     contacted_ids: set = set()
     contacted_phones: set = set()
     for cv in convos:
@@ -783,6 +877,8 @@ def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
 
 @router.get("/campaigns")
 async def list_campaigns(user=Depends(get_current_user)):
+    """List the account's outbound campaigns, newest first, each with live
+    contacts_count and completed_count progress figures."""
     owner_id = resolve_owner_id(user["user_id"])
     result = (
         supabase.table("outbound_campaigns")
@@ -798,6 +894,8 @@ async def list_campaigns(user=Depends(get_current_user)):
 
 @router.post("/campaigns")
 async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
+    """Create an outbound campaign (it does not start dialing until /start is called).
+    If a contact list is assigned, the current contact count is stored on the row."""
     owner_id = resolve_owner_id(user["user_id"])
     row = body.model_dump()
     row["user_id"] = owner_id
@@ -818,6 +916,7 @@ async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
 
 @router.get("/campaigns/{campaign_id}")
 async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Fetch one campaign with live progress figures; 404 if it isn't this account's."""
     owner_id = resolve_owner_id(user["user_id"])
     result = (
         supabase.table("outbound_campaigns")
@@ -836,6 +935,8 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
 
 @router.patch("/campaigns/{campaign_id}")
 async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(get_current_user)):
+    """Partially update a campaign (only the fields sent). Returns data null when
+    nothing was sent or the campaign isn't this account's."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -851,12 +952,25 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
 
 @router.delete("/campaigns/{campaign_id}")
 async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Delete one of the account's campaigns. Returns success even if it doesn't exist."""
     supabase.table("outbound_campaigns").delete().eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
 
 @router.post("/campaigns/{campaign_id}/start")
 async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Start a campaign by placing a VAPI call to every contact with a phone number in
+    its list, using the campaign's agent and phone number.
+
+    Fails with 4xx if the campaign is missing, its agent/list/phone number isn't set up,
+    the account is blocked, the balance is empty or the list has no dialable contacts.
+    Contacts are dialed in concurrent batches within this single request; a failed dial
+    or a DNC-suppressed number is recorded and skipped, never aborting the run.
+
+    Side effects: sets the campaign to Active (and refreshes contacts_count), and sends
+    one DNC-suppression notification if any numbers were skipped. Returns dialed/error/
+    suppressed counts plus up to 5 sample errors and suppressed numbers.
+    """
     owner_id = resolve_owner_id(user["user_id"])
     campaign = (
         supabase.table("outbound_campaigns")
@@ -889,6 +1003,8 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     block_reason = outbound_call_block_reason(billing)
     if block_reason:
         raise HTTPException(status_code=403, detail=block_reason)
+    # The balance is checked once here, before any dialing; it is not re-checked
+    # per call while the batches run.
     if not check_call_quota(owner_id, "outbound"):
         raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
 
@@ -927,6 +1043,14 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     campaign_dnc_enabled = camp.get("dnc_screening_enabled", True)
 
     async def dial_contact(contact, cached_verdict=None):
+        """Screen (when enabled) and dial one contact, returning a result dict instead
+        of raising for dial failures: {"success": True, "phone"} on success;
+        {"success": False, "suppressed": True, "phone", "error"} when DNC screening
+        blocked it; {"success": False, "phone", "error"} when the VAPI call failed.
+
+        `cached_verdict` is a suppression verdict pre-fetched for the batch (or None to
+        let check_number look it up itself).
+        """
         # Screen before dialing. A suppressed (or unverifiable) number is skipped, and the
         # loop below carries on with the rest of the list — matching how a failed dial is
         # already handled, rather than aborting the whole campaign.
@@ -968,6 +1092,9 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         else:
             keys = [None] * len(batch)
             cached = {}
+        # keys stays index-aligned with batch (entries may be None for unreadable
+        # numbers), so zip pairs each contact with its own cached verdict. Contacts in a
+        # batch run concurrently; the next batch starts only after this one finishes.
         results = await asyncio.gather(*[
             dial_contact(c, cached.get(k)) for c, k in zip(batch, keys)
         ])
@@ -979,6 +1106,8 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             else:
                 errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
 
+    # contacts_count is reset to the number of dialable contacts (those with a phone),
+    # which can be lower than the list size stored when the campaign was created.
     supabase.table("outbound_campaigns").update({
         "status": "Active",
         "contacts_count": len(contacts.data),
@@ -1001,12 +1130,16 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
 
 @router.post("/campaigns/{campaign_id}/pause")
 async def pause_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Mark the campaign Paused. Only updates the stored status; calls already placed
+    by /start are not interrupted. Succeeds even if the campaign isn't found."""
     supabase.table("outbound_campaigns").update({"status": "Paused"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": {"status": "Paused"}, "error": None}
 
 
 @router.post("/campaigns/{campaign_id}/resume")
 async def resume_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Mark the campaign Active again. Only updates the stored status; it does not
+    place any calls (use /start for that). Succeeds even if the campaign isn't found."""
     supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": {"status": "Active"}, "error": None}
 
@@ -1015,6 +1148,7 @@ async def resume_campaign(campaign_id: str, user=Depends(get_current_user)):
 
 @router.get("/inbound")
 async def list_inbound_queues(user=Depends(get_current_user)):
+    """List the account's inbound queues (AI receptionists), newest first."""
     result = (
         supabase.table("inbound_queues")
         .select("*")
@@ -1027,6 +1161,11 @@ async def list_inbound_queues(user=Depends(get_current_user)):
 
 @router.post("/inbound")
 async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_current_user)):
+    """Create an inbound queue (AI receptionist) that answers a phone number with an
+    agent. Requires VAPI and an agent already synced to VAPI. With phone_number_id, that
+    existing number is pointed at the agent; otherwise a new Twilio number is bought
+    (from the wallet, or via Stripe Checkout when the balance is too low, in which case
+    no queue row is created until /phone-numbers/confirm)."""
     owner_id = resolve_owner_id(user["user_id"])
     if not settings.vapi_api_key:
         raise HTTPException(status_code=503, detail="Voice service not configured")
@@ -1070,6 +1209,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
         if not settings.twilio_account_sid or not settings.twilio_auth_token:
             raise HTTPException(status_code=400, detail="Twilio account is not configured on the server.")
         if has_balance(owner_id, PHONE_NUMBER_MONTHLY_COST):
+            # Provision first, debit second, so a failed purchase never charges the wallet.
             pn_row = await _provision_phone_number(
                 user_id=owner_id, provider="twilio", agent_id=body.agent_id,
                 status="Active", monthly_cost=PHONE_NUMBER_MONTHLY_COST,
@@ -1088,6 +1228,8 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             checkout = _phone_checkout_session(user, body)
             return {"data": {"needs_payment": True, **checkout}, "error": None}
 
+    # area_code and success_url only drive number purchase / Stripe checkout; they are
+    # not inbound_queues columns, so they are left out of the inserted row.
     row = body.model_dump(exclude={"area_code", "success_url"})
     row["user_id"] = owner_id
     row["phone_number_id"] = phone_number_id
@@ -1098,6 +1240,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
 
 @router.get("/inbound/{queue_id}")
 async def get_inbound_queue(queue_id: str, user=Depends(get_current_user)):
+    """Fetch one inbound queue; 404 if it isn't this account's."""
     result = (
         supabase.table("inbound_queues")
         .select("*")
@@ -1113,6 +1256,9 @@ async def get_inbound_queue(queue_id: str, user=Depends(get_current_user)):
 
 @router.patch("/inbound/{queue_id}")
 async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Depends(get_current_user)):
+    """Partially update an inbound queue. When its agent or phone number changes, the
+    number's VAPI routing and its phone_numbers.agent_id are updated to match; a VAPI
+    failure aborts with a 502. Returns data null when nothing was sent."""
     owner_id = resolve_owner_id(user["user_id"])
     updates = body.model_dump(exclude_none=True)
     if not updates:
@@ -1127,6 +1273,8 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
             .maybe_single()
             .execute()
         )
+        # Use the new value when one was sent, else fall back to what the queue already
+        # has, so changing only the agent (or only the number) still re-syncs the pair.
         agent_id = updates.get("agent_id") or (existing.data.get("agent_id") if existing.data else None)
         pn_id = updates.get("phone_number_id") or (existing.data.get("phone_number_id") if existing.data else None)
         if agent_id and pn_id:
@@ -1140,6 +1288,8 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
                 except Exception as e:
                     logger.error("VAPI sync error: %s", e)
                     raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+            # The local phone_numbers.agent_id is updated even when the VAPI push above
+            # was skipped (number or agent not yet synced to VAPI).
             supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", owner_id).execute()
 
     result = (

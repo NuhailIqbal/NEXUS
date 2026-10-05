@@ -1,3 +1,8 @@
+/**
+ * Two-step modal (Basic Info, then Review) for adding a single contact.
+ * It only collects input; the parent persists it through the `onCreate` callback
+ * (see pages/dashboard/database/Contacts.tsx). Fetches GET /lists when opened for the list picker.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Eye, Plus, User, X } from "lucide-react";
 import { toast } from "sonner";
@@ -20,11 +25,17 @@ type BasicInfo = {
   list_id: string;
 };
 
+/**
+ * Add-contact wizard dialog. Props: `open`/`onOpenChange` control visibility; `onCreate`
+ * receives the entered data on submit. Closing by any route resets the form to step 1.
+ * Note: submit shows a success toast immediately, before the parent's async save finishes.
+ */
 export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
   const [basic, setBasic] = useState<BasicInfo>({ phone: "", email: "", name: "", list_id: "" });
   const [lists, setLists] = useState<{ id: string; name: string }[]>([]);
 
+  // Reload lists each time the dialog opens so newly created lists appear in the picker.
   useEffect(() => {
     if (open) {
       api.getLists().then(({ data }) => setLists((data as any[]) ?? []));
@@ -33,22 +44,26 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
 
   const progress = useMemo(() => Math.round((step / 2) * 100), [step]);
 
+  /** Returns the wizard to step 1 with an empty form. */
   const reset = () => {
     setStep(1);
     setBasic({ phone: "", email: "", name: "", list_id: "" });
   };
 
+  /** Dialog open-change handler: resets the form when closing, then notifies the parent. */
   const close = (next: boolean) => {
     if (!next) reset();
     onOpenChange(next);
   };
 
+  /** Validates the required name and phone, then advances to the Review step. */
   const next = () => {
     if (!basic.name.trim()) return toast.error("Name is required");
     if (!basic.phone.trim()) return toast.error("Phone number is required");
     setStep(2);
   };
 
+  /** Hands the entered data to the parent via `onCreate`, then closes and resets the dialog. */
   const submit = () => {
     onCreate?.({ basic });
     toast.success("Contact created");
@@ -155,6 +170,7 @@ export function AddContactDialog({ open, onOpenChange, onCreate }: Props) {
   );
 }
 
+/** Step indicator pill; highlighted when `active`. Purely presentational. */
 function TabPill({ active, icon, label }: { active: boolean; icon: React.ReactNode; label: string }) {
   return (
     <div className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium ${active ? "border-foreground bg-background" : "border-transparent bg-muted text-muted-foreground"}`}>
@@ -164,6 +180,7 @@ function TabPill({ active, icon, label }: { active: boolean; icon: React.ReactNo
   );
 }
 
+/** Labelled form field wrapper. */
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -173,6 +190,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** Read-only "Label: value" row for the Review step; renders a blank space when empty. */
 function ReviewRow({ label, value }: { label: string; value?: string }) {
   return (
     <div>

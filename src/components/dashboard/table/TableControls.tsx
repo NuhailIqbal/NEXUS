@@ -1,3 +1,10 @@
+/**
+ * Shared table building blocks: a sortable column header, per-column text/select/date filters and
+ * a pagination footer. They are controlled, presentational components: the page owns the sort,
+ * filter and page state and does the actual data work (no API calls here).
+ * Used by Contacts, PhoneNumbers, InboundLogs, OutboundLogs, AutomationList, FlowEditor, Admin
+ * and the billing CallCosts and Transactions tables.
+ */
 import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, RefreshCw, Search, X } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -12,6 +19,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 // these just standardize the repeated header/filter/pagination bits so every
 // table on the site looks and behaves the same way.
 
+/**
+ * Clickable column label for the sort row of a table header. `active` marks the column that is
+ * currently sorted and `dir` its direction (up or down arrow); other columns show a faded up/down
+ * icon. The page's `onClick` decides how a click changes the sort.
+ */
 export function SortableColumnHeader({
   label, active, dir, onClick,
 }: { label: string; active: boolean; dir: "asc" | "desc"; onClick: () => void }) {
@@ -31,6 +43,7 @@ export function SortableColumnHeader({
   );
 }
 
+/** Compact search input for a column's filter row; fully controlled through `value`/`onChange`. */
 export function TableTextFilter({
   value, onChange, placeholder,
 }: { value: string; onChange: (v: string) => void; placeholder: string }) {
@@ -47,6 +60,11 @@ export function TableTextFilter({
   );
 }
 
+/**
+ * Compact dropdown for a column's filter row. Callers use "" to mean "no filter"; the component
+ * shows it as the "All" item using the sentinel value "__all__", because Radix Select does not
+ * allow an item with an empty-string value (an empty value clears the selection and shows the placeholder).
+ */
 export function TableSelectFilter({
   value, onChange, options, placeholder,
 }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder: string }) {
@@ -65,6 +83,12 @@ export function TableSelectFilter({
   );
 }
 
+/**
+ * Single-day filter: a button showing the chosen date (or "Date") that opens a calendar popover.
+ * `value` is undefined when no date is chosen. Once a date is set, an inline "x" clears it; that
+ * control is a span with role="button" rather than a nested <button> (it sits inside the trigger
+ * button, and buttons cannot be nested), and it stops propagation so the click does not also open the popover.
+ */
 export function TableDateFilter({
   value, onChange,
 }: { value: Date | undefined; onChange: (d: Date | undefined) => void }) {
@@ -96,8 +120,14 @@ export function TableDateFilter({
   );
 }
 
+/** Default choices for the "Items per page" select in TablePagination. */
 export const TABLE_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Items to render in the pager for a 1-based `page`: always the first and last page, the current
+ * page with one neighbour on each side, and an "ellipsis" marker wherever pages are skipped
+ * (for example 1 ... 4 5 6 ... 20).
+ */
 function pageWindow(page: number, totalPages: number): (number | "ellipsis")[] {
   const items: (number | "ellipsis")[] = [];
   const siblings = 1;
@@ -112,10 +142,16 @@ function pageWindow(page: number, totalPages: number): (number | "ellipsis")[] {
   return items;
 }
 
+/**
+ * Pager controls: first and previous buttons, the windowed page numbers, then next and last.
+ * The edge buttons are disabled on the first/last page. `page` is 1-based.
+ */
 function PageNumbers({
   page, totalPages, onChange,
 }: { page: number; totalPages: number; onChange: (p: number) => void }) {
   const items = pageWindow(page, totalPages);
+  // Class helpers: `btn` styles a page-number button (highlighted when active),
+  // `iconBtn` the first/previous/next/last arrow buttons.
   const btn = (active: boolean) =>
     `flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm transition ${
       active ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -149,6 +185,12 @@ function PageNumbers({
   );
 }
 
+/**
+ * Table footer with an "Items per page" select, the page numbers and an "x - y of N items"
+ * summary, plus an optional refresh button (shown only when `onRefresh` is given). `page` is
+ * 1-based and `totalCount` is the row count across all pages; the caller slices or fetches the
+ * visible rows itself. Renders nothing when `totalCount` is 0.
+ */
 export function TablePagination({
   page, pageSize, totalCount, onPageChange, onPageSizeChange, onRefresh, pageSizeOptions = TABLE_PAGE_SIZE_OPTIONS,
 }: {

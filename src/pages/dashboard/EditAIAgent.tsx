@@ -1,3 +1,9 @@
+/**
+ * "Edit AI Agent" modal (default export EditAgentModal), opened for one agent from the AI Agents
+ * list (AIAgents.tsx). Loads the agent (GET /agents/{id}) and its call events
+ * (GET /agents/{id}/events) into the same step components the create wizard uses, then saves with
+ * api.updateAgent (PATCH /agents/{id}) plus api.uploadAgentKnowledge for any newly added files.
+ */
 import { useEffect, useState } from "react";
 import { Check, Loader2, ArrowLeft, ArrowRight, Settings } from "lucide-react";
 import { toast } from "sonner";
@@ -18,6 +24,7 @@ import {
 import { StepCallEvents } from "@/components/agents/StepCallEvents";
 import { toCallEventsPayload } from "@/components/agents/callEventTypes";
 
+/** The columns of an `ai_agents` row (as returned by GET /agents/{id}) that this modal reads. */
 type Agent = {
   id: string;
   name: string;
@@ -33,6 +40,7 @@ type Agent = {
   selected_tool_keys?: string[] | null;
 };
 
+/** Maps a stored language string onto one of the three Select options: English, Urdu or Multilingual. */
 // Same normalization the old Settings dialog used — agents created before the language
 // list was simplified can have values like "Urdu (PK)" that don't match any Select
 // option, which would otherwise render the field blank.
@@ -43,6 +51,7 @@ const normalizeLanguage = (lang: string | null): string => {
   return "English";
 };
 
+/** Blank form shown until an agent has loaded; the load effect replaces it with the agent's values. */
 const EMPTY_FORM: FormState = {
   agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "",
   industry: "", language: "English", voice: "Elliot",
@@ -53,10 +62,17 @@ const EMPTY_FORM: FormState = {
   testMessage: "",
 };
 
+/** "No step reviewed yet"; also the reset value when a different agent is opened. */
 const EMPTY_COMPLETED: Record<StepKey, boolean> = {
   setup: false, knowledge: false, prompt: false, events: false, testing: false,
 };
 
+/**
+ * Edit-agent wizard shown in a dialog. Props: `agentId` is the agent to edit (null keeps the
+ * dialog closed), `onClose` closes it, and `onSaved` is called after a successful save so the
+ * parent list can reload. Uses the same five steps as CreateAIAgent, prefilled from the saved
+ * agent, and lets the user jump between steps freely.
+ */
 export default function EditAgentModal({
   agentId,
   onClose,
@@ -77,6 +93,8 @@ export default function EditAgentModal({
   // Re-fetch and reset the wizard to step 1 every time a different agent is opened.
   useEffect(() => {
     if (!agentId) return;
+    // Flipped by the cleanup function so a slow response for a previous agent cannot overwrite
+    // the form after the user opened another agent or closed the modal.
     let cancelled = false;
     setLoading(true);
     setNotFound(false);
@@ -91,6 +109,8 @@ export default function EditAgentModal({
         return;
       }
       const a = data as Agent;
+      // Call events live in their own table, so they need a second request. A failed request
+      // is not reported: the list then falls back to empty, and saving would send that empty list.
       const eventsRes = await api.getAgentEvents(agentId);
       if (cancelled) return;
       setForm({
@@ -102,10 +122,12 @@ export default function EditAgentModal({
         voice: a.voice ?? "Elliot",
         transferEnabled: !!a.transfer_number,
         transferNumber: a.transfer_number ?? "",
+        // Existing knowledge is not loaded: these start empty and only hold what the user adds now.
         knowledgeText: "",
         knowledgeFiles: [],
         systemPrompt: a.system_prompt ?? "",
         greeting: a.first_message ?? "",
+        // The form tracks library event ids only, so events without one are left out.
         callEvents: ((eventsRes.data ?? []) as { library_event_id: string | null }[])
           .map((ev) => ev.library_event_id)
           .filter((id): id is string => !!id),
@@ -121,9 +143,14 @@ export default function EditAgentModal({
   const currentStep = STEPS[stepIndex];
   const completedCount = Object.values(completed).filter(Boolean).length;
 
+  /** Typed single-field setter for the form; handed to every step component as `update`. */
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
+  /**
+   * Validates only the fields of the current step, showing the first problem as an error toast.
+   * Same rules as the create wizard except that the Knowledge step may stay empty.
+   */
   const validate = (): boolean => {
     if (currentStep.key === "setup") {
       if (!form.agentName.trim()) { toast.error("Agent name is required"); return false; }
@@ -147,6 +174,11 @@ export default function EditAgentModal({
     return true;
   };
 
+  /**
+   * Saves the edit: PATCH /agents/{id} with the whole form, then uploads each newly added
+   * knowledge file to POST /agents/{id}/knowledge. Returns false (after an error toast) only when
+   * the update itself fails; failed file uploads are toasted but do not change the result.
+   */
   const persistToApi = async () => {
     if (!agentId) return false;
     // Any newly typed knowledge text is appended to the system prompt the same way
@@ -158,6 +190,10 @@ export default function EditAgentModal({
       ? `${form.systemPrompt.trim()}\n\nReference knowledge — use this to answer questions accurately:\n${newKnowledge}`
       : form.systemPrompt;
 
+    // The PATCH endpoint only applies non-null fields, so the `|| null` fallbacks below mean
+    // "leave unchanged", not "clear". In particular transfer_number is null when call transfer is
+    // switched off, and only an empty string would remove a stored transfer; this code never sends
+    // one. call_events is the agent's complete event list, which the backend swaps in as a whole.
     const { error } = await api.updateAgent(agentId, {
       name: form.agentName,
       category: form.industry || "General",
@@ -194,6 +230,11 @@ export default function EditAgentModal({
     return true;
   };
 
+  /**
+   * Handler of the main button. Validates the current step, marks it reviewed and moves on; on
+   * the last step it saves via persistToApi and, on success, toasts, calls onSaved (so the parent
+   * list reloads) and closes the modal. `submitting` disables the button during the save.
+   */
   const next = async () => {
     if (!validate()) return;
     setCompleted((c) => ({ ...c, [currentStep.key]: true }));
@@ -214,12 +255,16 @@ export default function EditAgentModal({
     }
   };
 
+  /** Goes to the previous step without validating; a no-op on the first step. */
   const back = () => stepIndex > 0 && setStepIndex(stepIndex - 1);
 
+  /** Jumps straight to step `i` from the sidebar, with no validation or completion check. */
   // Unlike Create, every field already holds valid data for an existing agent, so there's
   // nothing that forces a strict step order here — let the user jump to any step directly.
   const goToStep = (i: number) => setStepIndex(i);
 
+  // The dialog is open whenever an agent id is set, and any dismissal (overlay, Escape, close
+  // button) calls onClose. The body is one of three states: loading, agent not found, or the wizard.
   return (
     <Dialog open={!!agentId} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex h-[94vh] max-h-[94vh] flex-col overflow-y-auto p-0 max-w-[max(64rem,70vw)]">

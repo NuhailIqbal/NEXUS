@@ -1,3 +1,8 @@
+/**
+ * Modal form to create or edit an event in the account's call-event library. Uses
+ * api.createCallEvent / api.updateCallEvent. Used by the Call Events page and by the
+ * agent wizard's StepCallEvents (inline "New event").
+ */
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,7 +20,10 @@ import {
   type CallEventScope, type LibraryEvent,
 } from "./callEventTypes";
 
-/** Create a library event, or edit one when `event` is given. */
+/**
+ * Create a library event, or edit one when `event` is given. `onSaved` receives the saved
+ * event (merged over the previous one when editing); the dialog then closes itself.
+ */
 export function CallEventDialog({
   open, onOpenChange, event, onSaved,
 }: {
@@ -47,6 +55,11 @@ export function CallEventDialog({
     setError(null);
   }, [open, event]);
 
+  /**
+   * Validates the name, then creates or updates the event. Blank outcome/description are sent
+   * as null (the form hints that the outcome defaults to the event name). Backend sync
+   * warnings are shown as a warning toast; errors stay inline in the dialog.
+   */
   const save = async () => {
     if (!label.trim()) { setError("Enter an event name."); return; }
     setSaving(true);

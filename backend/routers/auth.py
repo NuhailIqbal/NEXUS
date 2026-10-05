@@ -25,25 +25,39 @@ from services.email_service import send_system_email
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+# Account lifecycle implemented in this module:
+#   register            -> UNVERIFIED users row + profile/billing rows, verification email sent
+#   verify-email        -> email confirmed, welcome promo granted, JWT returned
+#   login               -> verified users only; JWT returned
+#   resend-verification -> sends another verification email
+# The helpers (_hash_password, _issue_token, _provision_user_rows, _grant_signup_promo) are
+# also imported by routers/team.py (invite acceptance) and routers/admin.py (admin-created
+# accounts and impersonation tokens).
+
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
+# How long an emailed verification link stays valid.
 VERIFY_TTL_HOURS = 48
 
 
 def _hash_password(pw: str) -> str:
+    """Return a salted bcrypt hash (as str) of the password for storage in users.encrypted_password."""
     # bcrypt has a 72-byte limit; truncate to match (same as Supabase Auth).
     return bcrypt.hashpw(pw.encode("utf-8")[:72], bcrypt.gensalt()).decode("utf-8")
 
 
 def _verify_password(pw: str, hashed: str) -> bool:
+    """Check a password against a stored bcrypt hash; False for an empty or malformed hash. Never raises."""
     if not hashed:
         return False
     try:
+        # Truncate to 72 bytes exactly as _hash_password does, otherwise long passwords would never match.
         return bcrypt.checkpw(pw.encode("utf-8")[:72], hashed.encode("utf-8"))
     except Exception:
         return False
 
 
 class RegisterBody(BaseModel):
+    """Request body for POST /auth/register."""
     email: str
     password: str
     full_name: str | None = None
@@ -65,6 +79,8 @@ async def _verify_recaptcha(token: str | None) -> bool:
     if not token:
         return False
     try:
+        # A slow or unreachable Google endpoint must not hang sign-up; any error (including the
+        # timeout) lands in the except below and rejects the sign-up.
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
                 RECAPTCHA_VERIFY_URL,
@@ -81,15 +97,18 @@ async def _verify_recaptcha(token: str | None) -> bool:
 
 
 class LoginBody(BaseModel):
+    """Request body for POST /auth/login."""
     email: str
     password: str
 
 
 class VerifyBody(BaseModel):
+    """Request body for POST /auth/verify-email: the token from the emailed link."""
     token: str
 
 
 class ResendBody(BaseModel):
+    """Request body for POST /auth/resend-verification."""
     email: str
     app_url: str | None = None
 
@@ -101,6 +120,7 @@ def _grant_signup_promo(user_id: str) -> None:
     bonus = cfg["amount"]
     if cfg["enabled"] and bonus > 0 and not _has_promo_credit(user_id):
         days = cfg["expiry_days"]
+        # expiry_days <= 0 means the promo credit never expires (expires_at stays NULL).
         expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat() if days > 0 else None
         credit_balance(user_id, bonus, "promo", f"Welcome bonus — ${bonus:.0f} free credits",
                        grant_type="promo", expires_at=expires)
@@ -112,6 +132,7 @@ _REFERRAL_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L —
 
 
 def _generate_referral_code(length: int = 8) -> str:
+    """Return a random referral code of `length` characters from the unambiguous alphabet, drawn with `secrets`."""
     return "".join(secrets.choice(_REFERRAL_CODE_ALPHABET) for _ in range(length))
 
 
@@ -121,6 +142,8 @@ def _ensure_referral_code(user_id: str) -> str:
     existing = (row or {}).get("referral_code")
     if existing:
         return existing
+    # profiles.referral_code is UNIQUE, so a colliding code makes the UPDATE raise; try up to
+    # 8 fresh codes before giving up.
     for _ in range(8):
         code = _generate_referral_code()
         try:
@@ -128,6 +151,7 @@ def _ensure_referral_code(user_id: str) -> str:
             return code
         except Exception:
             continue  # UNIQUE collision — retry with a fresh code
+    # Not fatal: '' means "no code yet", and the next login (which re-runs provisioning) tries again.
     logger.warning("referrals: failed to allocate a unique code for %s", user_id)
     return ""
 
@@ -136,6 +160,7 @@ def _record_referral_if_valid(referee_id: str, referral_code: str | None) -> Non
     """Best-effort: if referral_code resolves to an existing user's code, create a
     'pending' referrals row. Never raises — a bad/unknown/malformed code must never
     break signup, it's just silently ignored."""
+    # Generated codes are uppercase, so normalise whatever was typed into the ?ref= link.
     code = (referral_code or "").strip().upper()
     if not code:
         return
@@ -146,6 +171,8 @@ def _record_referral_if_valid(referee_id: str, referral_code: str | None) -> Non
         )
         if not referrer or referrer["id"] == referee_id:
             return  # unknown code, or (structurally impossible) self-referral
+        # referrals.referee_id is UNIQUE, so a user is attributed to at most one referrer; a
+        # repeat insert raises and is swallowed by the except below.
         supabase.table("referrals").insert({
             "referrer_id": referrer["id"],
             "referee_id": referee_id,
@@ -163,6 +190,7 @@ async def _issue_verification(user_id: str, email: str, app_url: str | None):
     supabase.table("email_verification_tokens").insert(
         {"user_id": user_id, "token": token, "expires_at": expires}
     ).execute()
+    # Link origin: the frontend origin the caller sent, else PUBLIC_APP_URL, else local dev.
     base = (app_url or settings.public_app_url or "http://localhost:8080").rstrip("/")
     url = f"{base}/verify-email?token={token}"
     html = (
@@ -172,6 +200,8 @@ async def _issue_verification(user_id: str, email: str, app_url: str | None):
         f"<p>Or paste this link into your browser:<br>{url}</p>"
         f"<p>This link expires in {VERIFY_TTL_HOURS} hours.</p>"
     )
+    # `sent` stays False both when SMTP isn't configured and when sending raised. Callers then
+    # return the URL in the response (dev_verify_url) so the flow can still be completed.
     sent = False
     try:
         sent = await send_system_email(email, "Verify your EDM Nexus email", html, f"Verify your email: {url}")
@@ -182,6 +212,13 @@ async def _issue_verification(user_id: str, email: str, app_url: str | None):
 
 def _issue_token(user_id: str, email: str, *, ttl_seconds: int | None = None,
                  extra_claims: dict | None = None) -> str:
+    """Sign an HS256 JWT for the user (claims: sub, email, role='authenticated', iat, exp).
+
+    `ttl_seconds` overrides the default 7-day lifetime (a falsy value falls back to it).
+    `extra_claims` are merged last, so they can add or override claims; admin impersonation
+    uses this for the `imp`/`imp_by` claims with a short TTL. Verified on every request by
+    dependencies.get_current_user using the same secret.
+    """
     now = int(time.time())
     payload = {
         "sub": user_id,
@@ -201,6 +238,8 @@ def _provision_user_rows(user_id: str, full_name: str | None, referral_code: str
     `referral_code` is the ?ref=CODE this user registered with (if any) — optional, so
     existing call sites (login's re-provision, admin-created accounts) stay unaffected.
     """
+    # Idempotent — login calls this on every sign-in. Each step is a no-op when its row (or
+    # referral code) already exists, and a referral is only recorded when a code is passed.
     existing = supabase.table("profiles").select("id").eq("id", user_id).maybe_single().execute()
     if not existing.data:
         supabase.table("profiles").insert({"id": user_id, "full_name": full_name or ""}).execute()
@@ -212,10 +251,19 @@ def _provision_user_rows(user_id: str, full_name: str | None, referral_code: str
 
 @router.post("/register")
 async def register(body: RegisterBody):
+    """Create an UNVERIFIED account and email a verification link (public, no auth).
+
+    Checks reCAPTCHA when configured, rejects an already-registered email (409), stores the
+    bcrypt-hashed user, provisions profile/billing rows and records any `referral_code`.
+    No JWT is returned and no welcome credit is granted until the email is verified.
+    Response: `pending_verification`, `email_sent` and, if the email could not be sent,
+    `dev_verify_url` with the link.
+    """
     email = body.email.strip().lower()
     if not email or not body.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
+    # Bot check runs before any database access, so rejected sign-ups write nothing.
     if not await _verify_recaptcha(body.recaptcha_token):
         raise HTTPException(status_code=400, detail="reCAPTCHA verification failed — please try again.")
 
@@ -243,12 +291,20 @@ async def register(body: RegisterBody):
 
 @router.post("/login")
 async def login(body: LoginBody):
+    """Exchange email + password for a JWT (public, no auth).
+
+    Returns 401 for an unknown email or a wrong password (same message for both) and 403 if
+    the email has not been verified yet. Also re-runs profile/billing provisioning so older
+    or migrated accounts get their rows. Response: `access_token` and the user's id/email.
+    """
     email = body.email.strip().lower()
     res = supabase.table("users").select("id, email, encrypted_password, email_confirmed_at").eq("email", email).maybe_single().execute()
     user = res.data
     if not user or not _verify_password(body.password, user.get("encrypted_password", "")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
+    # Checked only after the password is verified, so just someone holding the right password
+    # learns that the account is still unverified.
     if not user.get("email_confirmed_at"):
         raise HTTPException(
             status_code=403,
@@ -265,12 +321,20 @@ async def login(body: LoginBody):
 
 @router.post("/verify-email")
 async def verify_email(body: VerifyBody):
+    """Redeem an emailed verification token and log the user in (public, no auth).
+
+    Marks the user's email confirmed, burns the single-use token, flips their pending
+    referral (if any) to 'verified', grants the one-time welcome credit (if the promo is
+    enabled) and returns a JWT so the user is signed in straight away. 400 for an unknown,
+    already-used or expired token.
+    """
     row = (
         supabase.table("email_verification_tokens").select("*")
         .eq("token", body.token).maybe_single().execute().data
     )
     if not row or row.get("used"):
         raise HTTPException(status_code=400, detail="Invalid or already-used verification link.")
+    # An unparseable expiry is treated as already expired (fails closed).
     try:
         exp = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00"))
     except Exception:
@@ -286,6 +350,7 @@ async def verify_email(body: VerifyBody):
         {"status": "verified", "verified_at": datetime.now(timezone.utc).isoformat()}
     ).eq("referee_id", uid).eq("status", "pending").execute()
 
+    # The token row only stores user_id, so re-read the email for the JWT.
     u = supabase.table("users").select("email").eq("id", uid).maybe_single().execute().data
     email = (u or {}).get("email", "")
     _grant_signup_promo(uid)  # grant the welcome credit now that the email is verified
@@ -297,6 +362,11 @@ async def verify_email(body: VerifyBody):
 
 @router.post("/resend-verification")
 async def resend_verification(body: ResendBody):
+    """Send a fresh verification email to an unverified account (public, no auth).
+
+    Always responds `ok` whether or not the email exists or is already verified. Earlier
+    tokens are not revoked; each one stays valid until it is used or expires.
+    """
     email = body.email.strip().lower()
     u = supabase.table("users").select("id, email, email_confirmed_at").eq("email", email).maybe_single().execute().data
     # Always respond OK (don't reveal whether the email exists / its state).
@@ -311,6 +381,7 @@ async def resend_verification(body: ResendBody):
 
 @router.get("/me")
 async def me(user=Depends(get_current_user)):
+    """Return the signed-in user's id, JWT email and full profile row (used to restore the frontend session)."""
     profile = supabase.table("profiles").select("*").eq("id", user["user_id"]).maybe_single().execute()
     return {"data": {"id": user["user_id"], "email": user.get("email", ""),
                      "profile": profile.data}, "error": None}
@@ -318,5 +389,7 @@ async def me(user=Depends(get_current_user)):
 
 @router.post("/logout")
 async def logout():
+    """No-op that always succeeds: JWTs are stateless and not tracked server-side, so the
+    client simply discards its token (an issued token stays valid until it expires)."""
     # Stateless JWT — the client just drops the token.
     return {"data": {"success": True}, "error": None}

@@ -1,3 +1,9 @@
+/**
+ * Industry catalog (label, icon, badge colors) for the agent builder's industry picker.
+ * Read by components/dashboard/IndustryCombobox.tsx (used in pages/dashboard/CreateAIAgent.tsx),
+ * and its length feeds `INDUSTRY_COUNT` in lib/marketing-facts.ts, so adding or removing an
+ * entry here also changes the marketing copy.
+ */
 import {
   ShoppingBag, HeartPulse, Landmark, Home, GraduationCap, Plane, Briefcase, Car,
   Shield, ClipboardList, Wifi, Wallet, Gavel, Handshake, type LucideIcon,
@@ -7,6 +13,11 @@ import {
 // etc.) are NOT listed here; those are niches within one of these industries, not
 // industries themselves, so they're left off this list entirely. The label itself
 // is the stored value (agents.category is a plain string, no separate id/enum).
+/**
+ * Selectable industries, in display order. `label` is the persisted value; `icon` is a
+ * lucide-react icon component; `color` is a Tailwind class string (tinted background plus
+ * text color) applied to the icon's badge in the combobox.
+ */
 export const INDUSTRIES: { label: string; icon: LucideIcon; color: string }[] = [
   { label: "Retail & E-commerce", icon: ShoppingBag, color: "bg-orange-500/15 text-orange-400" },
   { label: "Healthcare & Medical", icon: HeartPulse, color: "bg-rose-500/15 text-rose-400" },

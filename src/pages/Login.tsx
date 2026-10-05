@@ -1,3 +1,10 @@
+/**
+ * Sign-in page, routed at /login (see App.tsx; linked from the Navbar and the other auth pages).
+ * Signs in through AuthContext.signIn (POST /auth/login) and then goes to /dashboard.
+ * If the backend rejects the login because the email is unverified (403), it offers to resend
+ * the verification email via api.resendVerification (POST /auth/resend-verification).
+ * "Forgot password?" is only a placeholder toast; no reset request is sent from here.
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +16,14 @@ import { useAuth, storeAuthData } from "@/contexts/AuthContext";
 import Logo from "@/components/Logo";
 import { api } from "@/services/api";
 
+/**
+ * Login form plus the "email not verified" recovery banner.
+ *
+ * Local state: the email/password inputs, the show-password toggle, `loading` while signing in,
+ * `needsVerify` (set when the login error says the email is unverified; reveals the resend
+ * button) and `resending` while a verification email is being re-requested.
+ * Auth state (`user`, `signIn`) comes from AuthContext.
+ */
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -20,10 +35,17 @@ const Login = () => {
   const navigate = useNavigate();
   const { user, signIn } = useAuth();
 
+  // Leave the login page whenever AuthContext has a signed-in user, e.g. a returning visitor
+  // whose stored token was just resolved on app load.
   useEffect(() => {
     if (user) navigate("/dashboard");
   }, [user, navigate]);
 
+  /**
+   * Form submit handler. AuthContext.signIn stores the JWT and loads the profile; on success this
+   * navigates to /dashboard. On failure it shows a toast and, for the backend's "verify your
+   * email" error, reveals the resend banner.
+   */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -39,6 +61,14 @@ const Login = () => {
     }
   };
 
+  /**
+   * Requests a fresh verification link for the email typed in the form. The page origin is sent
+   * so the backend builds the emailed link against this deployment's URL.
+   * The endpoint answers OK even for unknown or already-verified emails, so the success toast
+   * shows unless the response reports a delivery failure; the response's `error` is not
+   * inspected. When delivery fails the backend returns `dev_verify_url`, and this toast shows
+   * that link so the flow can still be completed without email.
+   */
   const handleResend = async () => {
     setResending(true);
     const { data } = await api.resendVerification(email, window.location.origin);
@@ -57,6 +87,10 @@ const Login = () => {
     });
   };
 
+  /**
+   * Placeholder for "Forgot password?": shows an informational toast only and makes no API call
+   * (api.forgotPassword exists in the client but is not used here).
+   */
   const handleForgotPassword = async () => {
     toast({
       title: "Password reset",

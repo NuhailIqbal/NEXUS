@@ -1,7 +1,14 @@
+/**
+ * Colored pill that shows a status string (e.g. an agent's or automation flow's status) with a
+ * leading dot. The color comes from a lookup of the exact status text; unknown text renders muted.
+ * Purely presentational. Used by AIAgents, AutomationList and FlowEditor.
+ */
 import { cn } from "@/lib/utils";
 
+/** Semantic color families, each mapped to theme tokens in VARIANTS. */
 type Variant = "success" | "muted" | "warning" | "destructive" | "info";
 
+/** Tailwind classes per variant: `wrap` styles the pill, `dot` the indicator inside it. */
 const VARIANTS: Record<Variant, { wrap: string; dot: string }> = {
   success: {
     wrap: "bg-primary/15 text-primary border-primary/30",
@@ -25,6 +32,7 @@ const VARIANTS: Record<Variant, { wrap: string; dot: string }> = {
   },
 };
 
+/** Status text -> variant. Keys are matched exactly (case-sensitive), so they must equal the stored/display status string. */
 const STATUS_MAP: Record<string, Variant> = {
   Active: "success",
   Completed: "success",
@@ -39,6 +47,11 @@ const STATUS_MAP: Record<string, Variant> = {
   Unsuccessful: "destructive",
 };
 
+/**
+ * Renders `status` verbatim inside a pill styled by STATUS_MAP; a status not in the map falls back
+ * to the muted style rather than failing. `className` is appended for layout tweaks (e.g. shrink-0).
+ * Only the "success" dot has the glow and pulse animation.
+ */
 export function StatusBadge({
   status,
   className,

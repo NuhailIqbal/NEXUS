@@ -23,6 +23,13 @@ def _mask_email(email: str) -> str:
 
 @router.get("/me")
 async def my_referrals(user=Depends(get_current_user)):
+    """Return the caller's own referral code and the people they have referred.
+
+    Each referral shows a masked email, its status ('pending' until the referee verifies
+    their email, then 'verified') and timestamps, newest first, plus invited/verified
+    counts. Scoped to the caller's own user id (not the team owner's). `code` is an empty
+    string if no code has been generated for the user yet. Read-only; no credit is involved.
+    """
     uid = user["user_id"]
     profile = supabase.table("profiles").select("referral_code").eq("id", uid).maybe_single().execute().data
     code = (profile or {}).get("referral_code") or ""
@@ -35,12 +42,14 @@ async def my_referrals(user=Depends(get_current_user)):
         .execute().data or []
     )
 
+    # Resolve all referee emails in one query (avoids a lookup per referral row).
     referee_ids = [r["referee_id"] for r in rows]
     email_map: dict[str, str] = {}
     if referee_ids:
         users = supabase.table("users").select("id, email").in_("id", referee_ids).execute().data or []
         email_map = {u["id"]: u["email"] for u in users}
 
+    # Only the masked email is returned; the referrer never receives the raw address.
     items = [{
         "id": r["id"],
         "referee_email": _mask_email(email_map.get(r["referee_id"], "")),

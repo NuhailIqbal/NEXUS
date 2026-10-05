@@ -1,3 +1,9 @@
+/**
+ * Dialog for saving a card off-session using Stripe Elements and a SetupIntent.
+ * Calls api.getStripeConfig (publishable key) and api.createSetupIntent (client secret).
+ * Card data goes straight to Stripe; only the resulting payment method is stored server-side.
+ * Opened from PaymentMethods (billing/payment-methods route).
+ */
 import { useEffect, useMemo, useState } from "react";
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";

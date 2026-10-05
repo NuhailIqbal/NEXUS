@@ -1,3 +1,10 @@
+/**
+ * Four-step wizard dialog for configuring an inbound queue (basics, actions/agents,
+ * smart features, review). Purely client-side: on launch it hands the collected data
+ * to the optional onCreate callback and makes no create API call itself. Only
+ * api.getAgents is called, to extend the agent dropdown. No importer of this
+ * component was found in src/.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   X,
@@ -28,6 +35,7 @@ type Props = {
   onCreate?: (data: InboundQueueData) => void;
 };
 
+/** Wizard form state handed to onCreate when the queue is launched. */
 export type InboundQueueData = {
   name: string;
   welcomeMessage: string;
@@ -40,8 +48,10 @@ export type InboundQueueData = {
   active: boolean;
 };
 
+// Hard-coded placeholder options; not loaded from the phone numbers API.
 const PHONE_NUMBERS = ["13153321045", "13152840720", "18005550199", "14155550101"];
 
+// Built-in agent names always offered; real agent names from the API are appended after them.
 const STATIC_AGENT_OPTIONS = [
   "Blair", "Med Alert", "U65 Health Insurance", "HVAC (Outbound)",
   "Solar Installation", "Solar Cancellation", "Bathroom", "Debt Settlement",
@@ -59,6 +69,10 @@ const STEPS = [
   { title: "Review & Launch", subtitle: "Review and launch your queue" },
 ];
 
+/**
+ * Wizard dialog. Props: open/onOpenChange control visibility; onCreate receives the
+ * InboundQueueData on launch. Closing the dialog by any route resets the wizard.
+ */
 export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props) {
   const [agentOptions, setAgentOptions] = useState<string[]>(STATIC_AGENT_OPTIONS);
 
@@ -86,6 +100,7 @@ export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props
 
   const progress = useMemo(() => ((step + 1) / STEPS.length) * 100, [step]);
 
+  // Restores the first step and the default form values.
   const reset = () => {
     setStep(0);
     setData({
@@ -99,6 +114,7 @@ export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props
     onOpenChange(v);
   };
 
+  // Advances one step; step 0 requires a queue name and an agent before continuing.
   const next = () => {
     if (step === 0 && !data.name.trim()) return toast.error("Queue name is required");
     if (step === 0 && !data.aiAgent) return toast.error("Please assign an AI agent");
@@ -106,6 +122,7 @@ export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props
   };
   const back = () => setStep((s) => Math.max(0, s - 1) as 0 | 1 | 2 | 3);
 
+  // Passes the form data to the parent via onCreate, then closes (and resets) the dialog.
   const launch = () => {
     onCreate?.(data);
     toast.success(`Inbound queue "${data.name}" launched`);
@@ -176,6 +193,7 @@ export function CreateInboundQueueDialog({ open, onOpenChange, onCreate }: Props
   );
 }
 
+/** Card with an icon and title that wraps one group of fields in a wizard step. */
 function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -188,6 +206,7 @@ function Section({ icon, title, children }: { icon: React.ReactNode; title: stri
   );
 }
 
+/** Step 1: queue name, welcome message, inbound number and AI agent selection. */
 function StepBasics({ data, setData, agentOptions }: { data: InboundQueueData; setData: React.Dispatch<React.SetStateAction<InboundQueueData>>; agentOptions: string[] }) {
   return (
     <>
@@ -229,7 +248,9 @@ function StepBasics({ data, setData, agentOptions }: { data: InboundQueueData; s
   );
 }
 
+/** Step 2: pick post-call actions and set the maximum number of active agents (1-50). */
 function StepConfig({ data, setData }: { data: InboundQueueData; setData: React.Dispatch<React.SetStateAction<InboundQueueData>> }) {
+  // Adds the action if absent, removes it if already selected.
   const toggleAction = (a: string) => {
     setData({ ...data, actions: data.actions.includes(a) ? data.actions.filter((x) => x !== a) : [...data.actions, a] });
   };
@@ -283,6 +304,7 @@ function StepConfig({ data, setData }: { data: InboundQueueData; setData: React.
   );
 }
 
+/** Step 3: toggles for warm transfer to human agents and Google Sheets sync. */
 function StepSmart({ data, setData }: { data: InboundQueueData; setData: React.Dispatch<React.SetStateAction<InboundQueueData>> }) {
   return (
     <>
@@ -311,6 +333,7 @@ function StepSmart({ data, setData }: { data: InboundQueueData; setData: React.D
   );
 }
 
+/** Step 4: read-only summary of the choices plus the Active toggle for launch. */
 function StepReview({ data, setData }: { data: InboundQueueData; setData: React.Dispatch<React.SetStateAction<InboundQueueData>> }) {
   return (
     <>
@@ -334,6 +357,7 @@ function StepReview({ data, setData }: { data: InboundQueueData; setData: React.
   );
 }
 
+/** Label/value tile used in the review summary. */
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg bg-muted/40 p-3">

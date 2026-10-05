@@ -1,3 +1,10 @@
+/**
+ * Sign-up page, routed at /register (see App.tsx; linked from the Navbar and marketing CTAs).
+ * Creates an UNVERIFIED account through AuthContext.signUp (POST /auth/register), then swaps the
+ * form for a "check your email" screen; there is no session until the emailed link is opened
+ * (see VerifyEmail). Optionally gates sign-up behind a reCAPTCHA v2 checkbox and forwards a
+ * ?ref=CODE referral code. The screen can re-request the link via api.resendVerification.
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +22,8 @@ import Logo from "@/components/Logo";
 // v2 "I'm not a robot" checkbox — visible widget, single click, reusable-until-submit response.
 const RECAPTCHA_SITE_KEY = ((import.meta as any).env?.VITE_RECAPTCHA_SITE_KEY ?? "").trim();
 
+// Ambient typings for the parts of Google's reCAPTCHA script API used here, plus the global
+// onload callback whose name is passed in the script URL below.
 declare global {
   interface Window {
     grecaptcha?: {
@@ -26,6 +35,15 @@ declare global {
   }
 }
 
+/**
+ * Registration form and the post-registration "check your email" screen.
+ *
+ * Local state: the form fields, `loading` during sign-up, `submitted` (switches to the
+ * confirmation screen), `devVerifyUrl` (fallback verification link shown when the backend could
+ * not send the email) and `resending`.
+ * Notes: `companyName` is collected in the form but is not passed to signUp or the backend. The
+ * 6-character password minimum is enforced only by the browser's native form validation here.
+ */
 const Register = () => {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -38,14 +56,23 @@ const Register = () => {
   const { toast } = useToast();
   const { signUp } = useAuth();
   const [searchParams] = useSearchParams();
+  // Optional ?ref=CODE from a referral link (built on the Referrals dashboard page); passed to
+  // signUp so the backend can record the referral.
   const referralCode = searchParams.get("ref") ?? undefined;
 
+  // The div the reCAPTCHA widget renders into, and the widget id Google returns from render();
+  // that id is needed to read or reset this specific widget.
   const recaptchaContainerRef = useRef<HTMLDivElement>(null);
   const recaptchaWidgetId = useRef<number | null>(null);
 
+  // Loads Google's reCAPTCHA script (once per page) and renders the checkbox into the container.
+  // Does nothing when no site key is configured. The script tag is left in the document on
+  // unmount so later visits reuse it; the onload callback is reassigned on every mount so it
+  // always targets the currently mounted container.
   useEffect(() => {
     if (!RECAPTCHA_SITE_KEY) return;
 
+    /** Renders the widget at most once per mount; a no-op until the container and Google's render() both exist. */
     const renderWidget = () => {
       if (recaptchaWidgetId.current !== null) return; // already rendered (e.g. effect re-ran)
       if (!recaptchaContainerRef.current || !window.grecaptcha?.render) return;
@@ -76,12 +103,19 @@ const Register = () => {
     document.body.appendChild(script);
   }, []);
 
+  /**
+   * Form submit handler. Checks the required fields and the reCAPTCHA response client-side, then
+   * calls signUp (POST /auth/register). On success it shows the confirmation screen; on failure
+   * it shows the error in a toast and resets the captcha.
+   */
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName || !email || !password) {
       toast({ title: "Please fill in all required fields", variant: "destructive" });
       return;
     }
+    // getResponse() returns an empty string until the checkbox is ticked. With no site key
+    // configured no token is sent, and the backend skips the captcha check as well.
     const recaptchaToken = RECAPTCHA_SITE_KEY
       ? window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined)
       : undefined;
@@ -90,17 +124,30 @@ const Register = () => {
       return;
     }
     setLoading(true);
+    // signUp resolves with an error string, or with pending: true on success. The destructured
+    // devVerifyUrl shadows the state value of the same name; it is the fallback link returned
+    // when the verification email could not be sent.
     const { error, pending, devVerifyUrl } = await signUp(email, password, fullName, recaptchaToken, referralCode);
     setLoading(false);
     if (error) {
       toast({ title: "Registration failed", description: error, variant: "destructive" });
+      // A reCAPTCHA response token can be verified only once, so the widget is reset to make the
+      // user solve a fresh challenge before retrying.
       window.grecaptcha?.reset(recaptchaWidgetId.current ?? undefined);
     } else if (pending) {
+      // The account exists but is unverified and no session was created, so show the
+      // check-your-email screen instead of redirecting.
       setDevVerifyUrl(devVerifyUrl);
       setSubmitted(true);
     }
   };
 
+  /**
+   * "Resend verification email" on the confirmation screen (POST /auth/resend-verification).
+   * The page origin is sent so the emailed link points at this deployment. If the backend returns
+   * a `dev_verify_url` it replaces the fallback link shown on screen; `email_sent === false`
+   * means delivery failed and triggers the error toast. The response's `error` is not inspected.
+   */
   const handleResend = async () => {
     setResending(true);
     const { data } = await api.resendVerification(email, window.location.origin);
@@ -117,6 +164,7 @@ const Register = () => {
     toast({ title: "Verification email sent", description: `We re-sent the link to ${email}.` });
   };
 
+  // Registration succeeded: this screen replaces the form until the user leaves the page.
   if (submitted) {
     return (
       <div className="min-h-screen bg-background">

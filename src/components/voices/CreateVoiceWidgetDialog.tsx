@@ -1,3 +1,8 @@
+/**
+ * Four-step wizard dialog for creating a voice widget: pick agent, configure, test preview, confirm.
+ * Loads agents with api.getAgents the first time it opens; it does not create the widget itself
+ * but hands the collected data to onCreate (VoiceWidgets page performs the API call).
+ */
 import { useState, useEffect } from "react";
 import { Phone, X, ChevronLeft, ChevronRight, Check, Globe, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -16,6 +21,7 @@ interface CreateVoiceWidgetDialogProps {
   onCreate?: (data: WidgetData) => void;
 }
 
+/** Payload passed to onCreate once the wizard is confirmed. */
 interface WidgetData {
   agentId: string;
   agentName: string;
@@ -36,8 +42,13 @@ type Agent = {
   [key: string]: any;
 };
 
+/** Wizard step titles; the index is the `step` state value. */
 const STEPS = ["Select AI Agent", "Configure Your Call Widget", "Test Your Call Widget", "Complete"];
 
+/**
+ * Controlled wizard dialog (open/onOpenChange from the parent). Holds all form state
+ * locally and resets it whenever the dialog is closed.
+ */
 export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: CreateVoiceWidgetDialogProps) {
   const [step, setStep] = useState(0);
   const [search, setSearch] = useState("");
@@ -57,6 +68,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
   const [primaryColor, setPrimaryColor] = useState("#9BE3BF");
   const [autoOpen, setAutoOpen] = useState(false);
 
+  // Agents are fetched lazily on first open and cached for later opens.
   useEffect(() => {
     if (open && agents.length === 0) {
       setAgentsLoading(true);
@@ -70,6 +82,7 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
   const filtered = agents.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()));
   const selectedAgent = agents.find((a) => a.id === agentId);
 
+  /** Restores every wizard field to its default (the primary color is intentionally left as is). */
   const reset = () => {
     setStep(0);
     setSearch("");
@@ -85,19 +98,23 @@ export function CreateVoiceWidgetDialog({ open, onOpenChange, onCreate }: Create
     setAutoOpen(false);
   };
 
+  /** Dialog open-state handler: resets the wizard when closing, then notifies the parent. */
   const handleClose = (next: boolean) => {
     if (!next) reset();
     onOpenChange(next);
   };
 
+  /** Advances one step, blocking on a missing agent (step 0) or widget name (step 1). */
   const next = () => {
     if (step === 0 && !agentId) return toast.error("Please select an AI agent");
     if (step === 1 && !widgetName.trim()) return toast.error("Widget name is required");
     setStep((s) => Math.min(3, s + 1));
   };
 
+  /** Goes back one step without validation. */
   const prev = () => setStep((s) => Math.max(0, s - 1));
 
+  /** Passes the collected settings to onCreate, then closes (and resets) the dialog. */
   const handleCreate = () => {
     if (!selectedAgent) return;
     onCreate?.({

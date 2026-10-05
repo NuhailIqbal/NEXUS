@@ -1,3 +1,8 @@
+/**
+ * Shell for the /dashboard/billing section: page title, tab bar, and an Outlet
+ * that renders the active child route (overview, transactions, call costs,
+ * payment methods, promotions). Routes are declared in App.tsx.
+ */
 import { NavLink, Outlet } from "react-router-dom";
 
 // Path-based tabs (not ?tab=) on purpose: the Stripe top-up return strips the query

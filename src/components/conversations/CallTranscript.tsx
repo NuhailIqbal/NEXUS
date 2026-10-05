@@ -1,7 +1,14 @@
+/**
+ * Chat-style call transcript. Renders structured turns (or a parsed flat string),
+ * highlights the turn matching the audio position, and lets the user click a turn to seek.
+ * Pure presentational: no API calls. Used in the conversation detail dialog
+ * (pages/dashboard/Conversations.tsx), wired to CallAudioPlayer.
+ */
 import { useEffect, useMemo, useRef } from "react";
 import { Bot, User, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/** One transcript turn; `at`/`dur` are optional because older or flat transcripts have no timing. */
 export type TranscriptMessage = {
   role: "assistant" | "user" | "tool" | "system" | string;
   text: string;
@@ -20,6 +27,7 @@ type Props = {
   className?: string;
 };
 
+/** Formats seconds as m:ss. */
 const fmt = (s: number) => {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -28,6 +36,11 @@ const fmt = (s: number) => {
 
 // Parse VAPI's flat transcript ("AI:"/"User:" prefixed) into turns when the
 // structured messages array isn't available (older calls).
+/**
+ * Splits a flat transcript on speaker labels (AI/Assistant/Bot vs User/Customer/Caller)
+ * into turns with role "assistant" or "user". Text with no recognised label becomes a
+ * single assistant turn; blank text yields no turns. Parsed turns carry no timing.
+ */
 const parseFlat = (transcript: string): TranscriptMessage[] => {
   const turns: TranscriptMessage[] = [];
   const re = /(^|\n)\s*(AI|Assistant|Bot|User|Customer|Caller)\s*:\s*/gi;
@@ -41,6 +54,7 @@ const parseFlat = (transcript: string): TranscriptMessage[] => {
   if (!parts.length) {
     return transcript.trim() ? [{ role: "assistant", text: transcript.trim() }] : [];
   }
+  // Each turn runs from its label to the last newline before the next label.
   for (let i = 0; i < parts.length; i++) {
     const end = i + 1 < parts.length ? transcript.lastIndexOf("\n", parts[i + 1].start) : transcript.length;
     const text = transcript.slice(parts[i].start, end > parts[i].start ? end : undefined).trim();
@@ -49,6 +63,12 @@ const parseFlat = (transcript: string): TranscriptMessage[] => {
   return turns;
 };
 
+/**
+ * Props: `messages` (preferred structured turns), `transcript` (flat-string fallback),
+ * `activeTime` (audio position in seconds), `onSeek` (called with a turn's start time
+ * on click; turns without `at` are not clickable). Tool-call turns render as centered
+ * pills and "system" turns are hidden. The active turn is scrolled into view.
+ */
 const CallTranscript = ({ messages, transcript, activeTime = 0, onSeek, className }: Props) => {
   const turns = useMemo<TranscriptMessage[]>(() => {
     if (messages && messages.length) return messages.filter((m) => m.role !== "system");
@@ -56,7 +76,8 @@ const CallTranscript = ({ messages, transcript, activeTime = 0, onSeek, classNam
     return [];
   }, [messages, transcript]);
 
-  // Which turn is "active" given the current playback time.
+  // Which turn is "active" given the current playback time: the last timed turn
+  // starting at or before it (turns are assumed ordered by `at`).
   const activeIdx = useMemo(() => {
     let idx = -1;
     for (let i = 0; i < turns.length; i++) {
@@ -68,6 +89,7 @@ const CallTranscript = ({ messages, transcript, activeTime = 0, onSeek, classNam
     return idx;
   }, [turns, activeTime]);
 
+  // Keep the active turn visible inside the scrolling transcript container as audio plays.
   const activeRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });

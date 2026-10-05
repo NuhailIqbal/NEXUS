@@ -1,3 +1,8 @@
+/**
+ * Dialog to configure auto recharge (enabled flag, low-balance threshold, recharge amount).
+ * Reads initial values from the BillingStatus prop, checks api.getPaymentMethods for a saved card,
+ * and saves via api.updateAutoRecharge. Rendered by BillingOverview.
+ */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader2 } from "lucide-react";

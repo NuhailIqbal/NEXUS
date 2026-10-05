@@ -1,3 +1,9 @@
+/**
+ * Names of the voices an agent can be assigned, split into the Vapi built-in set and the
+ * ElevenLabs Urdu set. `ALL_VOICE_NAMES` feeds the voice dropdown in
+ * pages/dashboard/CreateAIAgent.tsx and the voice count in lib/marketing-facts.ts. The backend
+ * (backend/services/vapi_client.py) resolves these names to real provider voice ids.
+ */
 // Vapi's built-in voice catalog (provider="vapi") — English-only. Single source of
 // truth: CreateAIAgent.tsx, AIAgents.tsx's edit form, and AIVoices.tsx all read from
 // here so their voice lists can't silently drift from what the backend

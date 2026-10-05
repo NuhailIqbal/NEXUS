@@ -15,6 +15,11 @@ Two rules that matter more than anything else here:
 Results are cached per user in `dnc_check_cache` for CACHE_TTL_DAYS, which also gives an
 audit trail of what was screened when.
 """
+# Entry points: check_number (the dial-time gate, used by routers/telephony.py for single and
+# campaign calls, services/automation_engine.py and services/callback_scheduler.py),
+# cache_get_many + normalize_phone (batch pre-warm for campaigns) and
+# find_whitelist_integration (the /integrations/dnc-status endpoint). Reads `integrations`
+# for the credentials; reads and writes `dnc_check_cache`.
 
 import asyncio
 import logging
@@ -27,11 +32,18 @@ from services.encryption import decrypt_config
 
 logger = logging.getLogger(__name__)
 
+# Provider lookup endpoint (a GET with the user's credentials in the query string).
+# BASE_URL and DEFAULT_SUPPRESSION_TYPE are also reused by services/integration_test.py.
 BASE_URL = "https://hooks.whitelistdata.com/api/DNCAndLitigationSuppression"
 
+# Value of the `provider` marker stored in the encrypted integration config; this is how a
+# WhitelistData row is told apart from other integrations (see _get_whitelist_config).
 PROVIDER_KEY = "whitelistdata"
+# Suppression list(s) to screen against when the user's config doesn't set its own `type`.
 DEFAULT_SUPPRESSION_TYPE = "DNCAndLitigation"
+# How long a cached verdict stays fresh before the number is screened again.
 CACHE_TTL_DAYS = 30
+# Per-request timeout in seconds for a provider call.
 REQUEST_TIMEOUT = 10.0
 
 # The provider is a third-party dependency in the hot path of dialing. Cap how hard we hit
@@ -56,6 +68,8 @@ def normalize_phone(raw: str | None) -> str | None:
     digits = "".join(ch for ch in (raw or "") if ch.isdigit())
     if not digits:
         return None
+    # Only an 11-digit number starting with 1 is treated as US +1; any other length
+    # (international or malformed) is kept as-is.
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
     return digits
@@ -103,6 +117,8 @@ async def find_whitelist_integration(user_id: str) -> dict | None:
     on via the normal PATCH /integrations/{id} endpoint, without duplicating the
     provider-detection logic that identifies "this row is a WhitelistData integration."
     """
+    # Same most-recently-updated-first ordering as _get_whitelist_config, so both functions
+    # pick the same row when a user has several.
     result = (
         supabase.table("integrations")
         .select("id, status, config_encrypted")
@@ -126,6 +142,8 @@ async def find_whitelist_integration(user_id: str) -> dict | None:
 
 def _cache_get(user_id: str, phone_key: str) -> bool | None:
     """Cached suppression verdict, or None on miss/stale. Never raises."""
+    # Stale rows are ignored here, not deleted: the next _cache_put for the same number
+    # overwrites them in place.
     cutoff = (datetime.now(timezone.utc) - timedelta(days=CACHE_TTL_DAYS)).isoformat()
     try:
         res = (
@@ -158,6 +176,8 @@ def cache_get_many(user_id: str, phone_keys: list[str]) -> dict[str, bool]:
             .gt("checked_at", cutoff)
             .execute()
         )
+        # Keys missing from the result are cache misses. On a read error the empty dict makes
+        # every number a miss, so each one is screened by the provider instead.
         return {r["phone_key"]: bool(r["suppressed"]) for r in (res.data or [])}
     except Exception:
         logger.exception("DNC cache batch read failed")
@@ -166,6 +186,8 @@ def cache_get_many(user_id: str, phone_keys: list[str]) -> dict[str, bool]:
 
 def _cache_put(user_id: str, phone_key: str, suppressed: bool, raw: dict | None) -> None:
     """Record a verdict. Never raises — a cache write must not break a call decision."""
+    # Upsert on the UNIQUE (user_id, phone_key) constraint: re-screening a number refreshes its
+    # verdict and checked_at instead of adding a second row.
     try:
         supabase.table("dnc_check_cache").upsert(
             {
@@ -205,6 +227,8 @@ def _parse_found(body: str) -> bool | None:
     if isinstance(parsed, bool):
         return parsed
     if isinstance(parsed, dict):
+        # The real key name isn't documented, so accept a few plausible spellings; the first
+        # one present decides the verdict.
         for key in ("found", "Found", "result", "value"):
             if key in parsed:
                 val = parsed[key]
@@ -226,6 +250,9 @@ async def _lookup(config: dict, phone_key: str) -> tuple[bool | None, dict | Non
     block a call the user is entitled to make.
     """
     global _logged_sample
+    # code / secret / apiKey are the user's own provider credentials from the decrypted
+    # integration config. return_key=found requests the "found" flag (as in the provider's
+    # sample); `type` picks which suppression list(s) to screen.
     params = {
         "code": config.get("code", ""),
         "secret": config.get("secret", ""),
@@ -237,6 +264,8 @@ async def _lookup(config: dict, phone_key: str) -> tuple[bool | None, dict | Non
 
     for attempt in (1, 2):
         try:
+            # The concurrency slot is held only for the HTTP call itself, so the back-off
+            # sleep before a retry doesn't occupy one of the limited slots.
             async with _semaphore:
                 async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
                     r = await client.get(BASE_URL, params=params)
@@ -250,6 +279,7 @@ async def _lookup(config: dict, phone_key: str) -> tuple[bool | None, dict | Non
                 )
                 return None, None
 
+            # Any other 4xx (bad credentials, bad request) won't change on retry, so give up now.
             if r.status_code >= 400:
                 logger.warning(
                     "WhitelistData rejected the request: %s %s", r.status_code, r.text[:200]
@@ -264,8 +294,12 @@ async def _lookup(config: dict, phone_key: str) -> tuple[bool | None, dict | Non
             if found is None:
                 logger.warning("Could not parse WhitelistData response: %r", r.text[:200])
                 return None, None
+            # `raw` is stored in dnc_check_cache.raw_response as the audit record; the body is
+            # truncated to keep that row small.
             return found, {"body": r.text[:500], "status": r.status_code}
 
+        # Any exception raised above (timeout, connection error, ...) is retried once, like
+        # 429/5xx; after the second failure the check is reported as failed (None).
         except Exception as e:
             if attempt == 1:
                 await asyncio.sleep(1.0)
@@ -297,6 +331,8 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
             "source": "api",
         }
 
+    # Compare against None, not truthiness: a cached False is a real verdict ("screened and
+    # clear") and must not trigger a provider call.
     if cached is None:
         cached = _cache_get(user_id, phone_key)
     if cached is not None:
@@ -307,6 +343,8 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
         }
 
     found, raw = await _lookup(config, phone_key)
+    # A failed lookup is not cached, so the next attempt re-queries the provider
+    # instead of replaying an outage as if it were a verdict.
     if found is None:
         return {
             "allowed": False,

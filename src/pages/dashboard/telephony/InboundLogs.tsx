@@ -1,3 +1,8 @@
+/**
+ * Inbound Call Logs page (route /dashboard/telephony/inbound-logs). Server-side filtered
+ * and paginated table of inbound conversations (api.getConversations with direction=inbound),
+ * summary stats (api.getConversationStats), and a detail dialog with recording and transcript.
+ */
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { PhoneIncoming, Loader2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,6 +39,7 @@ type CallLog = {
   sentiment?: string;
 };
 
+/** Maps a call status to the Tailwind classes for its badge; unknown statuses get a muted style. */
 const colorFor = (s: string) =>
   s === "Completed" ? "bg-success/15 text-success" :
   s === "Failed" || s === "Unsuccessful" ? "bg-destructive/15 text-destructive" :
@@ -51,6 +57,7 @@ const COLUMNS: { key: ColumnKey; label: string }[] = [
   { key: "call_time", label: "Time" },
 ];
 
+/** Returns the display text of a column for a call; used for client-side sorting of the current page. */
 function textFor(c: CallLog, key: ColumnKey): string {
   if (key === "contact_name") return c.contact_name || c.phone || "Unknown";
   if (key === "duration") return c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "");
@@ -60,6 +67,11 @@ function textFor(c: CallLog, key: ColumnKey): string {
 const STATUS_OPTIONS = ["Initiated", "Ringing", "In Progress", "Completed", "Failed", "Unsuccessful"];
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Page component. Filtering and pagination happen on the server (query params);
+ * sorting is client-side and only reorders the rows of the current page. The list
+ * auto-refreshes every 30 seconds without showing the loading spinner.
+ */
 const InboundLogs = () => {
   const [logs, setLogs] = useState<CallLog[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -70,6 +82,8 @@ const InboundLogs = () => {
   const [playerTime, setPlayerTime] = useState(0);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const playerRef = useRef<CallAudioPlayerHandle | null>(null);
+  // Id of the call whose dialog is open; async responses compare against it to discard
+  // results that arrive after the user closed or switched to another call.
   const openIdRef = useRef<string | null>(null);
 
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
@@ -80,6 +94,7 @@ const InboundLogs = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Cycles a column through ascending, descending, then unsorted; clicking a new column starts ascending.
   const toggleSort = (key: ColumnKey) => {
     if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
     if (sortDir === "asc") { setSortDir("desc"); return; }
@@ -87,12 +102,16 @@ const InboundLogs = () => {
   };
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
+  // Filters are debounced (400 ms) so typing does not fire a request per keystroke.
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedFilters(filters), 400);
     return () => clearTimeout(t);
   }, [filters]);
 
+  // Fetches the current page of inbound calls plus overall inbound stats. With silent=true
+  // (background polling) the full-page loading state is not toggled. The call_time filter is
+  // not sent to the server. Total count comes from the response meta.
   const fetchLogs = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     const p = new URLSearchParams();
@@ -123,8 +142,10 @@ const InboundLogs = () => {
     return () => clearInterval(t);
   }, [fetchLogs]);
 
+  // Return to the first page whenever the result set changes shape.
   useEffect(() => { setPage(1); }, [debouncedFilters, pageSize]);
 
+  // Clamp the page if the total shrinks (e.g. after a refresh) below the current page.
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
@@ -139,6 +160,12 @@ const InboundLogs = () => {
     });
   }, [logs, sortKey, sortDir]);
 
+  /**
+   * Opens the detail dialog for a call. Fetches a playable recording URL (only if the call
+   * has a recording) and, when the list row lacks transcript messages, lazily loads the
+   * transcript/summary via api.getConversationTranscript and merges it into the open call.
+   * Responses are ignored if another call was opened in the meantime.
+   */
   const openDetail = async (log: CallLog) => {
     setDetail(log);
     setPlayerTime(0);

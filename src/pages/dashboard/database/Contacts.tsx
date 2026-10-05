@@ -1,3 +1,9 @@
+/**
+ * Dashboard "Contacts" page: a filterable, sortable, paginated table of all contacts.
+ * Supports add (AddContactDialog), view, edit, delete and CSV import.
+ * API: GET/POST /contacts, PATCH/DELETE /contacts/:id, GET/POST /lists (via `api`).
+ * Rendered from src/App.tsx under the dashboard layout.
+ */
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +33,7 @@ import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
+/** Contact row as shown in the UI (API payload normalised; `list` is the resolved list name). */
 type Contact = {
   id: string;
   name: string;
@@ -54,6 +61,11 @@ const COLUMNS: { key: ColumnKey; label: string }[] = [
 const STATUS_OPTIONS = ["Active", "Inactive", "Pending"];
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Contacts page component. Holds the loaded contacts and lists, table sort/filter/pagination
+ * state, and the state for the import, view and edit dialogs. Filtering, sorting and
+ * pagination are all done client-side on the full contact list.
+ */
 const Contacts = () => {
   const [open, setOpen] = useState(false);
   const [sortKey, setSortKey] = useState<ColumnKey | null>(null);
@@ -74,6 +86,11 @@ const Contacts = () => {
   const [editTarget, setEditTarget] = useState<Contact | null>(null);
   const [editForm, setEditForm] = useState<Partial<Contact>>({});
 
+  /**
+   * Loads contacts and lists in parallel and normalises them into `contacts` / `lists` state.
+   * Contacts only carry a list_id, so list names are resolved here through a lookup map.
+   * Called on mount and after every mutation to refresh the table.
+   */
   const fetchContacts = useCallback(async () => {
     const [contactsRes, listsRes] = await Promise.all([api.getContacts(), api.getLists()]);
     if (contactsRes.error) {
@@ -105,11 +122,13 @@ const Contacts = () => {
     fetchContacts();
   }, [fetchContacts]);
 
+  /** Cycles a column's sort: ascending, then descending, then unsorted. Switching columns starts ascending. */
   const toggleSort = (key: ColumnKey) => {
     if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
     if (sortDir === "asc") { setSortDir("desc"); return; }
     setSortKey(null);
   };
+  /** Updates the filter text (or selected value) for a single column. */
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
   const filtered = useMemo(() => {
@@ -136,14 +155,17 @@ const Contacts = () => {
     });
   }, [filtered, sortKey, sortDir]);
 
+  // Go back to the first page whenever the result set or page size changes.
   useEffect(() => { setPage(1); }, [filters, pageSize]);
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  // Clamp the page when rows disappear (e.g. after a delete) so we never show an empty out-of-range page.
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   const visibleContacts = useMemo(
     () => sorted.slice((page - 1) * pageSize, page * pageSize),
     [sorted, page, pageSize]
   );
 
+  /** Deletes a contact via the API, then reloads the table. Shows a toast either way. */
   const handleDelete = async (c: Contact) => {
     const { error } = await api.deleteContact(c.id);
     if (error) {
@@ -154,11 +176,16 @@ const Contacts = () => {
     fetchContacts();
   };
 
+  /** Opens the edit dialog and seeds the form with the contact's current values. */
   const openEdit = (c: Contact) => {
     setEditTarget(c);
     setEditForm({ name: c.name, phone: c.phone, email: c.email, status: c.status, list_id: c.list_id });
   };
 
+  /**
+   * Saves the edit form with PATCH /contacts/:id, then closes the dialog and reloads.
+   * Unedited fields fall back to the original values; an empty list selection sends null (unassign).
+   */
   const saveEdit = async () => {
     if (!editTarget) return;
     const patch: Record<string, any> = {
@@ -178,6 +205,13 @@ const Contacts = () => {
     fetchContacts();
   };
 
+  /**
+   * Imports contacts from a CSV file, optionally into an existing or newly created list
+   * (chosen in the import dialog). Rows are created one by one with POST /contacts, so a
+   * failed row is silently left out of the success count. Rows without a phone are skipped.
+   * The parser is a naive comma split: quoted values containing commas are not supported
+   * (the import dialog tells users this).
+   */
   const handleImportCsv = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".csv")) {
       toast.error("Please upload a .csv file. In Excel: Save As → CSV (Comma delimited).");

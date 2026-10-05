@@ -1,3 +1,18 @@
+"""Admin portal API, mounted under /admin and used by the /nexus-admin dashboard.
+
+Entry points: POST /admin/login exchanges the server-side admin credentials for a
+short-lived admin JWT; every other route is guarded by `get_admin_user`, which reads that
+token from the X-Admin-Auth header. The routes cover user management (create, edit billing
+flags, wallet adjustment, access toggle, impersonation, deletion), platform-wide listings
+and reports (agents, phone numbers, referrals, payments, revenue, users) and promo controls
+(signup bonus settings and redeemable promo codes).
+
+Reads and writes the users, profiles, billing, ai_agents, conversations, phone_numbers,
+referrals, platform_settings, promo_codes, credit_grants and wallet_transactions tables
+through the `supabase` query shim (db_pg.py). The only external service it calls is VAPI
+(services.vapi_client), and only to clean up a deleted user's remote resources. Called
+from the admin frontend (src/pages/dashboard/Admin.tsx via src/services/api.ts).
+"""
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_admin_user
@@ -16,16 +31,24 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
 def _admin_email_map():
+    """Return {user_id (str): email} for every row in the users table (one query).
+
+    Used to attach owner emails to platform-wide listings and reports."""
     auth_users = supabase.auth.admin.list_users()
     return {str(u.id): u.email for u in auth_users}
 
 
 def _parse_dt(value):
+    """Best-effort conversion of a DB value to a datetime; None if empty or unparseable.
+
+    Accepts datetime objects (naive ones are assumed to be UTC) and ISO-8601 strings."""
     if not value:
         return None
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     try:
+        # A trailing 'Z' is rewritten to +00:00 because datetime.fromisoformat rejects
+        # it before Python 3.11.
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except Exception:
         return None
@@ -34,12 +57,15 @@ def _parse_dt(value):
 def _day_buckets(days: int):
     """Return (ordered day keys, dict initialised to 0) for the last `days` days."""
     now = datetime.now(timezone.utc)
+    # Midnight (UTC) of the oldest day, so buckets align to UTC calendar days and today
+    # is the last bucket.
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     keys = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
     return keys, {k: 0 for k in keys}
 
 
 class AdminLogin(BaseModel):
+    """Request body for POST /admin/login; checked against the server's admin env settings."""
     username: str
     password: str
 
@@ -56,6 +82,9 @@ async def admin_login(body: AdminLogin):
     if not settings.verify_admin_login(body.username, body.password):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
     now = int(time.time())
+    # `adm: True` is the claim get_admin_user requires. The token is signed with the same
+    # HS256 secret as user session tokens, but user tokens never carry `adm`, so they
+    # cannot pass the admin gate. Lifetime is 12 hours.
     token = jwt.encode(
         {"sub": body.username, "adm": True, "iat": now, "exp": now + 60 * 60 * 12},
         settings.active_jwt_secret,
@@ -65,6 +94,7 @@ async def admin_login(body: AdminLogin):
 
 
 class UserUpdate(BaseModel):
+    """Partial update of a user's billing row; only fields that are not None are applied."""
     status: Optional[str] = None
     is_active: Optional[bool] = None
     rate_per_minute: Optional[float] = None
@@ -74,6 +104,7 @@ class UserUpdate(BaseModel):
 
 
 class AdminUserCreate(BaseModel):
+    """Request body for POST /admin/users (admin-created, pre-verified account)."""
     email: str
     password: str
     full_name: Optional[str] = None
@@ -96,6 +127,8 @@ async def create_user(body: AdminUserCreate, admin=Depends(get_admin_user)):
     if existing.data:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
 
+    # Inserted straight into the users table. Setting email_confirmed_at is what lets this
+    # account pass the login-time email-verification check right away.
     row = {
         "email": email,
         "encrypted_password": _hash_password(body.password),
@@ -107,6 +140,9 @@ async def create_user(body: AdminUserCreate, admin=Depends(get_admin_user)):
     if not user:
         raise HTTPException(status_code=500, detail="Failed to create user")
 
+    # Create the profile + billing rows, then grant the welcome bonus immediately (for
+    # self-registered users it waits for email verification). _grant_signup_promo does
+    # nothing if promos are disabled or the amount is 0, and never grants a second promo.
     _provision_user_rows(user["id"], body.full_name)
     _grant_signup_promo(user["id"])
 
@@ -115,6 +151,10 @@ async def create_user(body: AdminUserCreate, admin=Depends(get_admin_user)):
 
 @router.get("/users")
 async def list_users(admin=Depends(get_admin_user)):
+    """List every user with profile, billing state and usage counts, newest signups first.
+
+    Admin only, read-only. A user without a billing row is reported with defaults (status
+    "trial", active, default per-minute rate and cost multiplier)."""
     auth_users = supabase.auth.admin.list_users()
     email_map = {str(u.id): u.email for u in auth_users}
     user_ids = list(email_map.keys())
@@ -133,6 +173,8 @@ async def list_users(admin=Depends(get_admin_user)):
     billing_rows = supabase.table("billing").select("*").in_("user_id", user_ids).execute()
     billing_map = {b["user_id"]: b for b in (billing_rows.data or [])}
 
+    # One COUNT query per user (not a grouped query), so this endpoint's cost grows
+    # linearly with the number of users.
     conversation_counts = {}
     for uid in user_ids:
         result = (
@@ -170,21 +212,27 @@ async def list_users(admin=Depends(get_admin_user)):
             "stripe_customer_id": b.get("stripe_customer_id"),
         })
 
+    # created_at comes from the profile; users with no profile have "" and sort last.
     users.sort(key=lambda u: u.get("created_at", ""), reverse=True)
     return {"data": users, "error": None}
 
 
 @router.get("/users/{user_id}")
 async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
+    """Detail view for one user: profile (with email), billing row, agents, the 20 most
+    recent conversations and total/inbound/outbound call counts. Admin only, read-only."""
     profile_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
     profile_data = profile_res.data[0] if profile_res.data else {}
 
+    # The email lives in the users table, not in profiles. A failed lookup yields a blank
+    # email instead of failing the whole detail page.
     try:
         auth_user = supabase.auth.admin.get_user_by_id(user_id)
         profile_data["email"] = auth_user.user.email if auth_user.user else ""
     except Exception:
         profile_data["email"] = ""
 
+    # A user with no profiles row still gets an id so the response shape stays stable.
     if not profile_data.get("id"):
         profile_data["id"] = user_id
 
@@ -198,6 +246,8 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
         .execute()
     )
 
+    # count="exact" counts all matching rows regardless of .limit(20), so
+    # total_conversations is the full total while only the 20 newest rows are returned.
     conversations = (
         supabase.table("conversations")
         .select("id, direction, status, duration, created_at", count="exact")
@@ -239,6 +289,13 @@ async def get_user_detail(user_id: str, admin=Depends(get_admin_user)):
 
 @router.patch("/users/{user_id}")
 async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_user)):
+    """Update a user's billing row (status, is_active, rate, multiplier, total_charges,
+    balance), creating the row if it does not exist, and return the refreshed row.
+
+    Admin only. Returns data=None with an error message if no fields were supplied. Note
+    that `balance` only writes the cached billing.balance column: the real balance is
+    derived from credit_grants and re-synced on the next read, so use
+    POST /users/{user_id}/balance to actually add or remove funds."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -246,6 +303,7 @@ async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_us
     existing = supabase.table("billing").select("id").eq("user_id", user_id).execute()
     has_row = bool(existing.data)
 
+    # Manual upsert: a user may not have a billing row yet.
     if has_row:
         supabase.table("billing").update(updates).eq("user_id", user_id).execute()
     else:
@@ -264,6 +322,9 @@ async def delete_user(user_id: str, admin=Depends(get_admin_user)):
     row — every user-owned table cascades via ON DELETE CASCADE.
     """
     # Best-effort: remove the user's VAPI assistants, transfer tools and phone numbers.
+    # Skipped when no VAPI key is configured. Each VAPI call is wrapped separately and its
+    # errors are swallowed on purpose: a remote failure (already deleted, API down) must
+    # not prevent the local account from being deleted.
     if settings.vapi_api_key:
         try:
             agents = supabase.table("ai_agents").select("vapi_assistant_id, transfer_tool_id").eq("user_id", user_id).execute()
@@ -319,6 +380,7 @@ async def impersonate_user(user_id: str, admin=Depends(get_admin_user)):
     from routers.auth import _issue_token  # local import avoids any import cycle
 
     auth_user = supabase.auth.admin.get_user_by_id(user_id)
+    # For an unknown id the shim returns a namespace whose .user is None (no exception).
     if not auth_user or not getattr(auth_user, "user", None):
         raise HTTPException(status_code=404, detail="User not found")
     email = auth_user.user.email or ""
@@ -345,6 +407,8 @@ async def impersonate_user(user_id: str, admin=Depends(get_admin_user)):
 
 
 class BalanceAdjust(BaseModel):
+    """Request body for POST /users/{user_id}/balance: a signed dollar amount (negative
+    removes funds) and an optional note recorded in the wallet ledger."""
     amount: float
     reason: Optional[str] = None
 
@@ -360,6 +424,10 @@ async def adjust_balance(user_id: str, body: BalanceAdjust, admin=Depends(get_ad
     if amount == 0:
         raise HTTPException(status_code=400, detail="Amount must be non-zero")
     note = body.reason or "Admin balance adjustment"
+    # A positive amount creates a new credit grant; a negative one is consumed from the
+    # user's existing grants. debit_balance floors the balance at 0, so a removal larger
+    # than the balance debits less than requested, yet `added` below still echoes the
+    # requested amount.
     if amount > 0:
         new_balance = credit_balance(user_id, amount, "admin", note)
     else:
@@ -369,9 +437,14 @@ async def adjust_balance(user_id: str, body: BalanceAdjust, admin=Depends(get_ad
 
 @router.post("/users/{user_id}/toggle-access")
 async def toggle_access(user_id: str, admin=Depends(get_admin_user)):
+    """Flip billing.is_active for a user (creating the billing row if missing) and return
+    the new value. Admin only. An inactive account is blocked from placing calls and from
+    account-building actions such as creating agents."""
     existing = supabase.table("billing").select("is_active").eq("user_id", user_id).execute()
     has_row = bool(existing.data)
 
+    # A user with no billing row counts as active (the default), so the first toggle
+    # disables them.
     current = existing.data[0].get("is_active", True) if has_row else True
     new_val = not current
 
@@ -410,6 +483,7 @@ async def list_all_agents(admin=Depends(get_admin_user)):
         uid = a.get("user_id")
         a["owner_email"] = email_map.get(uid, "")
         a["owner_name"] = name_map.get(uid, "")
+        # synced: the agent has a matching assistant on the VAPI side.
         a["synced"] = bool(a.get("vapi_assistant_id"))
 
     return {"data": rows, "error": None}
@@ -466,6 +540,8 @@ async def list_all_phone_numbers(admin=Depends(get_admin_user)):
         n["owner_number_count"] = counts.get(uid, 0)
         # Effective monthly fee: Twilio is billed $3/mo; VAPI numbers are free.
         n["monthly_cost"] = PHONE_NUMBER_MONTHLY_COST if (n.get("provider") or "").lower() == "twilio" else 0.0
+        # days_left is whole days until the next renewal (floored); it goes negative once
+        # the renewal date has passed. Both fields are None when there is no billing date.
         expires = _parse_dt(n.get("next_billing_at"))
         if expires:
             n["expires_at"] = expires.isoformat()
@@ -500,6 +576,7 @@ async def admin_payments(admin=Depends(get_admin_user)):
         })
     per_user.sort(key=lambda x: x["total_charges"], reverse=True)
 
+    # The 30 most recent calls that were actually charged (call_cost > 0).
     calls = (
         supabase.table("conversations")
         .select("user_id, phone, contact_name, direction, duration, call_cost, call_time")
@@ -522,12 +599,19 @@ async def admin_payments(admin=Depends(get_admin_user)):
 @router.get("/revenue")
 async def admin_revenue(admin=Depends(get_admin_user)):
     """Usage revenue + a 30-day usage-revenue trend."""
+    # Loads every conversation row and aggregates in Python (no SQL GROUP BY), so cost
+    # scales with total call volume.
     convos = supabase.table("conversations").select("call_cost, call_time").execute().data or []
     billing_rows = supabase.table("billing").select("total_charges").execute().data or []
 
+    # usage_revenue sums per-call charges; total_charges sums the running counters on the
+    # billing rows, which also include one-off charges such as phone-number monthly fees
+    # and any manual admin edits, so the two figures can differ.
     usage_revenue = sum(float(c.get("call_cost") or 0) for c in convos)
     total_charges = sum(float(b.get("total_charges") or 0) for b in billing_rows)
 
+    # Only the ordered day keys are used from _day_buckets; revenue is summed in a
+    # separate float dict because the helper's buckets start at integer 0.
     keys, buckets = _day_buckets(30)
     daily = {k: 0.0 for k in keys}
     for c in convos:
@@ -554,6 +638,8 @@ async def admin_agents_report(admin=Depends(get_admin_user)):
     convos = supabase.table("conversations").select("agent_id, status, qualified").execute().data or []
     email_map = _admin_email_map()
 
+    # Aggregated in Python over every conversation row. Conversations with no agent_id are
+    # not attributed to any agent and are skipped.
     by_agent = {}
     for c in convos:
         aid = c.get("agent_id")
@@ -597,6 +683,8 @@ async def admin_users_report(admin=Depends(get_admin_user)):
     for a in agents:
         agent_count[a.get("user_id")] = agent_count.get(a.get("user_id"), 0) + 1
 
+    # Both counts come from billing rows only, so a user with no billing row is in neither
+    # and active + disabled can be lower than total_users.
     active_users = sum(1 for b in billing_rows if b.get("is_active", True))
     disabled_users = sum(1 for b in billing_rows if not b.get("is_active", True))
 
@@ -610,6 +698,8 @@ async def admin_users_report(admin=Depends(get_admin_user)):
                 daily[key] += 1
     series = [{"day": k, "label": datetime.strptime(k, "%Y-%m-%d").strftime("%b %d"), "signups": daily[k]} for k in keys]
 
+    # Built from profiles (users without a profile row are omitted); the response below
+    # is capped to the 20 users with the most conversations.
     top = []
     for p in profiles:
         uid = p["id"]
@@ -630,6 +720,7 @@ async def admin_users_report(admin=Depends(get_admin_user)):
 
 @router.get("/stats")
 async def admin_stats(admin=Depends(get_admin_user)):
+    """Platform-wide headline counts: total users (profiles), conversations and agents."""
     users = supabase.table("profiles").select("id", count="exact").execute()
     conversations = supabase.table("conversations").select("id", count="exact").execute()
     agents = supabase.table("ai_agents").select("id", count="exact").execute()
@@ -647,12 +738,15 @@ async def admin_stats(admin=Depends(get_admin_user)):
 # ── Platform settings (promo controls) ──
 
 class PromoSettingsUpdate(BaseModel):
+    """Partial update of the welcome-bonus controls on the platform_settings row."""
     promo_enabled: Optional[bool] = None
     promo_amount: Optional[float] = None
     promo_expiry_days: Optional[int] = None
 
 
 def _get_settings_row() -> dict:
+    """Return the singleton platform_settings row (id=1), inserting it with column
+    defaults first if it does not exist yet."""
     rows = supabase.table("platform_settings").select("*").limit(1).execute().data or []
     if rows:
         return rows[0]
@@ -662,11 +756,16 @@ def _get_settings_row() -> dict:
 
 @router.get("/settings")
 async def get_platform_settings(admin=Depends(get_admin_user)):
+    """Return the platform_settings row (welcome-bonus controls plus other platform flags).
+    Admin only; creates the row with defaults if it is missing."""
     return {"data": _get_settings_row(), "error": None}
 
 
 @router.patch("/settings")
 async def update_platform_settings(body: PromoSettingsUpdate, admin=Depends(get_admin_user)):
+    """Update the welcome-bonus controls (enabled, amount, credit expiry days) and return
+    the fresh row. Admin only. The signup-bonus code reads this row each time it grants a
+    bonus, so changes apply to bonuses granted after the update."""
     _get_settings_row()  # ensure the singleton row exists
     updates = body.model_dump(exclude_none=True)
     if updates:
@@ -678,6 +777,8 @@ async def update_platform_settings(body: PromoSettingsUpdate, admin=Depends(get_
 # ── Promo codes (redeemable by users) ──
 
 class PromoCodeCreate(BaseModel):
+    """Request body for creating a redeemable promo code (see the field comments for what
+    None means on each optional field)."""
     code: str
     amount: float
     expiry_days: Optional[int] = None      # credit lifetime after redemption
@@ -686,6 +787,8 @@ class PromoCodeCreate(BaseModel):
 
 
 class PromoCodeUpdate(BaseModel):
+    """Partial update of a promo code; fields left as None are not changed (so a field
+    cannot be cleared back to NULL through this endpoint)."""
     active: Optional[bool] = None
     amount: Optional[float] = None
     expiry_days: Optional[int] = None
@@ -695,6 +798,7 @@ class PromoCodeUpdate(BaseModel):
 
 @router.get("/promo-codes")
 async def list_promo_codes(admin=Depends(get_admin_user)):
+    """List all promo codes, newest first. Admin only."""
     rows = (
         supabase.table("promo_codes").select("*")
         .order("created_at", desc=True).execute().data or []
@@ -704,6 +808,10 @@ async def list_promo_codes(admin=Depends(get_admin_user)):
 
 @router.post("/promo-codes")
 async def create_promo_code(body: PromoCodeCreate, admin=Depends(get_admin_user)):
+    """Create an active promo code that users can redeem for wallet credit. Admin only.
+
+    Rejects codes shorter than 3 characters, non-positive amounts and duplicates (409)."""
+    # Codes are stored upper-case and compared case-insensitively.
     code = (body.code or "").strip().upper()
     if not code:
         raise HTTPException(status_code=400, detail="Code is required")
@@ -713,6 +821,8 @@ async def create_promo_code(body: PromoCodeCreate, admin=Depends(get_admin_user)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than 0")
 
+    # Friendly duplicate check; the UNIQUE constraint on promo_codes.code is still the
+    # real guard against two concurrent creates of the same code.
     existing = supabase.table("promo_codes").select("id").eq("code", code).limit(1).execute().data
     if existing:
         raise HTTPException(status_code=409, detail="That code already exists")
@@ -731,6 +841,9 @@ async def create_promo_code(body: PromoCodeCreate, admin=Depends(get_admin_user)
 
 @router.patch("/promo-codes/{code_id}")
 async def update_promo_code(code_id: str, body: PromoCodeUpdate, admin=Depends(get_admin_user)):
+    """Edit a promo code (active flag, amount, expiry, redemption cap, valid-until) and
+    return the fresh row. Admin only. Returns data=None if no fields were supplied or if
+    code_id does not exist."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -778,13 +891,20 @@ async def promo_kpis(admin=Depends(get_admin_user)):
         rec = paid.setdefault(t["user_id"], {"total": 0.0, "first": None})
         rec["total"] += amt
         ts = t.get("created_at")
+        # ISO-8601 timestamps sort chronologically as strings, so a plain string
+        # comparison picks the user's earliest top-up.
         if ts and (rec["first"] is None or str(ts) < str(rec["first"])):
             rec["first"] = ts
 
+    # "Converted" = made at least one real-money top-up; promo and admin credit don't count.
+    # conversion_rate is a percentage of ALL profiles, and ltv is the mean lifetime top-up
+    # total per converted user (not per signup).
     converted = len(paid)
     conversion_rate = round(100 * converted / total_users, 1) if total_users else 0.0
     ltv = round(sum(r["total"] for r in paid.values()) / converted, 2) if converted else 0.0
 
+    # Days from signup (profile created_at) to first top-up, clamped at 0. Users whose
+    # timestamps are missing or unparseable are left out of the average.
     diffs = []
     for uid, rec in paid.items():
         c, f = created_by_user.get(uid), rec["first"]

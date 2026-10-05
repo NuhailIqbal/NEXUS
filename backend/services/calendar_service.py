@@ -37,6 +37,7 @@ _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class SettingsError(ValueError):
+    """Calendar settings failed validation. The message is user-facing: the API returns it as the HTTP 400 detail."""
     pass
 
 
@@ -63,6 +64,7 @@ def normalize_timezone(name):
 
 
 def valid_timezone(name) -> bool:
+    """True if `name` is a non-empty string that ZoneInfo can load. Aliases like "EST" are not expanded here (see `normalize_timezone`)."""
     if not isinstance(name, str) or not name.strip():
         return False
     try:
@@ -73,6 +75,7 @@ def valid_timezone(name) -> bool:
 
 
 def _hhmm(value, label) -> dtime:
+    """Parse a 24-hour "HH:MM" string into a time; raises SettingsError naming `label` if it is malformed."""
     m = _HHMM.match(value) if isinstance(value, str) else None
     if not m:
         raise SettingsError(f"{label} must look like 09:30.")
@@ -80,6 +83,10 @@ def _hhmm(value, label) -> dtime:
 
 
 def _int_in(value, lo, hi, label) -> int:
+    """Return `value` if it is an int within lo..hi inclusive, else raise SettingsError naming `label`.
+
+    bool is rejected explicitly because it is a subclass of int (True would otherwise pass as 1).
+    """
     if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
         raise SettingsError(f"{label} must be a whole number from {lo} to {hi}.")
     return value
@@ -87,7 +94,10 @@ def _int_in(value, lo, hi, label) -> int:
 
 def validate_settings(current: dict, changes: dict) -> dict:
     """Merge `changes` over `current` and validate the result; raises SettingsError."""
+    # Precedence is defaults < stored settings < incoming changes. Keys in `changes` that are not
+    # real settings are dropped, so callers can pass a raw request body.
     s = {**DEFAULT_SETTINGS, **(current or {}), **{k: v for k, v in (changes or {}).items() if k in DEFAULT_SETTINGS}}
+    # Alias first, so what gets stored is always a real region name (EST -> America/New_York).
     s["timezone"] = normalize_timezone(s["timezone"])
     if not valid_timezone(s["timezone"]):
         raise SettingsError("That timezone isn't recognised.")
@@ -108,15 +118,24 @@ def validate_settings(current: dict, changes: dict) -> dict:
 # ── pure slot maths (no I/O) ────────────────────────────────────────────────
 
 def _utc(dt: datetime) -> datetime:
+    """Convert a timezone-aware datetime to UTC; all slot comparisons and offsets are done in UTC."""
     return dt.astimezone(timezone.utc)
 
 
 def parse_google_time(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp such as Google returns ("...Z" or with an offset); raises ValueError if invalid.
+
+    The "Z" suffix is rewritten as "+00:00" because older Python versions' `fromisoformat` reject "Z".
+    A string with no offset yields a naive datetime.
+    """
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def conflicts(start: datetime, end: datetime, busy: list, buffer_minutes: int) -> bool:
+    """True if [start, end) overlaps any (busy_start, busy_end) pair once each busy block is padded by the buffer on both sides."""
     pad = timedelta(minutes=buffer_minutes)
+    # Strict comparisons: a meeting that ends exactly when a busy block starts does not conflict
+    # (unless a buffer is configured).
     return any(_utc(b0) - pad < _utc(end) and _utc(b1) + pad > _utc(start) for b0, b1 in busy)
 
 
@@ -126,6 +145,7 @@ def within_working_hours(start: datetime, end: datetime, s: dict) -> bool:
     local = start.astimezone(tz)
     if local.weekday() not in s["work_days"]:
         return False
+    # Settings were validated when saved, so the error label for _hhmm is unused (empty).
     day_open = datetime.combine(local.date(), _hhmm(s["start_time"], ""), tzinfo=tz)
     day_close = datetime.combine(local.date(), _hhmm(s["end_time"], ""), tzinfo=tz)
     return _utc(day_open) <= _utc(start) and _utc(end) <= _utc(day_close)
@@ -139,6 +159,7 @@ def compute_slots(busy: list, s: dict, *, start_date: date, days: int, duration_
     tz = ZoneInfo(s["timezone"])
     step = timedelta(minutes=s["slot_minutes"])
     dur = timedelta(minutes=duration_minutes)
+    # Allowed start window: not sooner than the minimum notice, not later than the booking window.
     earliest = _utc(now) + timedelta(hours=s["min_notice_hours"])
     latest = _utc(now) + timedelta(days=s["max_days_ahead"])
     t0, t1 = _hhmm(s["start_time"], ""), _hhmm(s["end_time"], "")
@@ -150,6 +171,8 @@ def compute_slots(busy: list, s: dict, *, start_date: date, days: int, duration_
         cur = _utc(datetime.combine(day, t0, tzinfo=tz))
         end_of_day = _utc(datetime.combine(day, t1, tzinfo=tz))
         taken = 0
+        # Candidate starts walk forward from opening time in `slot_minutes` steps (independent of the
+        # requested duration); the whole meeting must fit before closing. The earliest free ones win.
         while cur + dur <= end_of_day and taken < per_day:
             if earliest <= cur <= latest and not conflicts(cur, cur + dur, busy, s["buffer_minutes"]):
                 out.append(cur.astimezone(tz))
@@ -159,20 +182,31 @@ def compute_slots(busy: list, s: dict, *, start_date: date, days: int, duration_
 
 
 def describe_slot(dt: datetime) -> str:
+    """Spoken-friendly label such as "Tue Oct 6, 9:30 AM" (leading zeros on day and hour removed).
+
+    Formats the wall-clock time of `dt` as given, so pass a value already in the account timezone.
+    """
     return dt.strftime("%a %b %d, %I:%M %p").replace(" 0", " ")
 
 
 # ── storage ─────────────────────────────────────────────────────────────────
 
+# Per-process cache of Google access tokens so a burst of agent tool calls doesn't refresh on every
+# call. It is not shared between workers and is lost on restart; a miss just costs one refresh.
 _token_cache: dict = {}    # user_id -> (access_token, expires_at_epoch)
 
 
 def get_connection(user_id: str) -> dict | None:
+    """Return the account's `calendar_connections` row, or None if no calendar is connected."""
     res = supabase.table("calendar_connections").select("*").eq("user_id", user_id).limit(1).execute()
     return res.data[0] if res.data else None
 
 
 def public_status(user_id: str) -> dict:
+    """Connection state for the dashboard (GET /calendar/status): server config, connected flag, email and effective settings.
+
+    Never includes tokens. Settings are stored values layered over DEFAULT_SETTINGS.
+    """
     from config import settings as app_settings
     row = get_connection(user_id)
     return {
@@ -188,6 +222,12 @@ def public_status(user_id: str) -> dict:
 
 
 def save_connection(user_id: str, refresh_token: str, email: str | None, tz: str) -> None:
+    """Create or refresh the account's `calendar_connections` row after a successful OAuth connect.
+
+    The refresh token is stored encrypted. A first connect seeds default settings with timezone `tz`
+    (UTC if invalid). A reconnect only replaces token, email and status, which also clears a
+    `reauth_required` state, and drops any cached access token.
+    """
     settings_json = {**DEFAULT_SETTINGS, "timezone": tz if valid_timezone(tz) else "UTC"}
     fields = {
         "email": email, "refresh_token_encrypted": encrypt_config({"refresh_token": refresh_token}),
@@ -203,6 +243,10 @@ def save_connection(user_id: str, refresh_token: str, email: str | None, tz: str
 
 
 def update_settings(user_id: str, changes: dict) -> dict:
+    """Validate `changes` against the stored settings, save the merged result and return it.
+
+    Raises SettingsError if no calendar is connected or the merged settings are invalid.
+    """
     row = get_connection(user_id)
     if not row:
         raise SettingsError("Connect a calendar first.")
@@ -213,6 +257,10 @@ def update_settings(user_id: str, changes: dict) -> dict:
 
 
 async def disconnect(user_id: str) -> bool:
+    """Revoke the Google grant (best effort), delete the connection row and cached token.
+
+    Returns False if no calendar was connected. Existing `calendar_bookings` rows are left in place.
+    """
     row = get_connection(user_id)
     if not row:
         return False
@@ -226,7 +274,14 @@ async def disconnect(user_id: str) -> bool:
 
 
 async def _access_token(user_id: str, row: dict) -> str:
+    """Return a valid Google access token for the account, refreshing it from the stored refresh token when needed.
+
+    Raises gc.CalendarError on failure. If Google says the grant is dead (code "reauth"), the
+    connection is flagged `reauth_required` so later agent calls fail fast and the owner is
+    prompted to reconnect.
+    """
     cached = _token_cache.get(user_id)
+    # Reuse only if it stays valid for another minute, so it can't expire mid-request.
     if cached and cached[1] > time.time() + 60:
         return cached[0]
     try:
@@ -242,6 +297,9 @@ async def _access_token(user_id: str, row: dict) -> str:
 
 # ── agent-facing operations (return sentences for the voice agent) ──────────
 
+# Failure sentences returned as the tool result. The voice agent reads them, so each one also tells
+# the model what to do next (offer a human follow-up). UNAVAILABLE doubles as the catch-all that
+# routers/agent_tool_callbacks.py returns if a calendar tool raises unexpectedly.
 NOT_CONNECTED = ("No calendar is connected to this account, so I can't check or book times. "
                  "Offer to have someone follow up to arrange a time.")
 NEEDS_RECONNECT = ("The calendar connection has expired and needs to be reconnected by the account owner, "
@@ -250,10 +308,12 @@ UNAVAILABLE = "I couldn't reach the calendar just now. Offer to have someone fol
 
 
 def _failure_text(e: gc.CalendarError) -> str:
+    """Map a Google failure to the sentence the agent should say: reconnect needed for "reauth", otherwise "unavailable"."""
     return NEEDS_RECONNECT if e.code == "reauth" else UNAVAILABLE
 
 
 def _usable(user_id: str):
+    """Return (connection_row, None) if the account has a working calendar, else (None, sentence for the agent)."""
     row = get_connection(user_id)
     if not row:
         return None, NOT_CONNECTED
@@ -263,10 +323,26 @@ def _usable(user_id: str):
 
 
 def _utc_z(dt: datetime) -> str:
+    """Format as a UTC timestamp like "2026-10-06T14:30:00Z" (whole seconds), the form Google's freeBusy API takes and `start_at` stores."""
     return _utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 async def check_availability(user_id: str, date_str: str | None, days, duration, *, now: datetime | None = None) -> str:
+    """Agent tool: list free meeting times for the account, as a sentence for the voice agent to read.
+
+    Args:
+        user_id: owning account (the agent's owner).
+        date_str: first day to search as YYYY-MM-DD (a longer ISO string is truncated); defaults to
+            today in the account timezone, and past dates are clamped to today.
+        days: how many days to search, default 3, clamped to 1..MAX_DAYS_PER_CHECK.
+        duration: meeting length in minutes, default is the account's `slot_minutes`; must be 10..240.
+        now: current time, injectable for tests.
+
+    Returns a sentence offering up to SLOTS_PER_DAY times per day (each with the `start_iso` that
+    `book_slot` expects), or an explanation (not connected, bad input, no free time, Google error).
+    Reads Google freeBusy; the only write is flagging the connection `reauth_required` when
+    Google rejects the stored grant.
+    """
     row, problem = _usable(user_id)
     if problem:
         return problem
@@ -289,6 +365,7 @@ async def check_availability(user_id: str, date_str: str | None, days, duration,
     if not 10 <= duration <= 240:
         return "Meetings can be between 10 and 240 minutes long."
 
+    # Ask Google for busy time across whole local days: midnight of the first day to midnight `days` later.
     window_start = datetime.combine(start_date, dtime(0, 0), tzinfo=tz)
     window_end = window_start + timedelta(days=days)
     try:
@@ -302,12 +379,17 @@ async def check_availability(user_id: str, date_str: str | None, days, duration,
     if not slots:
         return (f"There are no free {duration}-minute times in that period ({s['timezone']}). "
                 "Try asking for a later date.")
+    # The agent must pass the exact start_iso back to book_slot, so it is printed next to the spoken label.
     lines = [f"- {describe_slot(d)} -> start_iso {d.isoformat(timespec='seconds')}" for d in slots]
     return (f"Free {duration}-minute times in {s['timezone']}. Offer a few of these, and when the caller picks "
             "one, confirm it and book with that exact start_iso:\n" + "\n".join(lines))
 
 
 def _existing_booking(user_id: str, call_id, tool_call_id) -> dict | None:
+    """Idempotency lookup: the `calendar_bookings` row already made for this (VAPI call, tool call) pair, or None.
+
+    Returns None when either id is missing, since a booking can't be deduplicated without both.
+    """
     if not (call_id and tool_call_id):
         return None
     res = (supabase.table("calendar_bookings").select("*").eq("user_id", user_id)
@@ -316,6 +398,7 @@ def _existing_booking(user_id: str, call_id, tool_call_id) -> dict | None:
 
 
 def _confirmation(start: datetime, s: dict, email: str | None, invited: bool) -> str:
+    """Sentence confirming a booking, with the time in the account timezone and whether an invite went to `email`."""
     when = f"{describe_slot(start.astimezone(ZoneInfo(s['timezone'])))} ({s['timezone']})"
     tail = f" A calendar invite was sent to {email}." if invited else " No email was given, so no invite was sent."
     return f"Booked for {when}.{tail} Confirm the time with the caller."
@@ -323,6 +406,21 @@ def _confirmation(start: datetime, s: dict, email: str | None, invited: bool) ->
 
 async def book_slot(user_id: str, args: dict, *, agent_id=None, agent_name=None, call_id=None,
                     tool_call_id=None, now: datetime | None = None) -> str:
+    """Agent tool: book a meeting on the account's Google Calendar and return a sentence for the voice agent.
+
+    Args:
+        user_id: owning account.
+        args: the model's tool arguments: `start_iso` (required, as returned by check_availability),
+            optional `duration_minutes`, `contact_email`, `contact_name` and `notes`.
+        agent_id, agent_name: recorded on the booking and in the event description.
+        call_id, tool_call_id: VAPI ids used to make the call idempotent.
+        now: current time, injectable for tests.
+
+    Flow: parse and validate input, replay an earlier booking for the same tool call, enforce
+    notice / booking-window / working-hours rules, re-check the live calendar, create the Google
+    event (the attendee is emailed an invite when a valid address was given), then record it in
+    `calendar_bookings`. Expected failures come back as sentences rather than exceptions.
+    """
     row, problem = _usable(user_id)
     if problem:
         return problem
@@ -335,6 +433,7 @@ async def book_slot(user_id: str, args: dict, *, agent_id=None, agent_name=None,
         start = parse_google_time(raw)
     except ValueError:
         return "I couldn't understand that start time. Use check_availability first and book one of the times it returns."
+    # A start_iso without an offset is read as account-local time.
     if start.tzinfo is None:
         start = start.replace(tzinfo=tz)
     try:
@@ -345,10 +444,13 @@ async def book_slot(user_id: str, args: dict, *, agent_id=None, agent_name=None,
         return "Meetings can be between 10 and 240 minutes long."
     end = start + timedelta(minutes=minutes)
 
+    # An invalid address (e.g. mis-transcribed on the call) is dropped: the meeting is still booked, just without an invite.
     email = str(args.get("contact_email") or "").strip()
     email = email if _EMAIL.match(email) else None
     name = str(args.get("contact_name") or "").strip()[:100] or "the caller"
 
+    # Runs before the notice/hours/conflict checks: once the first attempt succeeded the slot is busy
+    # on the calendar, so a retry would otherwise be reported as "just taken".
     prior = _existing_booking(user_id, call_id, tool_call_id)
     if prior:   # VAPI retried the same tool call — confirm the existing booking, never double-book
         return _confirmation(parse_google_time(prior["start_at"]), s, prior.get("attendee_email"), bool(prior.get("attendee_email")))
@@ -361,12 +463,15 @@ async def book_slot(user_id: str, args: dict, *, agent_id=None, agent_name=None,
         return (f"That time is outside working hours ({s['start_time']}-{s['end_time']}, {s['timezone']}). "
                 "Use check_availability and offer one of the free times.")
 
+    # Re-check the live calendar: the slot may have been taken since check_availability ran. The query
+    # window is widened by the buffer so neighbouring events inside the buffer are seen too.
     pad = timedelta(minutes=s["buffer_minutes"])
     try:
         token = await _access_token(user_id, row)
         busy_raw = await gc.freebusy(token, _utc_z(start - pad), _utc_z(end + pad), row.get("calendar_id") or "primary")
         busy = [(parse_google_time(a), parse_google_time(b)) for a, b in busy_raw]
         if conflicts(start, end, busy, s["buffer_minutes"]):
+            # Offer fresh options for that day and the next so the agent can re-propose straight away.
             alt = await check_availability(user_id, start.astimezone(tz).date().isoformat(), 2, minutes, now=now)
             return "That time was just taken. " + alt
         title = f"Meeting with {name}"
@@ -381,6 +486,8 @@ async def book_slot(user_id: str, args: dict, *, agent_id=None, agent_name=None,
     except gc.CalendarError as e:
         return _failure_text(e)
 
+    # The event is created before it is recorded, so if the insert below fails the meeting exists in
+    # Google Calendar with no `calendar_bookings` row (and therefore no idempotency record).
     try:
         supabase.table("calendar_bookings").insert({
             "user_id": user_id, "agent_id": agent_id, "vapi_call_id": call_id, "tool_call_id": tool_call_id,

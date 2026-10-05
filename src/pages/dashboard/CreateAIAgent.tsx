@@ -1,3 +1,11 @@
+/**
+ * "Create AI Agent" wizard page, routed at /dashboard/ai-agents/create (reached from the
+ * AI Agents list). Collects setup, knowledge, prompt, call events and an optional test, then
+ * saves on the last step: api.createAgent (POST /agents) followed by one
+ * api.uploadAgentKnowledge (POST /agents/{id}/knowledge) request per attached file.
+ * It also exports the step components, form types and knowledge limits that EditAIAgent.tsx
+ * reuses for its prefilled edit wizard.
+ */
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
@@ -18,8 +26,13 @@ import { StepCallEvents } from "@/components/agents/StepCallEvents";
 import { AgentToolsPicker } from "@/components/agents/AgentToolsPicker";
 import { toCallEventsPayload } from "@/components/agents/callEventTypes";
 
+/** Identifier of each wizard step; the order is defined by STEPS. */
 export type StepKey = "setup" | "knowledge" | "prompt" | "events" | "testing";
 
+/**
+ * The wizard's steps in display order. Shared with EditAIAgent.tsx so the create and edit
+ * wizards always show the same sequence of steps.
+ */
 export const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "setup", title: "Complete Setup", description: "Basic agent configuration and tools", icon: Bot },
   { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
@@ -28,6 +41,12 @@ export const STEPS: { key: StepKey; title: string; description: string; icon: Re
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
 ];
 
+/**
+ * All values the wizard collects, held in one object. The same shape is used by the create
+ * page and the edit modal; fields are mapped to API request fields in each page's persistToApi.
+ * `knowledgeText` and `knowledgeFiles` are write-only inputs: they are never read back from
+ * an existing agent (the edit modal starts them empty).
+ */
 export type FormState = {
   agentName: string;
   website: string;
@@ -46,14 +65,26 @@ export type FormState = {
   testMessage: string;
 };
 
+/**
+ * Limits for the Knowledge step: maximum pasted-text length (characters), maximum size per
+ * uploaded file (MB) and the accepted file extensions. They are enforced in the browser only
+ * (StepKnowledge and the validate functions); the backend knowledge endpoints do not re-check them.
+ */
 export const KNOWLEDGE_TEXT_LIMIT = 8000;
 export const KNOWLEDGE_FILE_MAX_MB = 10;
 export const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
 
+/**
+ * Create-agent wizard page. Owns the step index, per-step completion flags and the form state,
+ * validates each step on Continue, and on the final step creates the agent through the API and
+ * then shows AgentCreatedSuccessModal. Nothing is saved before that last step.
+ */
 const CreateAIAgent = () => {
   const navigate = useNavigate();
   const [stepIndex, setStepIndex] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
+  // A step is marked completed when the user passes its validation with Continue. This drives
+  // the progress bar and decides which steps goToStep lets the user jump to.
   const [completed, setCompleted] = useState<Record<StepKey, boolean>>({
     setup: false, knowledge: false, prompt: false, events: false, testing: false,
   });
@@ -71,16 +102,25 @@ const CreateAIAgent = () => {
   const currentStep = STEPS[stepIndex];
   const completedCount = Object.values(completed).filter(Boolean).length;
 
+  /** Leaves the wizard without saving and returns to the agents list. */
   const close = () => navigate("/dashboard/ai-agents");
 
+  /** Typed single-field setter for the form; handed to every step component as `update`. */
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
+  /**
+   * Validates only the fields of the current step. Shows the first problem as an error toast
+   * and returns false; returns true when the step may be left. The Knowledge step needs pasted
+   * text or at least one file, and the Testing and Call Events steps have no rules.
+   */
   const validate = (): boolean => {
     if (currentStep.key === "setup") {
       if (!form.agentName.trim()) { toast.error("Agent name is required"); return false; }
       if (!form.mainGoal.trim()) { toast.error("Main goal is required"); return false; }
       if (form.transferEnabled && !form.transferNumber.trim()) { toast.error("Enter a transfer number or turn off call transfer"); return false; }
+      // Same E.164 rule the backend applies, so a malformed number is caught here instead of
+      // surfacing later as a voice-service error.
       if (form.transferEnabled && !isE164(form.transferNumber)) { toast.error("Transfer number must be in international format, e.g. +15551234567"); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
@@ -104,7 +144,17 @@ const CreateAIAgent = () => {
     return true;
   };
 
+  /**
+   * Saves the wizard: creates the agent with POST /agents, then uploads each knowledge file to
+   * POST /agents/{id}/knowledge. Returns false (after an error toast) only when the agent itself
+   * could not be created; individual file-upload failures are toasted but still return true.
+   */
   const persistToApi = async () => {
+    // The industry label is stored in the agent's `category` field. status is always "Active"
+    // because the create flow has no status control. knowledge_text is sent raw: the backend
+    // folds it (and the main goal) into the saved system prompt and also records it as a
+    // knowledge row, so the prompt is not composed on the client here. transfer_number is
+    // null when transfer is switched off, which means no transfer tool is set up.
     const { data, error } = await api.createAgent({
       name: form.agentName,
       category: form.industry || "General",
@@ -125,6 +175,9 @@ const CreateAIAgent = () => {
       return false;
     }
 
+    // Files can only be uploaded now: the upload endpoint needs the new agent's id. They are
+    // sent one at a time. A failed file does not roll back the agent (it already exists), so
+    // it is only reported through a toast.
     if (form.knowledgeFiles.length > 0) {
       let failed = 0;
       for (const file of form.knowledgeFiles) {
@@ -142,6 +195,11 @@ const CreateAIAgent = () => {
     return true;
   };
 
+  /**
+   * Handler of the main button. Validates the current step, marks it completed and moves to
+   * the next one; on the last step it saves via persistToApi and, on success, opens the
+   * success modal. `submitting` disables the button for the duration of the save.
+   */
   const next = async () => {
     if (!validate()) return;
     setCompleted((c) => ({ ...c, [currentStep.key]: true }));
@@ -158,13 +216,20 @@ const CreateAIAgent = () => {
     }
   };
 
+  /** Goes to the previous step without validating; a no-op on the first step. */
   const back = () => stepIndex > 0 && setStepIndex(stepIndex - 1);
 
+  /**
+   * Sidebar step navigation. Moving back or to an already completed step is allowed; jumping
+   * forward to a step that has not been completed is refused so required fields are not skipped.
+   */
   const goToStep = (i: number) => {
     if (i <= stepIndex || completed[STEPS[i].key]) setStepIndex(i);
     else toast.error("Complete the current step first");
   };
 
+  // The negative margins cancel the dashboard layout's page padding so the wizard fills the
+  // content area edge to edge; the header is sticky just below the 4rem dashboard top bar.
   return (
     <div className="-mx-4 -my-6 min-h-[calc(100vh-4rem)] bg-muted/30 sm:-mx-6 lg:-mx-8">
       <div className="sticky top-16 z-20 flex items-start justify-between gap-3 border-b border-border bg-background px-4 py-3 sm:items-center sm:px-6 sm:py-4">
@@ -292,6 +357,11 @@ export default CreateAIAgent;
 
 /* ---------------- Step Components ---------------- */
 
+/**
+ * Setup step: name, website (with AI "Analyze" autofill), main goal, call transfer, agent tools,
+ * industry, language and voice. Used by the create wizard and, with `compact` and a status
+ * selector, by the edit modal. Calls api.analyzeAgentWebsite when "Analyze" is pressed.
+ */
 export function StepSetup({
   form, update, statusValue, onStatusChange, compact,
 }: {
@@ -304,9 +374,15 @@ export function StepSetup({
   // Hides the centered intro block; the Edit modal already shows the step title itself.
   compact?: boolean;
 }) {
+  // The full voice catalog from @/lib/voices; every voice is offered whatever the language.
   const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
 
+  /**
+   * "Analyze" button handler: asks the backend (POST /agents/analyze-website, rate limited per
+   * IP) to read the entered website and suggest a main goal and industry. A suggestion replaces
+   * whatever is currently in those fields; the industry is only replaced when one is returned.
+   */
   const analyzeWebsite = async () => {
     if (!form.website.trim()) return toast.error("Enter a website URL first");
     setAnalyzing(true);
@@ -462,12 +538,23 @@ export function StepSetup({
   );
 }
 
+/**
+ * Knowledge step: a quick-text box (capped at KNOWLEDGE_TEXT_LIMIT characters) plus a file picker
+ * for larger documents. Nothing is sent from here; the text and the File objects are kept in the
+ * form and submitted by the page's persistToApi. `compact` hides the intro block (edit modal).
+ */
 export function StepKnowledge({
   form, update, compact,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   const textLen = form.knowledgeText.length;
   const textOver = textLen > KNOWLEDGE_TEXT_LIMIT;
 
+  /**
+   * Adds the chosen files to the form after a client-side check of size and extension. Rejected
+   * files are reported with a toast and skipped; accepted ones are appended to those already added.
+   * The file input clears its own value right after calling this, so choosing the same file again
+   * still triggers onChange.
+   */
   const handleFiles = (files: FileList | null) => {
     if (!files) return;
     const accepted: File[] = [];
@@ -487,6 +574,7 @@ export function StepKnowledge({
     update("knowledgeFiles", [...form.knowledgeFiles, ...accepted]);
   };
 
+  /** Removes the file at index `i` from the pending upload list. */
   const removeFile = (i: number) => {
     update("knowledgeFiles", form.knowledgeFiles.filter((_, idx) => idx !== i));
   };
@@ -598,6 +686,10 @@ export function StepKnowledge({
   );
 }
 
+/**
+ * Prompt step: the agent's system prompt and its opening greeting (sent as `first_message`).
+ * Both are required by the page validators. `compact` hides the intro and makes the prompt box taller.
+ */
 export function StepPrompt({
   form, update, compact,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
@@ -635,14 +727,25 @@ export function StepPrompt({
   );
 }
 
+/**
+ * Testing step (optional): try the agent from the unsaved form before saving it. Offers a live
+ * voice call (a temporary assistant opened in LiveVoiceModal) and a text test that shows one
+ * model reply. Neither path saves the agent. `compact` hides the intro block (edit modal).
+ */
 export function StepTesting({
   form, update, compact,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   const [reply, setReply] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Non-null while the voice-test modal is open; holds the temporary assistant to talk to.
   const [voiceTestAgent, setVoiceTestAgent] = useState<VoiceAgentInfo | null>(null);
   const [voiceTestStarting, setVoiceTestStarting] = useState(false);
 
+  /**
+   * Text test: sends the test message with the current system prompt and greeting to
+   * POST /agents/test, which makes a single model completion without saving anything. The
+   * reply therefore reflects only the prompt and greeting, not tools, call events or knowledge.
+   */
   const runTest = async () => {
     if (!form.testMessage.trim()) {
       toast.error("Type a test message first");
@@ -663,6 +766,12 @@ export function StepTesting({
     setReply(data?.reply ?? "");
   };
 
+  /**
+   * Starts a live voice test: POST /agents/test-voice/start creates a temporary voice-service
+   * assistant from the unsaved form (name, voice, language, prompt, greeting only; the main
+   * goal, knowledge, tools and call events are not applied) and then LiveVoiceModal opens on it.
+   * Needs an agent name.
+   */
   const startVoiceCall = async () => {
     if (!form.agentName.trim()) {
       toast.error("Give your agent a name first");
@@ -691,6 +800,12 @@ export function StepTesting({
     });
   };
 
+  /**
+   * `onOpenChange` handler for LiveVoiceModal. Ignores "open" events; when the modal closes it
+   * clears the test agent and asks the backend to delete the temporary assistant
+   * (DELETE /agents/test-voice/{id}). The request is not awaited, and the backend swallows
+   * cleanup errors, so a failed delete is silent.
+   */
   const endVoiceCall = (open: boolean) => {
     if (open) return;
     const assistantId = voiceTestAgent?.vapi_assistant_id;
@@ -759,6 +874,7 @@ export function StepTesting({
   );
 }
 
+/** Labelled form row; wraps its control in a <label> and shows a red asterisk when `required`. */
 export function Field({
   label, required, children, className,
 }: { label: string; required?: boolean; children: React.ReactNode; className?: string }) {
@@ -772,6 +888,7 @@ export function Field({
   );
 }
 
+/** Small uppercase section heading with an icon and a bottom rule, used inside the step forms. */
 export function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 border-b border-border pb-2">

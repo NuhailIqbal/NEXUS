@@ -1,3 +1,10 @@
+/**
+ * "All Conversations" dashboard page (route /dashboard/conversations): stats cards, a
+ * sortable table with server-side filters and pagination, and a detail dialog with
+ * recording, call events, AI summary and transcript.
+ * API: api.getConversations, getConversationStats, getConversationTranscript,
+ * getConversationRecordingUrl, getConversationEvents.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { format } from "date-fns";
@@ -18,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
 import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
 
+/** Maps a conversation status label to the Tailwind classes of its status badge. */
 const colorFor = (s: string) =>
   s === "Completed" ? "bg-success/15 text-success" :
   s === "Unsuccessful" ? "bg-destructive/15 text-destructive" :
@@ -45,12 +53,14 @@ type Conversation = {
   call_outcome: string | null;
 };
 
+// An agent mid-call event recorded during a call, shown in the detail dialog.
 type CallEventHit = { id: string; label: string | null; event_key: string; outcome: string | null; note: string | null; created_at: string };
 
 type StatItem = { label: string; count: number };
 
 type ColumnKey = "channel" | "direction" | "agent_name" | "contact_name" | "phone" | "duration" | "status" | "qualified" | "call_outcome" | "call_time";
 
+/** Table columns in display order; `key` doubles as the sort key and filter key. */
 const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "channel", label: "Channel" },
   { key: "agent_name", label: "Agent" },
@@ -64,12 +74,14 @@ const COLUMNS: { key: ColumnKey; label: string; width?: string }[] = [
   { key: "call_time", label: "Time" },
 ];
 
+/** Display/sort text for a column: "Qualified"/dash for qualified, capitalised direction, raw string otherwise. */
 function textFor(c: Conversation, key: ColumnKey): string {
   if (key === "qualified") return c.qualified ? "Qualified" : "—";
   if (key === "direction") return c.direction ? c.direction.charAt(0).toUpperCase() + c.direction.slice(1) : "—";
   return (c[key] as string) || "";
 }
 
+/** Formats an ISO timestamp for display; empty gives a dash and unparseable values are returned unchanged. */
 function formatCallTime(value: string): string {
   if (!value) return "—";
   const d = new Date(value);
@@ -79,10 +91,18 @@ function formatCallTime(value: string): string {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Page component. Loads one page of conversations plus account-wide stats, re-polls
+ * every 30s, and applies filters server-side via query params. Sorting is client-side
+ * and only affects the loaded page. Opening a row fetches its events, a fresh
+ * recording URL and (if missing) the transcript.
+ */
 const Conversations = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [stats, setStats] = useState<StatItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // `viewing` is the row open in the dialog; `openIdRef` tracks the latest opened id so
+  // late async responses for a previously opened row are ignored.
   const [viewing, setViewing] = useState<Conversation | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [playerTime, setPlayerTime] = useState(0);
@@ -104,6 +124,7 @@ const Conversations = () => {
     setSortKey(null); // was descending -> reset
   };
 
+  // Updates one column's filter value (not sent to the API until debounced).
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
   // Filters are now applied server-side (across the whole account, not just the
@@ -122,6 +143,8 @@ const Conversations = () => {
 
   const STATUS_OPTIONS = ["Initiated", "Ringing", "In Progress", "Completed", "Failed", "Unsuccessful"];
 
+  // Opens the detail dialog for a row and kicks off its lazy fetches (events, recording
+  // URL, transcript). Each result is applied only if this row is still the open one.
   const openDetail = async (c: Conversation) => {
     setViewing(c);
     setPlayerTime(0);
@@ -173,6 +196,8 @@ const Conversations = () => {
     return () => clearTimeout(t);
   }, [filters]);
 
+  // Builds the query string for the list endpoint from the debounced filters; empty
+  // filters are omitted and the date filter is sent as call_date (yyyy-MM-dd).
   const buildFilterParams = useCallback(() => {
     const p = new URLSearchParams();
     if (debouncedFilters.channel.trim()) p.set("channel", debouncedFilters.channel.trim());
@@ -192,6 +217,8 @@ const Conversations = () => {
   // works correctly no matter how many conversations an account accumulates.
   // Filters are sent as query params so they apply across the whole account, not
   // just the rows currently loaded on this page.
+  // `silent` skips the loading indicator (used by the background poll). The total row
+  // count comes from the response's meta.count.
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     const params = buildFilterParams();
@@ -563,6 +590,10 @@ const Conversations = () => {
   );
 };
 
+/**
+ * Page numbers to show in the pager: always first and last, plus one sibling either
+ * side of the current page, with "ellipsis" markers where numbers are skipped.
+ */
 function pageWindow(page: number, totalPages: number): (number | "ellipsis")[] {
   const items: (number | "ellipsis")[] = [];
   const add = (n: number) => items.push(n);
@@ -578,6 +609,7 @@ function pageWindow(page: number, totalPages: number): (number | "ellipsis")[] {
   return items;
 }
 
+/** Pager control: first/previous/next/last buttons plus numbered pages from pageWindow(); `onChange` receives the 1-based page. */
 function PageNumbers({
   page, totalPages, onChange,
 }: {

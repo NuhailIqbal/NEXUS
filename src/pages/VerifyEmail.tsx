@@ -1,3 +1,10 @@
+/**
+ * Email-verification landing page, routed at /verify-email?token=... (see App.tsx). The link is
+ * emailed by the backend after sign-up or a resend request.
+ * On mount it redeems the single-use token with api.verifyEmail (POST /auth/verify-email); on
+ * success the backend returns a JWT, which is stored and the user is sent to /dashboard.
+ * Failures (missing, used or expired token) show an error with links back to register/login.
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
@@ -6,8 +13,14 @@ import { useEffect, useRef, useState } from "react";
 import { api, setStoredToken } from "@/services/api";
 import Logo from "@/components/Logo";
 
+/** Which panel the page shows: request in flight, token accepted, or token rejected. */
 type Status = "verifying" | "success" | "error";
 
+/**
+ * Verification result page. Reads `token` from the query string, runs the verification request
+ * once, and renders the matching panel (spinner, success, or error with `message`).
+ * Calls api.verifyEmail; stores the returned access token with setStoredToken on success.
+ */
 const VerifyEmail = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -36,6 +49,9 @@ const VerifyEmail = () => {
       setStoredToken(data.access_token);
       setStatus("success");
       setMessage("Your email is verified and your welcome credit has been added.");
+      // A full page load (not navigate()) is used because AuthProvider only resolves the stored
+      // token once, on mount; reloading makes it pick up the new token and load the user. The
+      // delay lets the success message be read first.
       setTimeout(() => {
         window.location.href = "/dashboard";
       }, 1600);

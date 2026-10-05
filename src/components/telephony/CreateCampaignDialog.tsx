@@ -1,3 +1,8 @@
+/**
+ * Create-campaign wizard dialog, opened from the Outbound campaigns page.
+ * Reads api.getAgents, getLists, getPhoneNumbers and getDncStatus; the parent performs
+ * the actual createCampaign call.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   X, Rocket, Mic, Phone, Clipboard, BookOpen, Check, ChevronsUpDown,
@@ -16,12 +21,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 
+/** open/onOpenChange control the dialog; onCreate receives the final form data on launch. */
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate?: (data: CampaignData) => void;
 };
 
+/** Form state collected across the wizard steps. */
 type CampaignData = {
   name: string;
   description: string;
@@ -35,17 +42,24 @@ type Agent       = { id: string; name: string };
 type ListRow     = { id: string; name: string; contact_count?: number };
 type PhoneNumber = { id: string; number: string };
 
+/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 review). */
 const STEPS = [
   { title: "Campaign Basics", subtitle: "Name, agent, phone number" },
   { title: "Contact List",    subtitle: "Pick the list to dial" },
   { title: "Review & Launch", subtitle: "Confirm and launch" },
 ];
 
+/** Fresh form state; DNC screening defaults to on for new campaigns. */
 const emptyData = (): CampaignData => ({
   name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
   dncScreeningEnabled: true,
 });
 
+/**
+ * Three-step wizard for creating an outbound campaign. Loads agents, lists, phone
+ * numbers and DNC status each time it opens. It does not call the create API itself:
+ * it hands the data to onCreate and closes.
+ */
 export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
   const [step, setStep] = useState(0);
   const [data, setData] = useState<CampaignData>(emptyData());
@@ -71,15 +85,19 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
       .finally(() => setLoading(false));
   }, [open]);
 
+  /** Type-safe single-field update of the form state. */
   const update = <K extends keyof CampaignData>(key: K, value: CampaignData[K]) =>
     setData((d) => ({ ...d, [key]: value }));
 
+  /** Returns the wizard to step 1 with empty data. */
   const reset = () => { setStep(0); setData(emptyData()); };
 
+  /** Dialog close handler; discards the form when closing. */
   const close = (next: boolean) => { if (!next) reset(); onOpenChange(next); };
 
   const progress = ((step + 1) / STEPS.length) * 100;
 
+  /** Validates the current step's required fields and advances. */
   const next = () => {
     if (step === 0) {
       if (!data.name.trim()) return toast.error("Campaign name is required");
@@ -92,6 +110,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
 
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
+  /** Passes the collected data to the parent and closes the dialog. */
   const launch = () => {
     onCreate?.(data);
     close(false);
@@ -163,6 +182,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
 
 /* ───────────────────────────── Steps ───────────────────────────── */
 
+/** Step 1: name, description, agent, from-number and per-campaign DNC screening toggle. */
 function Step1({
   data, update, agents, phoneNumbers, dncEnabled, dncIntegrationId,
 }: {
@@ -255,6 +275,7 @@ function Step1({
   );
 }
 
+/** Step 2 of the wizard (named Step3): contact list picker. */
 function Step3({
   data, update, lists,
 }: { data: CampaignData; update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void; lists: ListRow[] }) {
@@ -288,6 +309,7 @@ function Step3({
   );
 }
 
+/** Step 3 of the wizard (named Step4): read-only review of the chosen options. */
 function Step4({
   data, agents, lists, phoneNumbers, dncEnabled,
 }: {
@@ -339,6 +361,7 @@ function Step4({
 
 /* ───────────────────────────── Helpers ───────────────────────────── */
 
+/** Titled card wrapper for a group of fields. */
 function Section({ icon: Icon, title, children }: { icon: React.ComponentType<{ className?: string }>; title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -351,6 +374,7 @@ function Section({ icon: Icon, title, children }: { icon: React.ComponentType<{ 
   );
 }
 
+/** Label (with optional required marker) and hint around a form control. */
 function Field({ label, required, hint, children }: { label: string; required?: boolean; hint?: string; children: React.ReactNode }) {
   return (
     <div className="mb-4 last:mb-0">
@@ -363,6 +387,7 @@ function Field({ label, required, hint, children }: { label: string; required?: 
   );
 }
 
+/** Label/value tile in the review step. */
 function ReviewItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-background p-3">
@@ -372,6 +397,7 @@ function ReviewItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Placeholder shown when a prerequisite is missing, with a link to set it up. */
 function EmptyHint({ label, hint, href }: { label: string; hint: string; href: string }) {
   return (
     <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm">
@@ -384,6 +410,7 @@ function EmptyHint({ label, hint, href }: { label: string; hint: string; href: s
   );
 }
 
+/** Searchable phone number picker; reports the selected number's id. */
 function PhoneNumberCombobox({
   phoneNumbers, value, onChange,
 }: {

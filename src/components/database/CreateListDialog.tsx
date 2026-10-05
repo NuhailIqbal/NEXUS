@@ -1,3 +1,8 @@
+/**
+ * Modal for creating a contact list (name plus description).
+ * It only collects input; the parent persists it through `onCreate`
+ * (see pages/dashboard/database/Lists.tsx, which calls POST /lists).
+ */
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -11,20 +16,31 @@ type Props = {
   onCreate?: (data: { name: string; description: string }) => void;
 };
 
+/**
+ * Create-list dialog. Props: `open`/`onOpenChange` control visibility; `onCreate` receives
+ * the name and description on submit. The description is collected here, but the Lists page
+ * currently sends only the name to the API.
+ */
 export function CreateListDialog({ open, onOpenChange, onCreate }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
+  /** Clears the form fields. */
   const reset = () => {
     setName("");
     setDescription("");
   };
 
+  /** Dialog open-change handler: resets the form when closing, then notifies the parent. */
   const close = (next: boolean) => {
     if (!next) reset();
     onOpenChange(next);
   };
 
+  /**
+   * Requires a non-blank name, then passes the data to `onCreate` and closes the dialog.
+   * The success toast fires immediately, before the parent's async save completes.
+   */
   const submit = () => {
     if (!name.trim()) return toast.error("Customer list name is required");
     onCreate?.({ name, description });

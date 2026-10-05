@@ -1,3 +1,12 @@
+"""
+FastAPI application entry point (`uvicorn main:app`).
+
+Builds the `app` object: runs the schema auto-migration and starts the background loops
+(VAPI call sync, phone-number billing, delayed automation steps, callback placement) on
+startup, installs CORS, rate-limit and team-role middleware, defines the `/health` and
+`/me` routes, and mounts every router from `routers/`. Reads configuration from
+`config.settings` and talks to PostgreSQL through `database.supabase`.
+"""
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,6 +43,10 @@ from routers import (
     referrals,
 )
 
+# Application-level rate limiter (clients keyed by remote IP). slowapi needs it on
+# app.state: its 429 handler, registered below, looks it up there. The per-endpoint
+# @limiter.limit(...) decorators live in individual routers, which each create their own
+# Limiter.
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
@@ -43,6 +56,10 @@ app = FastAPI(
 )
 
 
+# Startup hooks run in registration order, so the schema is migrated before any of the
+# background loops below start querying the database. Each loop runs as a fire-and-forget
+# asyncio task in this process and logs its own errors. The VAPI sync, phone billing and
+# delayed-step loops assume a single worker/replica (see their docstrings).
 @app.on_event("startup")
 def _auto_migrate() -> None:
     """Auto-create the database schema on an empty PostgreSQL database."""
@@ -74,6 +91,8 @@ async def _start_phone_billing_sweep() -> None:
 async def _start_delayed_steps() -> None:
     """Resume automation flows paused on a long Delay node once their time is up."""
     import asyncio
+    # Unlike the other loops, this one has no setting that disables it; its poll interval
+    # is a constant in services.automation_engine.
     from services.automation_engine import delayed_steps_loop
     asyncio.create_task(delayed_steps_loop())
 
@@ -87,6 +106,7 @@ async def _start_callback_scheduler() -> None:
         asyncio.create_task(callback_loop())
 
 
+# Turn slowapi's RateLimitExceeded into a 429 JSON response with rate-limit headers.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -106,11 +126,17 @@ class TeamRoleGuard(BaseHTTPMiddleware):
     Safe no-ops (dry-run "/test" endpoints) and unauthenticated/machine routes are
     exempt since they don't touch a shared resource."""
 
+    # Matched with startswith(). These routes are called without a user's team context:
+    # provider webhooks, the admin portal (X-Admin-Auth instead of a user Bearer token),
+    # login/signup, the voice provider's agent-tool callbacks, and a new invitee
+    # accepting a team invite.
     EXEMPT_PATHS = {"/webhooks/", "/admin/", "/auth/", "/tools/internal/", "/team/accept-invite"}
     SAFE_SUFFIXES = ("/test",)  # dry-run endpoints — never persist anything
 
     async def dispatch(self, request: Request, call_next):
+        """Reject the request with 403 if the caller is a sub-user who may not perform this method; otherwise pass it on."""
         method = request.method
+        # Reads and CORS preflights are open to every team role.
         if method in ("GET", "HEAD", "OPTIONS"):
             return await call_next(request)
 
@@ -118,6 +144,9 @@ class TeamRoleGuard(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self.EXEMPT_PATHS) or path.endswith(self.SAFE_SUFFIXES):
             return await call_next(request)
 
+        # Only requests carrying a user Bearer token are evaluated here. Authentication
+        # itself is not this middleware's job: a request without a token continues to the
+        # route, whose own dependencies (e.g. get_current_user) decide whether a login is required.
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -128,6 +157,8 @@ class TeamRoleGuard(BaseHTTPMiddleware):
                 if user_id:
                     from routers.team import get_user_role
                     role = get_user_role(user_id)
+                    # get_user_role returns "owner" for anyone who is not an Active team
+                    # member, so only sub-users (member/viewer) can be blocked below.
                     if role != "owner":
                         if method == "DELETE":
                             return JSONResponse(
@@ -140,17 +171,25 @@ class TeamRoleGuard(BaseHTTPMiddleware):
                                 content={"detail": "Viewers have read-only access. Contact your account owner to make changes."},
                             )
             except Exception:
+                # Any failure (undecodable or expired token, role lookup error) lets the
+                # request continue unchanged; invalid tokens are rejected later by
+                # get_current_user. Note this makes the guard fail-open if the
+                # team_members lookup itself errors.
                 pass
 
         return await call_next(request)
 
 
+# Added after CORSMiddleware, and Starlette runs the most recently added middleware
+# outermost, so this guard runs before CORS: the 403 responses it returns directly do
+# not pass through CORSMiddleware and carry no CORS headers.
 app.add_middleware(TeamRoleGuard)
 
 
 # Health
 @app.get("/health", tags=["System"])
 async def health():
+    """Liveness probe: always returns {"status": "ok"}. No authentication and no database access."""
     return {"status": "ok"}
 
 
@@ -161,6 +200,7 @@ from database import supabase
 
 @app.get("/me", tags=["System"])
 async def me(user=Depends(get_current_user)):
+    """Return the authenticated user's row from the `profiles` table (`data` is null if none exists). Requires a valid user Bearer token."""
     result = supabase.table("profiles").select("*").eq("id", user["user_id"]).maybe_single().execute()
     return {"data": result.data, "error": None}
 

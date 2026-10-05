@@ -1,9 +1,17 @@
+/**
+ * AI Voices dashboard page (route: /dashboard/ai-voices).
+ * Shows a static catalog of the voices agents can use and lets the user hear a live
+ * sample: the browser starts a short Vapi web call (public key from VITE_VAPI_PUBLIC_KEY)
+ * and makes the assistant say the sample text. Favorites are stored only in localStorage.
+ * No backend API calls are made from this page.
+ */
 import { useRef, useState } from "react";
 import { Mic, Star, Play, Pause, AlertTriangle } from "lucide-react";
 import Vapi from "@vapi-ai/web";
 // Vapi's own built-in voice provider (provider="vapi") — the exact voices available
 // on the Vapi platform, verified live against Vapi's API. No third-party voice
 // provider key required. Source: https://docs.vapi.ai/providers/voice/vapi-voices
+/** Static display catalog of selectable voices; ids are turned into "mock_<id>" keys for favorites. */
 const VOICES_CATALOG = [
   { id: 1, name: "Elliot", language: "English", accent: "Canadian", gender: "Male", description: "Realistic, friendly, professional, soothing", favorite: false },
   { id: 2, name: "Savannah", language: "English", accent: "American (Southern)", gender: "Female", description: "Realistic, straightforward", favorite: false },
@@ -37,6 +45,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
+/** A voice as rendered in the grid (catalog entry plus its derived string id and favorite flag). */
 type Voice = {
   id: string;
   name: string;
@@ -59,6 +68,10 @@ const EN_TRANSCRIBER = { provider: "deepgram", language: "en" };
 // _resolve_transcriber, or this preview 400s instead of playing.
 const UR_TRANSCRIBER = { provider: "deepgram", language: "ur", model: "nova-3" };
 
+/**
+ * Maps a lower-cased voice name to the `voice` and `transcriber` blocks passed to
+ * vapi.start() for the preview. Keys must match VOICES_CATALOG names.
+ */
 const VOICE_BLOCKS: Record<string, { voice: Record<string, unknown>; transcriber: Record<string, unknown> }> = {
   elliot: { voice: { provider: "vapi", voiceId: "Elliot" }, transcriber: EN_TRANSCRIBER },
   savannah: { voice: { provider: "vapi", voiceId: "Savannah" }, transcriber: EN_TRANSCRIBER },
@@ -78,11 +91,13 @@ const VOICE_BLOCKS: Record<string, { voice: Record<string, unknown>; transcriber
   ali: { voice: { provider: "11labs", voiceId: "pNInz6obpgDQGcFmaJgB", model: "eleven_multilingual_v2" }, transcriber: UR_TRANSCRIBER },
 };
 
+/** Vapi public (browser-safe) key; empty string when unset, which disables previews. */
 const VAPI_PUBLIC_KEY = ((import.meta as any).env?.VITE_VAPI_PUBLIC_KEY ?? "").trim();
 
 // Vapi error shapes vary — sometimes a string, sometimes a nested
 // { message: string[] | string, error, statusCode } object — so never call
 // string methods on the raw value without normalizing it first.
+/** Normalizes any Vapi error payload into a displayable string. */
 function extractVapiErrorMessage(e: any): string {
   const raw = e?.error?.message ?? e?.message ?? e?.error ?? "Voice preview failed";
   if (typeof raw === "string") return raw;
@@ -98,6 +113,12 @@ function extractVapiErrorMessage(e: any): string {
   }
 }
 
+/**
+ * Voice catalog page with a preview dialog. State: favorites (persisted to the
+ * "favorite:voices" localStorage key), the voice being previewed, editable sample text,
+ * speaking flag and an inline pre-flight error. Side effects: opens a Vapi web call
+ * (needs microphone permission) while a preview plays.
+ */
 const AIVoices = () => {
   const [favoriteMockIds, setFavoriteMockIds] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -124,6 +145,7 @@ const AIVoices = () => {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const vapiRef = useRef<Vapi | null>(null);
 
+  /** Updates favorites state and mirrors it to localStorage. */
   const persistFavorites = (next: string[]) => {
     setFavoriteMockIds(next);
     if (typeof window !== "undefined") {
@@ -148,6 +170,7 @@ const AIVoices = () => {
       favorite: favoriteMockIds.includes(s.id) ? true : s.favorite,
     }));
 
+  /** Adds or removes a voice id from the persisted favorites list. */
   const toggleFavorite = (v: Voice) => {
     const isFav = favoriteMockIds.includes(v.id);
     const next = isFav
@@ -156,8 +179,10 @@ const AIVoices = () => {
     persistFavorites(next);
   };
 
+  /** Returns "an" or "a" for the given word, for the default English sample sentence. */
   const article = (word: string) => (/^[aeiou]/i.test(word) ? "an" : "a");
 
+  /** Opens the preview dialog for a voice, seeding a language-appropriate sample text and clearing prior state. */
   const openPreview = (v: Voice) => {
     setPreviewVoice(v);
     setPreviewText(
@@ -171,11 +196,17 @@ const AIVoices = () => {
     setPreviewError(null);
   };
 
+  /** Stops the active Vapi call (if any) and drops the reference; safe to call repeatedly. */
   const teardownVapi = () => {
     try { vapiRef.current?.stop(); } catch { /* already stopped */ }
     vapiRef.current = null;
   };
 
+  /**
+   * Plays the sample text: starts a short Vapi web call (max 20s) with this voice, a
+   * transcriber matching its language and a silent LLM, then has the assistant say the
+   * text once the call connects and hang up. Failures are reported via toast and close the dialog.
+   */
   const speak = async () => {
     if (!previewVoice) return;
     if (!VAPI_PUBLIC_KEY) {
@@ -235,6 +266,7 @@ const AIVoices = () => {
     }
   };
 
+  /** Ends the preview call early and resets the speaking flag. */
   const stopSpeaking = () => {
     teardownVapi();
     setSpeaking(false);

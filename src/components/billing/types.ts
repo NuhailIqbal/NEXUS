@@ -1,3 +1,9 @@
+/**
+ * Shared types and constants for the billing UI: API response shapes (billing status,
+ * call costs, wallet transactions, cards, promotions), top-up limits, and small formatters.
+ */
+
+/** Account billing summary, including auto-recharge settings. */
 export type BillingStatus = {
   is_active: boolean;
   rate_per_minute: number;

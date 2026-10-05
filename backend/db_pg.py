@@ -42,6 +42,7 @@ def _json_value(v: Any) -> Any:
 
 
 def _json_row(row: dict) -> dict:
+    """Apply `_json_value` to every value of a result row."""
     return {k: _json_value(v) for k, v in row.items()}
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,12 @@ _pool: ConnectionPool | None = None
 
 
 def _get_pool() -> ConnectionPool:
+    """Return the process-wide connection pool, creating it on first use.
+
+    Connections return dict rows and run in autocommit mode, so every statement commits
+    immediately (there is no transaction spanning several `execute()` calls). The pool
+    holds 1-10 connections. Raises RuntimeError if DATABASE_URL is not configured.
+    """
     global _pool
     if _pool is None:
         if not settings.database_url:
@@ -70,6 +77,7 @@ import atexit
 
 @atexit.register
 def _close_pool() -> None:
+    """Close the pool at interpreter exit (registered with atexit); close errors are ignored."""
     global _pool
     if _pool is not None:
         try:
@@ -84,6 +92,9 @@ def _adapt(value: Any) -> Any:
     if isinstance(value, dict):
         return Json(value)
     if isinstance(value, list):
+        # A non-empty list whose first element is a dict is treated as a JSON array (for
+        # jsonb columns); only the first element is inspected. Any other list, including
+        # an empty one, is passed through for psycopg to send as a PostgreSQL array.
         if value and isinstance(value[0], dict):
             return Json(value)
         return value
@@ -94,6 +105,7 @@ class APIResponse:
     """Mimics supabase-py's response object: `.data` and `.count`."""
 
     def __init__(self, data: Any, count: int | None = None):
+        """Hold the result rows (`data`) and, for `count="exact"` selects, the total match count."""
         self.data = data
         self.count = count
 
@@ -103,7 +115,19 @@ _NOPARAM = object()
 
 
 class _Query:
+    """Chainable query builder that mimics supabase-py/PostgREST and runs on PostgreSQL.
+
+    Usage: `supabase.table("t").select("*").eq("col", v).order("created_at", desc=True).execute()`.
+    Every builder method records state and returns self; nothing touches the database
+    until `execute()`. Filters are ANDed together (OR is not supported). Values are
+    always bound as parameters, but table names, column names, the select list and the
+    upsert `on_conflict` target are interpolated into the SQL text, so they must never
+    come from untrusted input. `update()` and `delete()` with no filter affect every
+    row of the table.
+    """
+
     def __init__(self, table: str):
+        """Start a query on `table`; defaults to `SELECT *` with no filters, ordering or limit."""
         self._table = table
         self._op = "select"
         self._columns = "*"
@@ -119,26 +143,52 @@ class _Query:
 
     # ---- operation selectors -------------------------------------------------
     def select(self, columns: str = "*", count: str | None = None) -> "_Query":
+        """Switch to a SELECT of `columns` (a raw SQL column list; default "*").
+
+        With `count="exact"`, `execute()` also runs a `SELECT count(*)` over the same
+        filters (ignoring order/limit/offset) and returns it as `response.count`. Any
+        other `count` value yields `count=None`.
+        """
         self._op = "select"
         self._columns = columns or "*"
         self._count_mode = count
         return self
 
     def insert(self, values: Any) -> "_Query":
+        """Switch to an INSERT of one row (dict) or several rows (list of dicts).
+
+        Returns the inserted rows (`RETURNING *`). Column names are taken from the first
+        row: a key missing from a later row is inserted as NULL (not the column default),
+        and keys that appear only in later rows are ignored.
+        """
         self._op = "insert"
         self._values = values
         return self
 
     def update(self, values: dict) -> "_Query":
+        """Switch to an UPDATE setting `values` (column -> new value) on the rows matching the filters.
+
+        Returns the updated rows. With no filter, every row in the table is updated.
+        """
         self._op = "update"
         self._values = values
         return self
 
     def delete(self) -> "_Query":
+        """Switch to a DELETE of the rows matching the filters; returns the deleted rows.
+
+        With no filter, every row in the table is deleted.
+        """
         self._op = "delete"
         return self
 
     def upsert(self, values: Any, on_conflict: str | None = None) -> "_Query":
+        """Switch to INSERT ... ON CONFLICT (`on_conflict`) DO UPDATE, overwriting every supplied column.
+
+        `on_conflict` is a raw SQL conflict target such as "user_id" or "user_id, key".
+        If it is omitted, no ON CONFLICT clause is generated and this behaves like a
+        plain insert (a duplicate key raises).
+        """
         self._op = "upsert"
         self._values = values
         self._on_conflict = on_conflict
@@ -155,6 +205,11 @@ class _Query:
         return self
 
     def _add(self, frag: str, val: Any = _NOPARAM) -> "_Query":
+        """Record a WHERE fragment (SQL with a `%s` placeholder) and its bound value.
+
+        Consumes a pending `not_` by wrapping the fragment in NOT (...). `_NOPARAM`, not
+        None, marks "no bound value" because None is a legitimate value to bind.
+        """
         if self._negate_next:
             frag = f"NOT ({frag})"
             self._negate_next = False
@@ -162,30 +217,43 @@ class _Query:
         return self
 
     def eq(self, col: str, val: Any) -> "_Query":
+        """Filter `col = val`. A None value becomes `= NULL`, which matches no rows; use `is_(col, None)` to test for NULL."""
         return self._add(f'"{col}" = %s', val)
 
     def neq(self, col: str, val: Any) -> "_Query":
+        """Filter `col <> val`."""
         return self._add(f'"{col}" <> %s', val)
 
     def gt(self, col: str, val: Any) -> "_Query":
+        """Filter `col > val`."""
         return self._add(f'"{col}" > %s', val)
 
     def gte(self, col: str, val: Any) -> "_Query":
+        """Filter `col >= val`."""
         return self._add(f'"{col}" >= %s', val)
 
     def lt(self, col: str, val: Any) -> "_Query":
+        """Filter `col < val`."""
         return self._add(f'"{col}" < %s', val)
 
     def lte(self, col: str, val: Any) -> "_Query":
+        """Filter `col <= val`."""
         return self._add(f'"{col}" <= %s', val)
 
     def like(self, col: str, pattern: str) -> "_Query":
+        """Case-sensitive LIKE filter; the caller supplies the `%` wildcards in `pattern`."""
         return self._add(f'"{col}" LIKE %s', pattern)
 
     def ilike(self, col: str, pattern: str) -> "_Query":
+        """Case-insensitive ILIKE filter; the caller supplies the `%` wildcards in `pattern`."""
         return self._add(f'"{col}" ILIKE %s', pattern)
 
     def is_(self, col: str, val: Any) -> "_Query":
+        """IS filter, PostgREST style.
+
+        None or "null" -> IS NULL; a bool or "true"/"false" -> IS TRUE / IS FALSE (inlined
+        as SQL literals, not bound); any other value is bound as a parameter to `IS %s`.
+        """
         if val is None or str(val).lower() == "null":
             return self._add(f'"{col}" IS NULL')
         if isinstance(val, bool) or str(val).lower() in ("true", "false"):
@@ -194,33 +262,46 @@ class _Query:
         return self._add(f'"{col}" IS %s', val)
 
     def in_(self, col: str, values: list) -> "_Query":
+        """Filter `col = ANY(values)`: the column equals any element of `values`.
+
+        `values` is converted to a list, which psycopg sends as a PostgreSQL array.
+        """
         return self._add(f'"{col}" = ANY(%s)', list(values))
 
     # ---- modifiers -----------------------------------------------------------
     def order(self, col: str, desc: bool = False) -> "_Query":
+        """Append an ORDER BY term; call repeatedly for multi-column ordering (terms apply in call order)."""
         self._order.append(f'"{col}" {"DESC" if desc else "ASC"}')
         return self
 
     def limit(self, n: int) -> "_Query":
+        """Cap the number of returned rows (rendered as LIMIT)."""
         self._limit = n
         return self
 
     def range(self, start: int, end: int) -> "_Query":
+        """Select the zero-based rows `start`..`end` inclusive by setting OFFSET `start` and LIMIT `end - start + 1`."""
         # PostgREST range is inclusive on both ends.
         self._offset = start
         self._limit = end - start + 1
         return self
 
     def single(self) -> "_Query":
+        """Require exactly one result row: `data` becomes that row, and `execute()` raises psycopg's DataError for zero or several."""
         self._single = True
         return self
 
     def maybe_single(self) -> "_Query":
+        """Return a single row as `data`, or None when nothing matches. If several rows match, the first is returned without error."""
         self._maybe_single = True
         return self
 
     # ---- SQL assembly --------------------------------------------------------
     def _where(self) -> tuple[str, list]:
+        """Build the WHERE clause (filters joined with AND) and the bound parameters in placeholder order.
+
+        Returns ("", []) when there are no filters; filters recorded with `_NOPARAM` add no parameter.
+        """
         if not self._filters:
             return "", []
         clauses, params = [], []
@@ -231,9 +312,12 @@ class _Query:
         return " WHERE " + " AND ".join(clauses), params
 
     def _tail(self) -> str:
+        """Build the trailing ORDER BY / LIMIT / OFFSET SQL (empty string if none are set)."""
         sql = ""
         if self._order:
             sql += " ORDER BY " + ", ".join(self._order)
+        # LIMIT and OFFSET are interpolated rather than bound; int() makes sure a
+        # non-numeric value can never inject SQL.
         if self._limit is not None:
             sql += f" LIMIT {int(self._limit)}"
         if self._offset:
@@ -241,6 +325,12 @@ class _Query:
         return sql
 
     def _rows_to_values(self) -> tuple[list[str], list[list]]:
+        """Normalise the insert/upsert payload into (column names, rows of adapted values).
+
+        Accepts one dict or a list of dicts and drops None entries. Columns come from the
+        first row; each value goes through `_adapt` (dicts become JSONB). Returns
+        ([], []) when there is nothing to insert.
+        """
         rows = self._values if isinstance(self._values, list) else [self._values]
         rows = [r for r in rows if r is not None]
         if not rows:
@@ -251,11 +341,21 @@ class _Query:
 
     # ---- execution -----------------------------------------------------------
     def execute(self) -> APIResponse:
+        """Run the built SQL on a pooled connection and return an `APIResponse`.
+
+        Each statement uses its own autocommit connection, so nothing is transactional
+        across calls. Insert, upsert, update and delete use RETURNING * so `data` holds
+        the affected rows. psycopg errors (unique or foreign-key violations, etc.)
+        propagate to the caller; an unrecognised operation raises ValueError.
+        """
         t = f'"{self._table}"'
 
         if self._op == "select":
             where, params = self._where()
             count = None
+            # The count is a separate query (its own connection, not atomic with the row
+            # query below) over the same WHERE, so it is the total match count before
+            # limit/offset are applied.
             if self._count_mode == "exact":
                 with _get_pool().connection() as conn, conn.cursor() as cur:
                     cur.execute(f"SELECT count(*) AS c FROM {t}{where}", params)
@@ -275,6 +375,8 @@ class _Query:
             placeholders = ", ".join([ph_row] * len(tuples))
             flat = [v for tup in tuples for v in tup]
             conflict = ""
+            # _on_conflict only exists after upsert() ran (it is not set in __init__), hence
+            # getattr. Without a target no ON CONFLICT clause is added, so a duplicate key raises.
             if self._op == "upsert":
                 target = getattr(self, "_on_conflict", None)
                 if target:
@@ -293,6 +395,7 @@ class _Query:
             set_params = [_adapt(self._values[c]) for c in set_cols]
             sql = f"UPDATE {t} SET {set_clause}{where} RETURNING *"
             with _get_pool().connection() as conn, conn.cursor() as cur:
+                # SET parameters come first because their placeholders precede the WHERE ones in the SQL.
                 cur.execute(sql, set_params + wparams)
                 rows = cur.fetchall()
             return self._shape(rows, None)
@@ -308,6 +411,11 @@ class _Query:
         raise ValueError(f"Unsupported operation: {self._op}")
 
     def _shape(self, rows: list[dict], count: int | None) -> APIResponse:
+        """Convert rows to JSON-friendly values and apply single()/maybe_single() semantics.
+
+        Returns an `APIResponse` whose `data` is the list of rows, or one row (or None)
+        when single()/maybe_single() was requested.
+        """
         rows = [_json_row(r) for r in rows]
         if self._single:
             if len(rows) != 1:
@@ -324,7 +432,15 @@ class _Query:
 # auth.admin shim — reads the local `users` table (replaces auth.users)
 # ---------------------------------------------------------------------------
 class _AuthAdmin:
+    """Shim for `supabase.auth.admin`, backed by the local `users` table."""
+
     def list_users(self) -> list[SimpleNamespace]:
+        """Return every user as a namespace with id, email, user_metadata and created_at.
+
+        Not paginated. `user_metadata` comes from `raw_user_meta_data` ({} if null).
+        Values are raw psycopg types (id is a uuid.UUID, created_at a datetime), not
+        JSON-coerced like `_Query` results.
+        """
         with _get_pool().connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT id, email, raw_user_meta_data, created_at FROM users")
             return [
@@ -341,9 +457,14 @@ class _AuthAdmin:
         """Delete an auth user. All user-owned tables cascade via ON DELETE CASCADE."""
         with _get_pool().connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE id = %s", [user_id])
+            # Pool connections are autocommit, so the DELETE is already committed; this commit() is redundant.
             conn.commit()
 
     def get_user_by_id(self, user_id: str) -> SimpleNamespace:
+        """Return a namespace whose `.user` is the matching user (same fields as `list_users`), or None if not found.
+
+        Mirrors the shape of supabase-py's `get_user_by_id` response.
+        """
         with _get_pool().connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT id, email, raw_user_meta_data, created_at FROM users WHERE id = %s",
@@ -364,7 +485,10 @@ class _AuthAdmin:
 
 
 class _Auth:
+    """Shim for `supabase.auth`; only the `admin` sub-client is implemented."""
+
     def __init__(self):
+        """Create the `admin` sub-client."""
         self.admin = _AuthAdmin()
 
 
@@ -372,12 +496,26 @@ class _Auth:
 # storage shim — writes to a local directory (replaces Supabase Storage)
 # ---------------------------------------------------------------------------
 class _StorageBucket:
+    """One storage bucket, mapped to a subdirectory of the local storage directory.
+
+    The base directory is STORAGE_DIR, or `backend/_storage` when unset. Object paths are
+    joined onto the bucket directory without sanitising, so callers must pass trusted
+    relative keys.
+    """
+
     def __init__(self, bucket: str):
+        """Resolve the bucket directory and create it if missing (instantiating a bucket has this filesystem side effect)."""
         base = settings.storage_dir or str(Path(__file__).resolve().parent / "_storage")
         self._dir = Path(base) / bucket
         self._dir.mkdir(parents=True, exist_ok=True)
 
     def upload(self, path: str, content: bytes, options: dict | None = None):
+        """Write `content` to `path` inside the bucket, creating parent directories and overwriting any existing file.
+
+        `options` (content-type, etc.) is accepted for supabase-py compatibility and
+        ignored. Returns a namespace whose `path` and `full_path` are the file's location
+        on local disk.
+        """
         dest = self._dir / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "wb") as f:
@@ -385,10 +523,12 @@ class _StorageBucket:
         return SimpleNamespace(path=str(dest), full_path=str(dest))
 
     def download(self, path: str) -> bytes:
+        """Return the bytes stored at `path`; raises FileNotFoundError if it does not exist."""
         with open(self._dir / path, "rb") as f:
             return f.read()
 
     def remove(self, paths: list[str]):
+        """Delete each object in `paths`, silently skipping ones that do not exist."""
         for p in paths:
             try:
                 (self._dir / p).unlink()
@@ -397,7 +537,10 @@ class _StorageBucket:
 
 
 class _Storage:
+    """Shim for `supabase.storage`."""
+
     def from_(self, bucket: str) -> _StorageBucket:
+        """Return a handle for `bucket`, creating its directory if needed."""
         return _StorageBucket(bucket)
 
 
@@ -405,16 +548,26 @@ class _Storage:
 # Top-level supabase-shaped client
 # ---------------------------------------------------------------------------
 class PostgresClient:
+    """Drop-in replacement for the supabase-py client.
+
+    Exposes `table()`/`from_()` for queries plus the `auth.admin` and `storage` shims.
+    It holds no connection itself; the connection pool is created lazily on the first query.
+    """
+
     def __init__(self):
+        """Attach the auth and storage shims."""
         self.auth = _Auth()
         self.storage = _Storage()
 
     def table(self, name: str) -> _Query:
+        """Start a query builder on table `name`."""
         return _Query(name)
 
     # supabase-py also exposes `.from_` as an alias of `.table`
     def from_(self, name: str) -> _Query:
+        """Alias of `table()`."""
         return _Query(name)
 
 
+# Process-wide singleton; routers import it as `from database import supabase`.
 supabase = PostgresClient()

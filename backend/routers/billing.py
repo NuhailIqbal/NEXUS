@@ -1,3 +1,16 @@
+"""Billing and prepaid-wallet logic for NEXUS, plus the /billing API routes.
+
+Money is a prepaid wallet: typed credit lots in `credit_grants`, an audit ledger in
+`wallet_transactions`, and a cached total in `billing.balance`. Other modules import
+the helpers here: record_call_cost (call-end webhook/sync), credit_balance and
+debit_balance (signup bonus, admin, phone-number fees), check_call_quota and the
+*_block_reason helpers (agents, automation, callback scheduler), has_balance
+(telephony) and credit_auto_recharge (Stripe webhook).
+Talks to the database through the `supabase` query-builder shim (tables billing,
+credit_grants, wallet_transactions, notifications, conversations, platform_settings,
+promo_codes, promo_code_redemptions), to Stripe (customers, Checkout, saved cards,
+off-session PaymentIntents) and, lazily, to routers.telephony for inbound routing.
+"""
 import logging
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +50,8 @@ BYOT_PHONE_NUMBER_MONTHLY_COST = 1.00
 
 
 def get_or_create_billing(user_id: str) -> dict:
+    """Return the account's `billing` row, inserting a default one on first access.
+    Callers pass the OWNER id (see resolve_owner_id), since the wallet is account-wide."""
     result = supabase.table("billing").select("*").eq("user_id", user_id).execute()
     if result.data:
         return result.data[0]
@@ -58,6 +73,7 @@ def add_charge(user_id: str, amount: float, note: str | None = None) -> float:
     """Add a one-off charge (e.g. a phone-number monthly fee) to the user's running total."""
     if not amount or amount <= 0:
         return 0.0
+    # `note` is accepted for call-site readability but is not stored anywhere.
     billing = get_or_create_billing(user_id)
     current_charges = float(billing.get("total_charges") or 0)
     new_total = round(current_charges + float(amount), 2)
@@ -81,6 +97,9 @@ _KIND_TO_GRANT = {"promo": "promo", "promo_code": "promo", "topup": "purchased",
 
 
 def _parse_ts(s):
+    """Coerce a datetime or ISO-8601 string (including a trailing 'Z') to an aware UTC
+    datetime. Naive values are assumed UTC; unparseable values become datetime.max, so
+    they sort last and never compare as already expired."""
     if isinstance(s, datetime):
         return s if s.tzinfo else s.replace(tzinfo=timezone.utc)
     try:
@@ -108,6 +127,8 @@ def _active_grants(user_id: str) -> list[dict]:
         if exp and _parse_ts(exp) <= now:
             continue  # expired
         active.append(g)
+    # Tie-breakers after type priority: grants that never expire (inf) are spent after
+    # ones that will lapse, then oldest first (created_at compared as a string).
     active.sort(key=lambda g: (
         _GRANT_PRIORITY.get(g.get("type"), 9),
         _parse_ts(g["expires_at"]).timestamp() if g.get("expires_at") else float("inf"),
@@ -126,14 +147,19 @@ def _sync_cached_balance(user_id: str) -> float:
 
 
 def get_balance(user_id: str) -> float:
+    """Spendable balance: the sum of active grants. Also refreshes the cached
+    billing.balance column as a side effect."""
     return _sync_cached_balance(user_id)
 
 
 def has_balance(user_id: str, min_amount: float) -> bool:
+    """True if the live balance covers `min_amount` (e.g. a phone number's monthly fee)."""
     return get_balance(user_id) >= float(min_amount)
 
 
 def _insert_notification(user_id, kind, title, body):
+    """Best-effort insert of an in-app notification row. Failures are swallowed so an
+    alert problem can never break the billing operation that raised it."""
     try:
         supabase.table("notifications").insert(
             {"user_id": user_id, "kind": kind, "title": title, "body": body}
@@ -142,6 +168,8 @@ def _insert_notification(user_id, kind, title, body):
         pass
 
 
+# Notification (title, body) keyed by the dollar threshold crossed; the keys mirror the
+# thresholds checked in _notify_low_balance.
 _LOW_BALANCE_MSGS = {
     10: ("Low balance — $10 left",
          "You have about $10 in credit remaining. Add funds to avoid interruption."),
@@ -160,6 +188,8 @@ def _notify_low_balance(user_id, old_balance, new_balance):
     crossed = [t for t in (10, 5, 1, 0) if old_balance > t >= new_balance]
     if not crossed:
         return
+    # A "funding cycle" starts at the most recent credit (amount > 0) in the ledger; an
+    # alert already sent after that point is not repeated.
     last_credit = (
         supabase.table("wallet_transactions").select("created_at")
         .eq("user_id", user_id).gt("amount", 0)
@@ -195,6 +225,8 @@ def _sync_inbound_routing(user_id: str, block: bool) -> None:
 # Charges the customer's default card without them present when the balance falls to or
 # below their threshold. Every guard below matters: this moves real money unattended.
 
+# A pending marker older than this is treated as stale (the charge's outcome was never
+# reported back), after which a new attempt is allowed.
 AUTO_RECHARGE_PENDING_TTL_MINUTES = 15
 
 
@@ -254,6 +286,9 @@ def _run_auto_recharge(user_id: str) -> None:
             )
             return
 
+        # Stripe amounts are in cents. off_session + confirm charges the saved card
+        # immediately without the customer present; a declined card raises CardError
+        # (handled below).
         intent = stripe.PaymentIntent.create(
             customer=customer_id,
             amount=int(round(amount * 100)),
@@ -307,6 +342,8 @@ def _maybe_auto_recharge(user_id: str, billing: dict, new_balance: float) -> Non
         {"auto_recharge_pending_at": datetime.now(timezone.utc).isoformat()}
     ).eq("user_id", user_id).execute()
 
+    # The Stripe SDK is blocking, so hand the charge to the default thread pool; the
+    # returned future is deliberately not awaited (fire-and-forget).
     try:
         import asyncio
         asyncio.get_running_loop().run_in_executor(None, _run_auto_recharge, user_id)
@@ -318,6 +355,10 @@ def _maybe_auto_recharge(user_id: str, billing: dict, new_balance: float) -> Non
 
 def _record_wallet_txn(user_id, kind, amount, balance_after, description,
                        stripe_session_id=None, ref_id=None):
+    """Append a signed row (credit > 0, debit < 0) to the wallet_transactions ledger,
+    recording the resulting balance. Errors are swallowed (best-effort audit trail), but
+    note that credit_balance and _call_already_charged read this table for idempotency,
+    so a failed write here weakens those guards."""
     try:
         supabase.table("wallet_transactions").insert({
             "user_id": user_id,
@@ -355,6 +396,8 @@ def credit_balance(user_id, amount, kind, description, stripe_session_id=None,
     }).execute()
     new_balance = _sync_cached_balance(user_id)
     _record_wallet_txn(user_id, kind, amount, new_balance, description, stripe_session_id, ref_id)
+    # Balance went from empty to funded: restore any inbound numbers that were
+    # redirected to the fallback assistant while the account was at $0.
     if old_balance <= 0 < new_balance:
         _sync_inbound_routing(user_id, block=False)
     return new_balance
@@ -368,6 +411,8 @@ def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
         return get_balance(user_id)
     old_balance = _sync_cached_balance(user_id)
     left = amount
+    # Grants arrive in consumption order; drain each in turn until `amount` is covered
+    # or the grants run out (any shortfall is simply not charged).
     for g in _active_grants(user_id):
         if left <= 0:
             break
@@ -382,6 +427,8 @@ def debit_balance(user_id, amount, kind, description, ref_id=None) -> float:
     new_balance = _sync_cached_balance(user_id)
     _record_wallet_txn(user_id, kind, -actual, new_balance, description, None, ref_id)
     _notify_low_balance(user_id, old_balance, new_balance)
+    # Balance just hit $0: point inbound numbers at the fallback assistant so callers
+    # aren't served by an agent the account can no longer pay for.
     if old_balance > 0 >= new_balance:
         _sync_inbound_routing(user_id, block=True)
     # Re-read: the row may have changed (e.g. pending_at) since `old_balance` was taken.
@@ -489,6 +536,8 @@ def calculate_call_cost(
         provider_cost = round(float(vapi_cost) + twilio_leg, 4)
         multiplier = float(billing.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER)
         return round(provider_cost * multiplier, 2), provider_cost
+    # No provider cost reported: bill duration x the per-minute rate (no multiplier, no
+    # Twilio leg) and report provider_cost as 0.
     rate = billing.get("rate_per_minute") or DEFAULT_RATE_PER_MINUTE
     return round((duration_seconds / 60.0) * float(rate), 2), 0.0
 
@@ -534,6 +583,8 @@ def _has_promo_credit(user_id: str) -> bool:
 def _call_already_charged(vapi_call_id: str) -> bool:
     """A call is charged at most once — guard against re-billing on re-sync/re-import.
     The wallet ledger (kind='call', ref_id=vapi_call_id) is the source of truth."""
+    # Without a call id there is nothing to dedupe on, so report "already charged" to
+    # make the caller skip the debit rather than risk billing the call twice.
     if not vapi_call_id:
         return True
     existing = (
@@ -572,6 +623,8 @@ def record_call_cost(
     supabase.table("conversations").update(updates).eq("vapi_call_id", vapi_call_id).execute()
 
     # Charge the wallet once per call.
+    # total_charges (lifetime spend counter) is bumped only on this first debit, so
+    # re-imports don't inflate it.
     if cost > 0 and not _call_already_charged(vapi_call_id):
         billing = get_or_create_billing(user_id)
         current_charges = float(billing.get("total_charges") or 0)
@@ -584,6 +637,9 @@ def record_call_cost(
 
 @router.get("/status")
 async def get_billing_status(user=Depends(get_current_user)):
+    """Billing summary for the caller's account (team members see the owner's): active
+    flag, per-minute rate and cost multiplier, lifetime charges, the cached wallet
+    balance, and the auto-recharge settings."""
     billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     return {
         "data": {
@@ -592,6 +648,8 @@ async def get_billing_status(user=Depends(get_current_user)):
             "cost_multiplier": float(billing.get("cost_multiplier") or DEFAULT_COST_MULTIPLIER),
             "total_charges": float(billing.get("total_charges") or 0),
             "balance": float(billing.get("balance") or 0),
+            # The $10 threshold / $50 amount are the values shown until the user
+            # configures auto-recharge.
             "auto_recharge_enabled": bool(billing.get("auto_recharge_enabled")),
             "auto_recharge_threshold": float(billing.get("auto_recharge_threshold") or 10.0),
             "auto_recharge_amount": float(billing.get("auto_recharge_amount") or 50.0),
@@ -610,6 +668,8 @@ async def get_stripe_config(user=Depends(get_current_user)):
 # ── Payment methods (saved cards) ──
 
 def _require_stripe():
+    """Raise 503 when no Stripe secret key is configured, so Stripe-backed endpoints
+    fail cleanly instead of erroring inside the SDK."""
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
@@ -681,6 +741,8 @@ def _assert_pm_belongs_to(customer_id: str, payment_method_id: str) -> None:
 
 @router.post("/payment-methods/{payment_method_id}/default")
 async def set_default_payment_method(payment_method_id: str, user=Depends(get_current_user)):
+    """Make a saved card the account's default payment method on Stripe (the card that
+    auto-recharge charges). The card must belong to the caller's own Stripe customer."""
     _require_stripe()
     billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     customer_id = billing.get("stripe_customer_id")
@@ -699,6 +761,8 @@ async def set_default_payment_method(payment_method_id: str, user=Depends(get_cu
 
 @router.delete("/payment-methods/{payment_method_id}")
 async def delete_payment_method(payment_method_id: str, user=Depends(get_current_user)):
+    """Detach a saved card from the account's Stripe customer. The card must belong to
+    the caller, and the last remaining card cannot be removed while auto-recharge is on."""
     _require_stripe()
     billing = get_or_create_billing(resolve_owner_id(user["user_id"]))
     customer_id = billing.get("stripe_customer_id")
@@ -731,6 +795,8 @@ async def delete_payment_method(payment_method_id: str, user=Depends(get_current
 # ── Auto-recharge settings ──
 
 class AutoRechargeUpdate(BaseModel):
+    """Body for PUT /billing/auto-recharge. `threshold` and `amount` are optional; an
+    omitted field keeps its stored value."""
     enabled: bool
     threshold: Optional[float] = None
     amount: Optional[float] = None
@@ -738,6 +804,9 @@ class AutoRechargeUpdate(BaseModel):
 
 @router.put("/auto-recharge")
 async def update_auto_recharge(body: AutoRechargeUpdate, user=Depends(get_current_user)):
+    """Turn auto-recharge on or off and optionally set its trigger threshold ($0-$500) and
+    top-up amount (TOPUP_MIN-TOPUP_MAX). Enabling requires a saved default card. Returns
+    the stored settings."""
     owner_id = resolve_owner_id(user["user_id"])
     billing = get_or_create_billing(owner_id)
     updates: dict = {"auto_recharge_enabled": bool(body.enabled)}
@@ -781,6 +850,7 @@ async def update_auto_recharge(body: AutoRechargeUpdate, user=Depends(get_curren
 # ── Promotions (redeemable codes) ──
 
 class RedeemPromo(BaseModel):
+    """Body for POST /billing/promotions/redeem: the code the user typed."""
     code: str
 
 
@@ -812,6 +882,9 @@ async def list_promotions(user=Depends(get_current_user)):
 
 @router.post("/promotions/redeem")
 async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
+    """Redeem a promotion code for wallet credit on the caller's account. Rejects codes
+    that are unknown, inactive, expired, fully claimed, already used by this account, or
+    worth nothing; on success records the redemption and credits an expiring promo grant."""
     owner_id = resolve_owner_id(user["user_id"])
     code = (body.code or "").strip().upper()
     if not code:
@@ -852,6 +925,9 @@ async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
     except Exception:
         raise HTTPException(status_code=400, detail="You've already used that promotion code")
 
+    # The count is written back from the value read earlier (not an atomic increment) and
+    # the max_redemptions check above runs before it, so concurrent redemptions of a
+    # capped code can overshoot the cap; only the per-user uniqueness is a hard guard.
     supabase.table("promo_codes").update(
         {"redemption_count": int(promo.get("redemption_count") or 0) + 1}
     ).eq("id", promo["id"]).execute()
@@ -876,6 +952,9 @@ async def redeem_promo_code(body: RedeemPromo, user=Depends(get_current_user)):
 
 @router.get("/invoices")
 async def get_invoices(user=Depends(get_current_user)):
+    """The account's 20 most recent Stripe invoices (amount_paid is in cents, as Stripe
+    reports it). Returns an empty list when Stripe isn't configured or the account has no
+    customer yet; a Stripe failure comes back in `error` with HTTP 200, not as an error."""
     if not settings.stripe_secret_key:
         return {"data": [], "error": None}
 
@@ -907,13 +986,19 @@ async def get_invoices(user=Depends(get_current_user)):
 
 
 class TopupRequest(BaseModel):
+    """Body for POST /billing/topup/checkout. `success_url` / `cancel_url` are optional
+    redirect bases supplied by the frontend; they default to the billing page."""
     amount: float
     success_url: Optional[str] = None
     cancel_url: Optional[str] = None
 
 
+# Allowed USD range for a manual top-up and for the auto-recharge amount. Defined this
+# far down but referenced by earlier functions; that works because they read it at call
+# time, after the module has finished loading.
 TOPUP_MIN = 20.0
 TOPUP_MAX = 1000.0
+# Default redirect target after Stripe Checkout, fixed once at import time.
 _BILLING_BASE_URL = f"{_app_base()}/dashboard/billing"
 
 
@@ -960,6 +1045,8 @@ async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
 
     base = body.success_url or _BILLING_BASE_URL
+    # The doubled braces render a literal {CHECKOUT_SESSION_ID}, which Stripe replaces
+    # with the real session id so /topup/confirm knows which session to verify.
     success_url = f"{base}?topup=success&session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = (body.cancel_url or _BILLING_BASE_URL) + "?topup=canceled"
     try:
@@ -980,6 +1067,8 @@ async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
             # Retain the card on the customer so it shows up under Payment methods and
             # can be charged unattended by auto-recharge.
             payment_intent_data={"setup_future_usage": "off_session"},
+            # topup_confirm credits the amount recorded here, and uses user_id for its
+            # ownership check.
             metadata={"type": "wallet_topup", "user_id": owner_id, "amount": f"{amount:.2f}"},
         )
         return {"data": {"checkout_url": session.url, "session_id": session.id}, "error": None}
@@ -988,6 +1077,8 @@ async def topup_checkout(body: TopupRequest, user=Depends(get_current_user)):
 
 
 class TopupConfirm(BaseModel):
+    """Body for POST /billing/topup/confirm: the Stripe Checkout session id from the
+    success redirect."""
     session_id: str
 
 
@@ -1026,6 +1117,8 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
     if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed")
 
+    # Amount comes from the metadata written at checkout creation. Passing the session id
+    # makes credit_balance idempotent, so a refresh or double confirm can't credit twice.
     amount = float(meta.get("amount") or 0)
     new_balance = credit_balance(
         owner_id, amount, "topup",

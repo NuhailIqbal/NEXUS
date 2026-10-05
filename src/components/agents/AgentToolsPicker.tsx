@@ -1,3 +1,8 @@
+/**
+ * Checklist of tool presets an agent may use during a call. Loads presets with
+ * api.getToolPresets and, when a calendar tool is selected, the calendar connection state with
+ * api.getCalendarStatus. Used in the agent create wizard (CreateAIAgent).
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -5,9 +10,11 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
 import type { CalendarStatus } from "@/components/integrations/calendarTypes";
 
+/** A selectable tool preset from the server; `requires` names a prerequisite such as an integration. */
 export type ToolPreset = { key: string; label: string; description: string; requires: string | null };
 
-const CALENDAR_TOOLS = ["check_availability", "book_slot"];
+// Preset keys that need a connected calendar to work.
+const CALENDAR_TOOLS =["check_availability", "book_slot"];
 
 /**
  * "What can this agent do during a call?" — a checklist of the server's tool presets
@@ -26,6 +33,7 @@ export function AgentToolsPicker({
   const latest = useRef(selectedKeys);
   latest.current = selectedKeys;
 
+  /** Fetches the tool presets, tracking loading and error state (also used by "Try again"). */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -36,12 +44,14 @@ export function AgentToolsPicker({
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const wantsCalendar = selectedKeys.some((k) => CALENDAR_TOOLS.includes(k));
+  // Calendar status is fetched lazily, only once a calendar tool is first selected.
+  const wantsCalendar =selectedKeys.some((k) => CALENDAR_TOOLS.includes(k));
   useEffect(() => {
     if (!wantsCalendar || calendar) return;
     api.getCalendarStatus().then(({ data }) => { if (data) setCalendar(data as CalendarStatus); });
   }, [wantsCalendar, calendar]);
 
+  /** Adds or removes a preset key and reports the new list through onChange. */
   const toggle = (key: string, on: boolean) => {
     const next = on ? [...latest.current.filter((k) => k !== key), key] : latest.current.filter((k) => k !== key);
     latest.current = next;

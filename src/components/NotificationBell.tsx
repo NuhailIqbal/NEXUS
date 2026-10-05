@@ -1,12 +1,21 @@
+/**
+ * Header bell with an unread badge and a popover listing notifications and recent calls. Rendered
+ * in the DashboardLayout top bar. Uses GET /notifications, POST /notifications/read and
+ * GET /conversations. Every notification row links to /dashboard/billing whatever its kind, and
+ * every call row links to /dashboard/conversations.
+ */
 import { useEffect, useState } from "react";
 import { Bell, PhoneIncoming, PhoneOutgoing, AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/services/api";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
+/** A row from GET /notifications. `kind` is returned by the API but not used by the bell. */
 type Notif = { id: string; kind: string; title: string; body?: string; read?: boolean; created_at?: string };
+/** The subset of a GET /conversations row needed for the "Recent calls" section. */
 type Conv = { id: string; contact_name?: string; phone?: string; status?: string; call_time?: string; direction?: string };
 
+/** Coarse relative time for an ISO timestamp ("just now", "5m ago", "3h ago", "2d ago"); "" if missing or unparseable. */
 function timeAgo(iso?: string): string {
   if (!iso) return "";
   const t = new Date(iso).getTime();
@@ -29,22 +38,36 @@ const NotificationBell = () => {
   const [calls, setCalls] = useState<Conv[]>([]);
   const navigate = useNavigate();
 
+  /**
+   * Fetches notifications and the latest conversations in parallel and replaces the local state.
+   * Runs on mount, every 30s and whenever the popover opens. api.* resolves with `data: null` on
+   * failure rather than throwing, so a failed fetch empties the matching list (and, for
+   * notifications, resets the badge to 0).
+   */
   const load = async () => {
     const [nRes, cRes] = await Promise.all([api.getNotifications(), api.getConversations()]);
     const nd = (nRes.data as any) || {};
     setNotifs(Array.isArray(nd.notifications) ? nd.notifications : []);
     setUnread(nd.unread ?? 0);
     const list: Conv[] = Array.isArray(cRes.data) ? cRes.data : [];
+    // Newest call first (rows without a call_time sort last), then keep only the six latest.
     list.sort((a, b) => new Date(b.call_time || 0).getTime() - new Date(a.call_time || 0).getTime());
     setCalls(list.slice(0, 6));
   };
 
+  // Initial fetch plus 30s polling for as long as the bell is mounted.
   useEffect(() => {
     load();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, []);
 
+  /**
+   * Popover open/close handler; only the open transition does anything. It refreshes the data and,
+   * if the badge shows unread items, marks all of the account's notifications read on the server
+   * (POST /notifications/read with no id) and zeroes the badge once that request resolves. The rows
+   * keep their unread highlight until the next refresh, so the user can still see what was new.
+   */
   const onOpen = (open: boolean) => {
     if (!open) return;
     load();

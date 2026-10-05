@@ -1,3 +1,8 @@
+/**
+ * Wallet warning banner at the top of the dashboard <main> (DashboardLayout). Polls
+ * GET /billing/status (api.getBillingStatus) for the prepaid wallet balance and links to the
+ * Billing page. Team members see the account owner's balance, because the backend resolves the owner.
+ */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
@@ -11,16 +16,21 @@ const LowBalanceBanner = () => {
   const [balance, setBalance] = useState<number | null>(null);
 
   useEffect(() => {
+    // `on` stops a late response from updating state after unmount. A failed request (data is
+    // null) leaves the last known balance in place. The response is untyped, hence the cast.
     let on = true;
     const load = () =>
       api.getBillingStatus().then(({ data }) => {
         if (on && data) setBalance(Number((data as any).balance ?? 0));
       });
     load();
+    // Poll so the banner appears or clears shortly after a call is charged or funds are added.
     const t = setInterval(load, 30000);
     return () => { on = false; clearInterval(t); };
   }, []);
 
+  // Hidden until the first successful load (null) and while the balance is above $10, the
+  // highest of the low-balance alert thresholds the backend billing router notifies at.
   if (balance === null || balance > 10) return null;
   const empty = balance <= 0;
 

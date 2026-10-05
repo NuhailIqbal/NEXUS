@@ -1,3 +1,8 @@
+/**
+ * "Events" tab of the Call Events page (index route of /dashboard/call-events, rendered inside
+ * CallEventsLayout). Manages the account-level event library: list, create/edit via
+ * CallEventDialog, and delete. Uses api.getCallEvents and api.deleteCallEvent.
+ */
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Pencil, Plus, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
@@ -10,8 +15,10 @@ import { api } from "@/services/api";
 import { CallEventDialog } from "@/components/agents/CallEventDialog";
 import { SCOPE_LABEL, syncWarningText, type LibraryEvent } from "@/components/agents/callEventTypes";
 
-const COLUMNS = ["Event", "Outcome", "Applies to", "Used by", "Actions"];
+// Table headers; also used for the colSpan of the loading/error/empty rows.
+const COLUMNS =["Event", "Outcome", "Applies to", "Used by", "Actions"];
 
+/** Page component: loads the event library on mount and after every save or delete. */
 const CallEvents = () => {
   const [events, setEvents] = useState<LibraryEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +28,7 @@ const CallEvents = () => {
   const [pendingDelete, setPendingDelete] = useState<LibraryEvent | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  /** Fetches the event library, tracking loading and error state (also used by "Try again"). */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -32,9 +40,15 @@ const CallEvents = () => {
 
   useEffect(() => { load(); }, [load]);
 
-  const openCreate = () => { setEditing(null); setDialogOpen(true); };
-  const openEdit = (e: LibraryEvent) => { setEditing(e); setDialogOpen(true); };
+  /** Opens the dialog in create mode (no event). */
+  const openCreate =() => { setEditing(null); setDialogOpen(true); };
+  /** Opens the dialog in edit mode for the given event. */
+  const openEdit =(e: LibraryEvent) => { setEditing(e); setDialogOpen(true); };
 
+  /**
+   * Deletes the pending event via api.deleteCallEvent. If the backend reports agents that could
+   * not be re-synced to the voice service, shows a warning toast instead of the success toast.
+   */
   const confirmDelete = async () => {
     if (!pendingDelete) return;
     setDeleting(true);

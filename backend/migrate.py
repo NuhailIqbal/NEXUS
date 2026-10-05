@@ -16,6 +16,9 @@ On app start:
 This handles *structure* only (adds tables/columns). It never drops or
 renames — destructive changes still need a manual migration.
 """
+# Entry point: bootstrap_schema(), called from the FastAPI startup hook in main.py (and by
+# the backend test harnesses). It opens its own psycopg connection from
+# settings.database_url and only reads/writes PostgreSQL; no external APIs are called.
 import logging
 import re
 from datetime import datetime, timezone
@@ -28,6 +31,7 @@ from config import settings
 # Use uvicorn's logger so bootstrap messages appear in the server log output.
 logger = logging.getLogger("uvicorn.error")
 
+# schema.sql sits next to this file; it is the single source of truth parsed by the sync below.
 _SCHEMA_FILE = Path(__file__).resolve().parent / "schema.sql"
 
 
@@ -42,7 +46,10 @@ def bootstrap_schema() -> None:
 
     schema_sql = _SCHEMA_FILE.read_text(encoding="utf-8")
     try:
+        # autocommit: every statement commits on its own, so one failing migration step cannot
+        # leave the connection in an aborted transaction and block the steps that follow it.
         with psycopg.connect(settings.database_url, autocommit=True) as conn:
+            # public.users doubles as the "has this database been provisioned yet" marker.
             exists = conn.execute("SELECT to_regclass('public.users')").fetchone()[0]
             if exists:
                 logger.info("auto-migrate: schema already present — checking for new columns…")
@@ -68,6 +75,7 @@ def bootstrap_schema() -> None:
 # Matches each `CREATE TABLE [IF NOT EXISTS] public.<name> ( <body> \n);` block.
 # Non-greedy body ends at the first line that is exactly `);` (the pg_dump-style
 # table terminator); column types like numeric(10,2) never end that way.
+# Group 1 is the table name, group 2 the raw column/constraint body.
 _TABLE_RE = re.compile(
     r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+public\.(\w+)\s*\((.*?)\n\);",
     re.DOTALL | re.IGNORECASE,
@@ -91,6 +99,7 @@ def _strip_sql_comments(body: str) -> str:
         i = 0
         while i < len(line):
             ch = line[i]
+            # An escaped '' inside a string toggles this twice, so the quote state stays correct.
             if ch == "'":
                 in_quote = not in_quote
             elif not in_quote and ch == "-" and line[i + 1:i + 2] == "-":
@@ -111,6 +120,8 @@ def _split_columns(body: str) -> list[str]:
     body = _strip_sql_comments(body)
     parts: list[str] = []
     buf: list[str] = []
+    # depth counts open ( and [ so commas inside numeric(10,2), CHECK (...) or ARRAY[...]
+    # never split a column definition.
     depth = 0
     in_quote = False
     for ch in body:
@@ -126,11 +137,13 @@ def _split_columns(body: str) -> list[str]:
                 buf = []
                 continue
         buf.append(ch)
+    # Flush the last column: it has no trailing comma to trigger the split above.
     if "".join(buf).strip():
         parts.append("".join(buf))
     return parts
 
 
+# Opening/closing delimiter of a Postgres dollar-quoted string: `$$` or `$tag$`.
 _DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z0-9_]*\$")
 
 
@@ -147,6 +160,8 @@ def _split_sql_statements(sql: str) -> list[str]:
     in_squote = False
     dollar_tag: str | None = None
     line_comment = False
+    # Single left-to-right scan. While inside a line comment, a dollar-quoted body or a string
+    # literal, characters are copied verbatim and `;` is NOT treated as a statement separator.
     while i < n:
         ch = sql[i]
         if line_comment:
@@ -155,6 +170,8 @@ def _split_sql_statements(sql: str) -> list[str]:
                 line_comment = False
             i += 1
         elif dollar_tag is not None:
+            # Only the identical closing tag ends the body, so semicolons inside a function
+            # definition do not split it.
             if sql.startswith(dollar_tag, i):
                 buf.append(dollar_tag)
                 i += len(dollar_tag)
@@ -165,6 +182,7 @@ def _split_sql_statements(sql: str) -> list[str]:
         elif in_squote:
             buf.append(ch)
             if ch == "'":
+                # A doubled '' is an escaped quote inside the literal, not its end.
                 if i + 1 < n and sql[i + 1] == "'":
                     buf.append("'")
                     i += 2
@@ -193,6 +211,7 @@ def _split_sql_statements(sql: str) -> list[str]:
         else:
             buf.append(ch)
             i += 1
+    # Keep a final statement that has no terminating semicolon.
     tail = "".join(buf).strip()
     if tail:
         stmts.append(tail)
@@ -205,6 +224,9 @@ def _apply_full_schema_tolerant(conn, schema_sql: str) -> None:
     index and trigger definitions live in SEPARATE statements from the CREATE
     TABLE block. schema.sql is DDL-only (no data), so re-applying is safe."""
     applied = skipped = 0
+    # A statement that succeeds counts as applied even if it was a no-op (IF NOT EXISTS); only
+    # statements that raised (typically "already exists") count as skipped. The connection is
+    # in autocommit mode, so a failure does not abort the statements after it.
     for stmt in _split_sql_statements(schema_sql):
         try:
             conn.execute(stmt)
@@ -226,6 +248,7 @@ def _sync_columns_from_schema(conn, schema_sql: str) -> None:
     It never drops, renames, or changes the type of an existing column.
     """
     def _snapshot() -> dict[str, set]:
+        """Map each table in the public schema to the set of its current column names."""
         cols: dict[str, set] = {}
         for table_name, column_name in conn.execute(
             "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema='public'"
@@ -249,6 +272,7 @@ def _sync_columns_from_schema(conn, schema_sql: str) -> None:
         try:
             existing = _snapshot()
         except Exception:  # noqa: BLE001
+            # Keep the stale snapshot; newly created tables are then skipped by the column loop below.
             pass
 
     # Add any column present in schema.sql but missing from the live table.
@@ -261,10 +285,14 @@ def _sync_columns_from_schema(conn, schema_sql: str) -> None:
             col_def = raw.strip().rstrip(",").strip()
             if not col_def or _CONSTRAINT_START.match(col_def):
                 continue
+            # First token is the column name (possibly quoted); lowercased to match how
+            # Postgres stores unquoted identifiers in information_schema.
             name = col_def.split(None, 1)[0].strip('"').lower()
             if name in have:
                 continue
             try:
+                # DDL cannot take bind parameters; table and col_def come from the repo's own
+                # schema.sql (never user input), so they are interpolated exactly as written there.
                 conn.execute(f"ALTER TABLE public.{table} ADD COLUMN IF NOT EXISTS {col_def}")
                 logger.info("auto-migrate: added column public.%s.%s", table, name)
             except Exception as e:  # noqa: BLE001
@@ -273,11 +301,21 @@ def _sync_columns_from_schema(conn, schema_sql: str) -> None:
 
 def _ensure_columns(conn) -> None:
     """Idempotent ALTERs for columns added after initial provisioning."""
+    # Run in order on every start. Each statement is safe to repeat (IF NOT EXISTS, a guarded DO
+    # block, or an UPDATE that matches nothing once the data is migrated) and has its own
+    # try/except in the loop below, so one failure is logged without blocking the rest. Order
+    # matters where a statement references an earlier one (e.g. call_event_library is created
+    # before call_events gets its foreign key to it). Several tables here (call_events,
+    # callbacks, calendar_*, ...) are not defined in schema.sql at all; this list creates them.
     statements = [
         'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS qualified boolean DEFAULT false',
         'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS transferred_to text',
+        # Call transfer: the destination number, and the id of the VAPI transferCall tool built for it.
         'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_number text',
         'ALTER TABLE public.ai_agents ADD COLUMN IF NOT EXISTS transfer_tool_id text',
+        # monthly_cost: recurring fee charged by the phone-billing sweep. stripe_session_id: the
+        # Stripe checkout that paid for the number; the confirm endpoint looks it up so one
+        # session can only ever provision one number.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS monthly_cost numeric DEFAULT 0',
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS stripe_session_id text',
         # Inbound-call suspension: when a user's balance hits $0, their numbers get
@@ -285,13 +323,18 @@ def _ensure_columns(conn) -> None:
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS suspended_for_balance boolean DEFAULT false',
         # Recurring monthly billing: when this Twilio number's next charge is due.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS next_billing_at timestamptz',
+        # Cached id of the shared "insufficient balance" VAPI assistant (created on first use).
         'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS fallback_assistant_id text',
         # Auto-recharge: top the wallet up off-session from the default card.
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_enabled boolean DEFAULT false',
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_threshold numeric(10,2) DEFAULT 10.00',
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_amount numeric(10,2) DEFAULT 50.00',
+        # auto_recharge_pending_at is an in-flight marker claimed before charging, so a burst of
+        # calls that all cross the threshold triggers only one recharge.
         'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS auto_recharge_pending_at timestamptz',
         # Redeemable promo codes (distinct from the automatic signup welcome bonus).
+        # expiry_days is how long the credited amount lasts after redemption; NULL max_redemptions
+        # means unlimited and NULL valid_until means the code itself never expires.
         '''CREATE TABLE IF NOT EXISTS public.promo_codes (
             id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
             code text NOT NULL UNIQUE,
@@ -303,6 +346,7 @@ def _ensure_columns(conn) -> None:
             active boolean DEFAULT true NOT NULL,
             created_at timestamptz DEFAULT now() NOT NULL
         )''',
+        # UNIQUE (promo_code_id, user_id) below: a user can redeem a given code only once.
         '''CREATE TABLE IF NOT EXISTS public.promo_code_redemptions (
             id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
             promo_code_id uuid NOT NULL REFERENCES public.promo_codes(id) ON DELETE CASCADE,
@@ -354,6 +398,8 @@ def _ensure_columns(conn) -> None:
             ref_id text,
             created_at timestamp with time zone DEFAULT now() NOT NULL
         )''',
+        # Partial unique index: a Stripe session can credit the wallet at most once, even if both
+        # the redirect confirm and the webhook run.
         '''CREATE UNIQUE INDEX IF NOT EXISTS wallet_transactions_stripe_session_id_key
             ON public.wallet_transactions (stripe_session_id) WHERE stripe_session_id IS NOT NULL''',
         '''CREATE INDEX IF NOT EXISTS wallet_transactions_user_id_idx
@@ -391,6 +437,7 @@ def _ensure_columns(conn) -> None:
             promo_expiry_days integer DEFAULT 60,
             updated_at timestamp with time zone DEFAULT now()
         )''',
+        # Seed the one row (id = 1) that the code expects to exist; a no-op if it is already there.
         "INSERT INTO public.platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
         # Email verification tokens (block login until the email is confirmed).
         '''CREATE TABLE IF NOT EXISTS public.email_verification_tokens (
@@ -408,6 +455,7 @@ def _ensure_columns(conn) -> None:
            FROM public.billing
            WHERE COALESCE(balance,0) > 0
              AND user_id NOT IN (SELECT user_id FROM public.credit_grants)''',
+        # Re-asserted on every start: the per-minute rate that new billing rows begin with.
         'ALTER TABLE public.billing ALTER COLUMN rate_per_minute SET DEFAULT 0.35',
         # Cost-plus pricing: everyone defaults to Pay As You Go; legacy 'free' trial rows move to payg.
         "UPDATE public.billing SET plan = 'payg', status = 'active', outbound_limit = 999999, inbound_limit = 999999 WHERE plan = 'free'",
@@ -440,6 +488,8 @@ def _ensure_columns(conn) -> None:
         # only ever sends lowercase 'member'/'viewer' and 'Active'/'Pending', so every invite
         # hit these check constraints. Normalize any legacy rows and swap the constraints to
         # match what the app writes.
+        # ADD CONSTRAINT has no IF NOT EXISTS, so each constraint below is dropped and re-added;
+        # that pair is what makes it safe to re-run on every start.
         "UPDATE public.team_members SET role = lower(role) WHERE role != lower(role)",
         "ALTER TABLE public.team_members DROP CONSTRAINT IF EXISTS team_members_role_check",
         "ALTER TABLE public.team_members ADD CONSTRAINT team_members_role_check "
@@ -552,6 +602,9 @@ def _ensure_columns(conn) -> None:
         # auto-calling (callback_settings.auto_call, off by default).
         'ALTER TABLE public.call_event_library ADD COLUMN IF NOT EXISTS schedules_callback boolean DEFAULT false NOT NULL',
         'ALTER TABLE public.call_events ADD COLUMN IF NOT EXISTS schedules_callback boolean DEFAULT false NOT NULL',
+        # status values: pending, calling (a call is being placed right now), called, failed,
+        # cancelled, skipped. time_source records where due_at came from: the caller's own
+        # request, the account's default callback time, or a manual edit.
         '''CREATE TABLE IF NOT EXISTS public.callbacks (
             id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
             user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -581,6 +634,9 @@ def _ensure_columns(conn) -> None:
             WHERE vapi_call_id IS NOT NULL AND tool_call_id IS NOT NULL''',
         'CREATE INDEX IF NOT EXISTS callbacks_due_idx ON public.callbacks (status, due_at)',
         'CREATE INDEX IF NOT EXISTS callbacks_user_idx ON public.callbacks (user_id, due_at DESC)',
+        # One row per account. work_days uses Monday = 0 ... Sunday = 6; the start/end/default
+        # times are "HH:MM" strings in the row's timezone. retry_minutes and max_attempts govern
+        # how the auto-call scheduler retries a callback whose call could not be placed.
         '''CREATE TABLE IF NOT EXISTS public.callback_settings (
             user_id uuid NOT NULL PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
             auto_call boolean DEFAULT false NOT NULL,
@@ -622,6 +678,8 @@ def _ensure_columns(conn) -> None:
         # BYOT (Bring Your Own Twilio): a number can reference a user-connected Twilio
         # account instead of the platform's own one; its provider value is 'twilio_byot'.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS twilio_credential_id uuid',
+        # config_encrypted holds the Fernet-encrypted Twilio auth token; the account SID is stored
+        # in the clear in account_sid.
         '''CREATE TABLE IF NOT EXISTS public.twilio_byot_credentials (
             id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
             user_id uuid NOT NULL,
@@ -632,12 +690,16 @@ def _ensure_columns(conn) -> None:
             updated_at timestamptz DEFAULT now() NOT NULL
         )''',
         'CREATE INDEX IF NOT EXISTS twilio_byot_credentials_user_idx ON public.twilio_byot_credentials (user_id)',
+        # Admin toggle: whether a BYOT call's charge leaves out the estimated Twilio carrier leg,
+        # since those users already pay Twilio directly for it. On by default.
         'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS byot_exclude_twilio_leg boolean DEFAULT true',
     ]
     for stmt in statements:
         try:
             conn.execute(stmt)
         except Exception as e:  # noqa: BLE001
+            # The log label is whatever follows "EXISTS" in the statement (usually the target
+            # name); a statement without that word is logged in full.
             logger.warning("auto-migrate: column ensure skipped (%s): %s", stmt.split("EXISTS", 1)[-1].strip(), e)
 
 
@@ -651,6 +713,8 @@ def _backfill_phone_billing_dates(conn) -> None:
     Idempotent: only touches rows that are still NULL/0.
     """
     try:
+        # 3.00 mirrors PHONE_NUMBER_MONTHLY_COST in routers/billing.py (the platform's monthly
+        # fee for a Twilio number). BYOT numbers (provider 'twilio_byot') are not touched here.
         conn.execute(
             "UPDATE public.phone_numbers SET monthly_cost = 3.00 "
             "WHERE provider = 'twilio' AND (monthly_cost IS NULL OR monthly_cost = 0)"
@@ -661,10 +725,13 @@ def _backfill_phone_billing_dates(conn) -> None:
         ).fetchall()
         if not rows:
             return
+        # Imported lazily: only needed when there are rows to backfill. The helper steps forward
+        # one month at a time from created_at until the date is strictly after `now`.
         from services.phone_billing import _next_future_billing_date
 
         now = datetime.now(timezone.utc)
         for phone_id, created_at in rows:
+            # Treat a naive timestamp as UTC so it can be compared with the timezone-aware `now`.
             if created_at and created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=timezone.utc)
             base = created_at or now
@@ -686,6 +753,7 @@ def _backfill_referral_codes(conn) -> None:
     for new signups.
     """
     try:
+        # Reuse the signup code generator so backfilled codes look the same as new ones.
         from routers.auth import _generate_referral_code
 
         rows = conn.execute(
@@ -694,6 +762,8 @@ def _backfill_referral_codes(conn) -> None:
         if not rows:
             return
         for (profile_id,) in rows:
+            # Up to 8 attempts per profile. If every attempt collides, the profile keeps a NULL
+            # code and is retried on the next start.
             for _ in range(8):
                 code = _generate_referral_code()
                 try:

@@ -1,3 +1,9 @@
+/**
+ * "Create Phone Number" dialog, opened from the Phone Numbers page ("Buy Number").
+ * Collects purpose, provider (standard Twilio-backed or BYOT), optional BYOT account/number and
+ * inbound agent, validates, and hands a PhoneNumberData to onCreate; the parent calls the API.
+ * Itself calls only getAgents and getTwilioCredentials, and embeds ConnectTwilioDialog.
+ */
 import { useEffect, useState } from "react";
 import { X, Plus, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
@@ -17,6 +23,7 @@ type Props = {
 };
 
 export type Purpose = "inbound" | "outbound" | "both";
+/** BYOT: "import" a number already owned on the user's Twilio account, or "purchase" a new one there. */
 export type ByotMode = "import" | "purchase";
 
 export type PhoneNumberData = {
@@ -30,6 +37,7 @@ export type PhoneNumberData = {
   byotNumber?: string;
 };
 
+/** A saved Twilio account as returned by GET /telephony/twilio-credentials (token is masked). */
 type TwilioCredential = { id: string; account_sid: string; auth_token_masked?: string; label?: string | null };
 
 const PROVIDERS = ["Twilio", "BYOT"];
@@ -42,6 +50,10 @@ const PROVIDER_LABELS: Record<string, string> = {
   BYOT: "Twilio",
 };
 
+/**
+ * Controlled dialog (open/onOpenChange) for creating a number. Props: onCreate receives the
+ * validated form data. On open it loads agents and connected Twilio accounts. State resets on close.
+ */
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
   const [data, setData] = useState<PhoneNumberData>({
     active: false,
@@ -54,6 +66,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   const [credentials, setCredentials] = useState<TwilioCredential[]>([]);
   const [connectOpen, setConnectOpen] = useState(false);
 
+  // Fetches connected Twilio accounts; also used as the refresh callback after connecting a new one.
   const loadCredentials = () => {
     api.getTwilioCredentials().then(({ data: d }) => {
       const list = (d as TwilioCredential[]) ?? [];
@@ -66,6 +79,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     });
   };
 
+  // Reload dropdown data every time the dialog opens so it is never stale.
   useEffect(() => {
     if (open) {
       api.getAgents().then(({ data: d }) => setAgents((d as any[]) ?? []));
@@ -75,6 +89,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
   const reset = () => setData({ active: false, serviceProvider: "", agentId: "", purpose: "", byotMode: "import" });
 
+  // Dialog open-change handler: closing (by any route) discards the form before notifying the parent.
   const close = (v: boolean) => {
     if (!v) reset();
     onOpenChange(v);
@@ -82,6 +97,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
   const isByot = data.serviceProvider === "BYOT";
 
+  // Validates the form (toasting the first problem) and, if valid, passes it to onCreate and closes.
   const create = () => {
     if (!data.purpose) return toast.error("Please select a purpose");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
@@ -260,6 +276,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   );
 }
 
+/** Labelled on/off switch row. */
 function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-center gap-3">

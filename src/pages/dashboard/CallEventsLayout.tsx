@@ -1,6 +1,11 @@
+/**
+ * Shared shell for the Call Events section (route /dashboard/call-events): page title, tab
+ * navigation, and an Outlet for the active tab (Events index or Callbacks child route).
+ */
 import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
+// `end` is true on the index tab so it is not highlighted while on the Callbacks child route.
 const TABS = [
   { to: "/dashboard/call-events", label: "Events", end: true },
   { to: "/dashboard/call-events/callbacks", label: "Callbacks", end: false },

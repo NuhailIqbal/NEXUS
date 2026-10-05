@@ -1,3 +1,8 @@
+/**
+ * "Talk to our team" lead form, routed at /request-access (see App.tsx).
+ * Purely presentational: the form fields are uncontrolled and submitting only flips a local flag
+ * to show a thank-you screen. No API is called and the entered data is neither sent nor stored.
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -5,6 +10,7 @@ import { Sparkles, ArrowRight, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+/** Marketing bullet points rendered as a checklist beside the form. */
 const benefits = [
   "AI voice agents for outbound and inbound calls",
   "Every call recorded, transcribed, and summarized",
@@ -13,6 +19,13 @@ const benefits = [
   "No monthly platform fee",
 ];
 
+/**
+ * Two-column page: pitch and benefits on the left, the request form on the right. After the form
+ * is submitted (the form's onSubmit handler only prevents the default and sets `submitted`), the
+ * whole page is replaced by a "Request Received" confirmation.
+ * The 24-hour follow-up promised in the confirmation text is a content claim only; nothing in
+ * this component records the request.
+ */
 const RequestAccess = () => {
   const [submitted, setSubmitted] = useState(false);
 

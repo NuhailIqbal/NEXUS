@@ -1,6 +1,12 @@
+/**
+ * Icon-only action buttons (view, test, settings, delete) for the last cell of a table row or card.
+ * Purely presentational: it only calls the handlers it is given; any confirmation or API call
+ * happens in the parent page. Used by Contacts, Lists, PhoneNumbers, Outbound and VoiceWidgets.
+ */
 import { ReactNode } from "react";
 import { PlayCircle, Settings as SettingsIcon, Eye, Trash2 } from "lucide-react";
 
+/** Each button is rendered only when its handler is passed; `extra` is a slot for page-specific controls. */
 type Props = {
   onTest?: () => void;
   onSettings?: () => void;
@@ -9,6 +15,11 @@ type Props = {
   extra?: ReactNode;
 };
 
+/**
+ * Right-aligned row of icon buttons, in the order: `extra`, view, test, settings, delete.
+ * The icon-only buttons carry title and aria-label for tooltips and screen readers. On phones
+ * they get a fixed 36px square tap target (h-9 w-9), which collapses to a compact padded icon from `sm` up.
+ */
 export function RowActions({ onTest, onSettings, onView, onDelete, extra }: Props) {
   return (
     <div className="flex items-center justify-end gap-0.5">

@@ -1,3 +1,8 @@
+/**
+ * Billing > Promotions tab: redeem a promo code for wallet credit and list
+ * previously applied promotions. Uses api.redeemPromoCode and api.getPromotions.
+ * Route: /dashboard/billing/promotions (App.tsx).
+ */
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Tag } from "lucide-react";
 import { toast } from "sonner";

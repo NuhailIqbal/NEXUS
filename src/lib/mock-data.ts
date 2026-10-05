@@ -1,7 +1,15 @@
+/**
+ * Static demo fixtures (agents, contacts, conversations, analytics, ...) for the dashboard
+ * prototype. Currently no module imports this file: the dashboard pages load real data
+ * through `api.*` (src/services/api.ts). Sample values (voice names such as "Aria", dates,
+ * counts) are made up and do not match the real voice catalog in lib/voices.ts.
+ */
 // Centralized mock data for the EDM Nexus dashboard demo.
 
+/** Status labels used across the sample records. */
 export type Status = "Active" | "Inactive" | "Paused" | "Error" | "Pending";
 
+/** Placeholder signed-in user. */
 export const currentUser = {
   name: "Qarib Morgan",
   email: "qarib@edmnexus.io",
@@ -9,6 +17,7 @@ export const currentUser = {
   role: "Admin",
 };
 
+/** Onboarding steps; `icon` is the name of a lucide-react icon as a string, `time` an estimate. */
 export const setupChecklist = [
   { id: 1, title: "Create your first AI Agent", description: "Configure an agent for lead qualification", time: "5 min", completed: true, icon: "Bot" },
   { id: 2, title: "Get a phone number", description: "Provision a number for inbound or outbound calls", time: "2 min", completed: true, icon: "Phone" },
@@ -18,6 +27,7 @@ export const setupChecklist = [
   { id: 6, title: "Review your analytics", description: "Track KPIs across channels and campaigns", time: "3 min", completed: false, icon: "BarChart3" },
 ];
 
+/** Sample agents; `as const` makes the records readonly with literal types. */
 export const aiAgents = [
   { id: "ag_01", name: "Lia Lead Qualifier", status: "Active", category: "Lead Qualifying", voice: "Aria", language: "English (US)", createdBy: "Qarib Morgan", createdAt: "2025-03-12" },
   { id: "ag_02", name: "Marco Verifier", status: "Active", category: "Lead Verification", voice: "Marco", language: "Spanish (ES)", createdBy: "Qarib Morgan", createdAt: "2025-03-18" },
@@ -59,6 +69,11 @@ export const integrations = {
   ],
 };
 
+/**
+ * 24 generated sample contacts. Fields cycle deterministically by index (8 names, 3 statuses,
+ * 4 lists), so output is stable across renders. The day in `createdAt` is not zero-padded,
+ * so the strings are not valid ISO dates.
+ */
 export const contacts = Array.from({ length: 24 }).map((_, i) => ({
   id: `c_${i + 1}`,
   name: ["Olivia Bennett", "Liam Carter", "Emma Davies", "Noah Hughes", "Ava Patel", "Mia Rossi", "Lucas Müller", "Sofia Garcia"][i % 8] + ` ${i + 1}`,
@@ -107,6 +122,11 @@ export const voiceWidgets = [
   { id: 3, name: "Demo Booking", status: "Active", agent: "Marco", position: "Bottom Left" },
 ];
 
+/**
+ * 14 generated sample conversations. Channel, contact, status and the yes/no flags cycle by
+ * index and `duration` is an m:ss string derived from it, so output is stable across renders.
+ * `callTime` is not zero-padded, so it is not a valid ISO timestamp.
+ */
 export const conversations = Array.from({ length: 14 }).map((_, i) => {
   const statuses = ["Initiated", "Queued", "Ringing", "In Progress", "Completed", "Unsuccessful"] as const;
   const channels = ["Voice", "WhatsApp", "SMS", "Web"] as const;
@@ -124,6 +144,7 @@ export const conversations = Array.from({ length: 14 }).map((_, i) => {
   };
 });
 
+/** Sample per-status call counts; `color` is a semantic tone name (muted, info, warning, destructive, success). */
 export const conversationStats = [
   { label: "Total", count: 1240, color: "muted" },
   { label: "Initiated", count: 320, color: "info" },
@@ -134,6 +155,7 @@ export const conversationStats = [
   { label: "Completed", count: 690, color: "success" },
 ];
 
+/** 14 days of generated chart data (calls, conversions, duration), computed with modular arithmetic rather than randomness so charts render identically every time. */
 export const analyticsTimeSeries = Array.from({ length: 14 }).map((_, i) => ({
   day: `D${i + 1}`,
   calls: 80 + ((i * 47) % 120),

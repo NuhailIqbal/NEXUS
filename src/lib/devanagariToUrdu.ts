@@ -1,3 +1,9 @@
+/**
+ * Best-effort Devanagari -> Urdu (Perso-Arabic) transliteration for live call transcripts.
+ * Pure string helpers with no I/O. `fixMultilingualScript` is the entry point, applied to each
+ * final transcript message in components/dashboard/LiveVoiceModal.tsx. Background on why it
+ * is needed is in the comment below.
+ */
 // Deepgram's "multi" (auto-detect) transcriber has no dedicated Urdu language — spoken
 // Urdu and Hindi are phonetically identical (Hindustani), so it transcribes Urdu speech
 // using Hindi's Devanagari script instead of Urdu's Nastaliq/Perso-Arabic script. This
@@ -11,6 +17,7 @@
 // reads correctly for common conversational phrases, which is what a live call transcript
 // needs.
 
+/** Matches any character in the Devanagari Unicode block (U+0900-U+097F). */
 const DEVANAGARI_RANGE = /[ऀ-ॿ]/;
 
 // Independent vowels (word-initial / standalone)
@@ -20,6 +27,10 @@ const INDEPENDENT_VOWELS: Record<string, string> = {
 };
 
 // Consonants (includes nukta variants for loanword sounds)
+// Caveat: each nukta entry (the last row) is a base letter plus U+093C, i.e. two code points,
+// but devanagariToUrdu() looks up one code point at a time, so those keys never match. A
+// nukta letter therefore comes out as the plain consonant's mapping followed by the unmapped
+// U+093C, and precomposed nukta forms (U+0958-U+095F) pass through unchanged.
 const CONSONANTS: Record<string, string> = {
   "क": "ک", "ख": "کھ", "ग": "گ", "घ": "گھ", "ङ": "نگ",
   "च": "چ", "छ": "چھ", "ज": "ج", "झ": "جھ", "ञ": "ن",
@@ -38,6 +49,8 @@ const MATRAS: Record<string, string> = {
   "ि": "", "ु": "", "्": "",
 };
 
+// Anusvara/chandrabindu/visarga, Devanagari digits -> Extended Arabic-Indic digits, and the
+// danda (sentence stop) -> Urdu full stop.
 const OTHER: Record<string, string> = {
   "ं": "ں", "ँ": "ں", "ः": "ہ",
   "०": "۰", "१": "۱", "२": "۲", "३": "۳", "४": "۴",
@@ -45,12 +58,18 @@ const OTHER: Record<string, string> = {
   "।": "۔",
 };
 
+/** Merged lookup table: one Devanagari code point -> its Urdu replacement ("" drops the character). */
 const CHAR_MAP: Record<string, string> = { ...INDEPENDENT_VOWELS, ...CONSONANTS, ...MATRAS, ...OTHER };
 
+/** True if `text` contains at least one Devanagari character. */
 export function containsDevanagari(text: string): boolean {
   return DEVANAGARI_RANGE.test(text);
 }
 
+/**
+ * Transliterates `text` one code point at a time via CHAR_MAP. Characters with no entry
+ * (Latin letters, spaces, punctuation, unmapped marks) are copied through unchanged.
+ */
 export function devanagariToUrdu(text: string): string {
   let out = "";
   for (const ch of text) {

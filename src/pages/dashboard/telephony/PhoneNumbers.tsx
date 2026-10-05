@@ -1,3 +1,10 @@
+/**
+ * Dashboard page listing every phone number on the account (route: /dashboard/telephony/phone-numbers).
+ * Loads numbers, agents and campaigns, with client-side filter/sort/pagination, and offers buy,
+ * settings (agent/status), release and "place test call" actions per row.
+ * API: getPhoneNumbers, getAgents, getCampaigns, createPhoneNumber, createByotPhoneNumber,
+ * confirmPhonePurchase, updatePhoneNumber, deletePhoneNumber, makeCall, getCallStatus.
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { format, isSameDay } from "date-fns";
 import { Plus, Phone, Clock, Delete, PhoneCall, PhoneOff, Loader2 } from "lucide-react";
@@ -37,8 +44,10 @@ const PROVIDER_LABELS: Record<string, string> = {
   vapi: "Standard",
   twilio_byot: "Twilio",
 };
+/** Maps a raw provider value (case-insensitive) to its user-facing label; unknown values pass through. */
 const providerLabel = (p: string) => PROVIDER_LABELS[(p || "").toLowerCase()] ?? p;
 
+/** A phone number row as returned by GET /telephony/phone-numbers. */
 type Num = {
   id: string;
   number: string;
@@ -54,6 +63,10 @@ type Num = {
 };
 
 // Real recurring-billing renewal date (next_billing_at). NULL for free VAPI numbers.
+/**
+ * Parses next_billing_at into a Date plus whole days remaining (negative once past due).
+ * Returns null when the value is missing or not a valid date.
+ */
 function numberExpiry(nextBillingAt?: string | null) {
   if (!nextBillingAt) return null;
   const d = new Date(nextBillingAt);
@@ -62,8 +75,10 @@ function numberExpiry(nextBillingAt?: string | null) {
   return { date: d, daysLeft };
 }
 
+/** UI state of the test-call dialog; mostly mirrors the VAPI call status, plus local "dialing"/"failed". */
 type CallStage = "idle" | "dialing" | "queued" | "ringing" | "in-progress" | "ended" | "failed";
 
+// Test-call status polling: check every 2s and give up after 2 minutes.
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120000;
 
@@ -88,6 +103,11 @@ const USED_IN_OPTIONS = [
 const STATUS_OPTIONS = ["Active", "Inactive"];
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+/**
+ * Phone Numbers page component. Holds the table data, filter/sort/pagination state, the
+ * "Buy Number" flow (via CreatePhoneNumberDialog), the settings modal and the test-call dialog.
+ * Also finishes Stripe checkout returns (?purchase=success|canceled) on mount.
+ */
 const PhoneNumbers = () => {
   const [open, setOpen] = useState(false);
   const [numbers, setNumbers] = useState<Num[]>([]);
@@ -112,6 +132,8 @@ const PhoneNumbers = () => {
   const [settingsTarget, setSettingsTarget] = useState<Num | null>(null);
   const [settingsForm, setSettingsForm] = useState<{ agent_id: string | null; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
 
+  // Loads numbers, agents (id -> name lookup) and campaigns (set of phone_number_ids used
+  // for outbound) in parallel. Each is applied only if its response is valid.
   const fetchNumbers = async () => {
     const [numbersRes, agentsRes, campaignsRes] = await Promise.all([
       api.getPhoneNumbers(), api.getAgents(), api.getCampaigns(),
@@ -126,6 +148,7 @@ const PhoneNumbers = () => {
 
   useEffect(() => { fetchNumbers(); }, []);
 
+  // Cycles a column through ascending -> descending -> unsorted.
   const toggleSort = (key: ColumnKey) => {
     if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
     if (sortDir === "asc") { setSortDir("desc"); return; }
@@ -133,11 +156,14 @@ const PhoneNumbers = () => {
   };
   const setFilter = (key: ColumnKey, value: string) => setFilters((f) => ({ ...f, [key]: value }));
 
+  // Distinct provider labels present in the data, used as the provider filter options.
   const providerOptions = useMemo(() => {
     const set = new Set(numbers.map((n) => providerLabel(n.provider)).filter(Boolean));
     return Array.from(set).sort();
   }, [numbers]);
 
+  // Raw comparable/searchable text for a column. Date columns return the ISO string
+  // (parsed by the sort); "usedIn" has no text and is handled separately.
   const textFor = (n: Num, key: ColumnKey): string => {
     if (key === "number") return n.number || "";
     if (key === "provider") return providerLabel(n.provider) || "";
@@ -173,6 +199,8 @@ const PhoneNumbers = () => {
     });
   }, [numbers, outboundIds, filters, purchasedDateFilter, expiresDateFilter]);
 
+  // Applies the active sort. "usedIn" ranks by how many roles (inbound/outbound) a number has;
+  // missing dates sort as 0 (earliest).
   const sortedNumbers = useMemo(() => {
     if (!sortKey) return filteredNumbers;
     return [...filteredNumbers].sort((a, b) => {
@@ -193,8 +221,10 @@ const PhoneNumbers = () => {
     });
   }, [filteredNumbers, sortKey, sortDir, outboundIds]);
 
+  // Return to the first page whenever the result set changes shape.
   useEffect(() => { setPage(1); }, [filters, purchasedDateFilter, expiresDateFilter, pageSize]);
   const totalPages = Math.max(1, Math.ceil(sortedNumbers.length / pageSize));
+  // Clamp the page if rows disappear (e.g. after a delete) and the current page no longer exists.
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   const visibleNumbers = useMemo(
     () => sortedNumbers.slice((page - 1) * pageSize, page * pageSize),
@@ -202,6 +232,8 @@ const PhoneNumbers = () => {
   );
 
   // Handle the return from Stripe checkout (low-balance number purchase).
+  // The ref guards against confirming the same session twice (e.g. React StrictMode double
+  // effect run). The query string is always cleaned so a refresh doesn't replay it.
   const confirming = useRef(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -229,6 +261,7 @@ const PhoneNumbers = () => {
     }
   }, []);
 
+  // Releases (deletes) a number via the API, then refreshes the list.
   const handleDelete = async (n: Num) => {
     const { error } = await api.deletePhoneNumber(n.id);
     if (error) return toast.error(error);
@@ -236,10 +269,12 @@ const PhoneNumbers = () => {
     fetchNumbers();
   };
 
+  // Cancels the call-status poll timer, if running.
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
+  // Opens the test-call dialog for a number with a clean stage and log.
   const openTest = (n: Num) => {
     stopPolling();
     setTestTarget(n);
@@ -247,6 +282,7 @@ const PhoneNumbers = () => {
     setTestLog([]);
   };
 
+  // Closes the test-call dialog and stops any status polling (the call itself is not cancelled).
   const closeTest = () => {
     stopPolling();
     setTestTarget(null);
@@ -278,8 +314,11 @@ const PhoneNumbers = () => {
     }, POLL_INTERVAL_MS);
   };
 
+  // Stop polling on unmount so no timer outlives the page.
   useEffect(() => stopPolling, []);
 
+  // Places a real outbound call from this number using its assigned agent, then starts polling
+  // for status. Validation failures are only written to the log, no request is made.
   const placeTestCall = async (n: Num, to: string) => {
     if (!n.agent_id) {
       setTestLog((l) => [...l, "Error: no agent assigned to this number. Assign one in Settings first."]);
@@ -306,11 +345,14 @@ const PhoneNumbers = () => {
     }
   };
 
+  // Opens the settings modal, seeding the form from the number's current values.
   const openSettings = (n: Num) => {
     setSettingsTarget(n);
     setSettingsForm({ agent_id: n.agent_id, status: n.status, provider: n.provider });
   };
 
+  // Saves agent/status/provider for the selected number (PATCH); the provider field is
+  // read-only in the UI and is sent back unchanged.
   const saveSettings = async () => {
     if (!settingsTarget) return;
     const { error } = await api.updatePhoneNumber(settingsTarget.id, {
@@ -449,6 +491,8 @@ const PhoneNumbers = () => {
       <CreatePhoneNumberDialog
         open={open}
         onOpenChange={setOpen}
+        // BYOT goes to the dedicated endpoint (import or purchase on the user's own Twilio account).
+        // Otherwise a standard number is created; the backend may answer with a Stripe checkout URL.
         onCreate={async (d) => {
           const status = d.active ? "Active" : "Inactive";
 
@@ -543,8 +587,14 @@ const PhoneNumbers = () => {
   );
 };
 
+// How long (seconds) a freshly created VAPI number is shown as "Activating" in the UI.
 const ACTIVATION_SECS = 120;
 
+/**
+ * Status cell for a number. Shows an "Activating m:ss" countdown for a VAPI number created
+ * less than ACTIVATION_SECS ago, then "Suspended" if the wallet balance suspended it, else
+ * the Active/Inactive badge. The countdown is local only and starts once on mount.
+ */
 function NumberStatus({ num }: { num: Num }) {
   const [remaining, setRemaining] = useState<number>(() => {
     if ((num.provider || "").toLowerCase() !== "vapi" || !num.vapi_phone_id || !num.created_at) return 0;
@@ -582,6 +632,7 @@ function NumberStatus({ num }: { num: Num }) {
   return <Badge variant={num.status === "Active" ? "default" : "secondary"}>{num.status}</Badge>;
 }
 
+// Dial pad layout as [digit, letters] pairs.
 const DIAL_KEYS: [string, string][] = [
   ["1", ""], ["2", "ABC"], ["3", "DEF"],
   ["4", "GHI"], ["5", "JKL"], ["6", "MNO"],
@@ -589,7 +640,8 @@ const DIAL_KEYS: [string, string][] = [
   ["+", ""], ["0", ""], ["#", ""],
 ];
 
-const CALL_STAGE_META: Record<CallStage, { label: string; className: string } | null> = {
+// Badge label and styling per call stage; null (idle) hides the badge.
+const CALL_STAGE_META:Record<CallStage, { label: string; className: string } | null> = {
   idle: null,
   dialing: { label: "Dialing…", className: "border-info/40 bg-info/10 text-info" },
   queued: { label: "Queued", className: "border-yellow-500/40 bg-yellow-500/10 text-yellow-500" },
@@ -599,6 +651,11 @@ const CALL_STAGE_META: Record<CallStage, { label: string; className: string } | 
   failed: { label: "Call failed", className: "border-destructive/40 bg-destructive/10 text-destructive" },
 };
 
+/**
+ * Modal with a dial pad for placing a test call from `target`. Props: `log` (latest entry is
+ * shown), `stage` (drives the badge and disables input while a call is active), `onPlace`
+ * (parent performs the API call) and `onClose`. Holds only the typed destination number.
+ */
 function TestCallDialog({
   target, log, stage, onPlace, onClose,
 }: {
@@ -612,6 +669,7 @@ function TestCallDialog({
   const isBusy = stage === "dialing" || stage === "queued" || stage === "ringing" || stage === "in-progress";
   const meta = CALL_STAGE_META[stage];
 
+  // Clear the typed number each time the dialog is opened for a target.
   useEffect(() => {
     if (target) setTo("");
   }, [target]);

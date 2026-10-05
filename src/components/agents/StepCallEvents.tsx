@@ -9,6 +9,8 @@ import { MAX_CALL_EVENTS, SCOPE_LABEL, type LibraryEvent } from "./callEventType
 /**
  * Wizard step: choose which events from the account's event library this agent should
  * report. `selectedIds` are library event ids. New events can be created inline.
+ * Uses api.getCallEvents; `compact` hides the heading block (used in EditAIAgent).
+ * Selection is capped at MAX_CALL_EVENTS.
  */
 export function StepCallEvents({
   selectedIds, onChange, compact,
@@ -21,8 +23,10 @@ export function StepCallEvents({
   // Always act on the latest selection, even if two clicks land before React re-renders.
   const latest = useRef(selectedIds);
   latest.current = selectedIds;
+  /** Updates the ref immediately and notifies the parent. */
   const commit = (next: string[]) => { latest.current = next; onChange(next); };
 
+  /** Fetches the event library and prunes selected ids that no longer exist. */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -43,12 +47,14 @@ export function StepCallEvents({
   useEffect(() => { load(); }, [load]);
 
   const full = selectedIds.length >= MAX_CALL_EVENTS;
+  /** Selects or deselects an event; ignores new selections once the cap is reached. */
   const toggle = (id: string, on: boolean) => {
     const cur = latest.current;
     if (on && !cur.includes(id) && cur.length >= MAX_CALL_EVENTS) return;
     commit(on ? [...cur.filter((x) => x !== id), id] : cur.filter((x) => x !== id));
   };
 
+  /** After inline creation, adds the event to the list and auto-selects it if there is room. */
   const handleSaved = (saved: LibraryEvent) => {
     setEvents((prev) => (prev.some((e) => e.id === saved.id) ? prev : [...prev, saved]));
     const cur = latest.current;

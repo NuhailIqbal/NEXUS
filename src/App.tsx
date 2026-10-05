@@ -1,3 +1,10 @@
+/**
+ * Application root: wires up the global providers (theme, query client, tooltips, toasts,
+ * router, auth) and declares every client-side route. One bundle serves two route trees:
+ * on the admin subdomain (see lib/adminHost) only the Admin portal renders; on the main
+ * host the marketing/auth pages and the authenticated /dashboard/* area render.
+ * Rendered by main.tsx.
+ */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
@@ -60,9 +67,30 @@ import Callbacks from "./pages/dashboard/Callbacks";
 import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.tsx";
 
 
+/**
+ * Shared TanStack Query client, created once at module load so it survives App re-renders.
+ * Note: no component in src/ currently imports TanStack Query hooks; pages fetch data
+ * through services/api.ts directly.
+ */
 const queryClient = new QueryClient();
 
+/**
+ * Root component. ThemeProvider is outermost (dark by default, persisted under the
+ * "nexus-theme" localStorage key; the "class" strategy toggles Tailwind's `dark` class).
+ * AuthProvider sits inside BrowserRouter and wraps the Routes on both hosts, so every page
+ * can call useAuth(). Sonner and the shadcn Toaster are two separate toast systems that both
+ * remain mounted because different components use each.
+ *
+ * Route notes for the main host:
+ * - /dashboard is a layout route (DashboardLayout): it redirects to /login once auth has
+ *   finished loading with no user, and every dashboard page renders in its <Outlet />.
+ * - telephony/campaigns renders the same Outbound page as telephony/outbound.
+ * - The legacy telephony/inbound-numbers and callbacks paths redirect to
+ *   telephony/phone-numbers and call-events/callbacks respectively.
+ * - call-events and billing are nested layouts with their own child routes.
+ */
 const App = () => {
+  // Decided from window.location once per render: an "admin." hostname, or ?admin=1 in local dev.
   const adminHost = isAdminHost();
 
   return (

@@ -1,3 +1,10 @@
+/**
+ * AI Receptionist page (route /dashboard/telephony/inbound). Lists inbound queues
+ * ("receptionists"), each pairing an AI agent with a phone number, and shows summary
+ * stats from recent inbound calls. Uses api.getInboundQueues/createInboundQueue/
+ * updateInboundQueue/deleteInboundQueue, getAgents, getPhoneNumbers, getConversations
+ * and confirmPhonePurchase (Stripe checkout return).
+ */
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   PhoneIncoming, Plus, Phone, Bot, Loader2, Trash2,
@@ -41,6 +48,7 @@ type CallLog = {
   direction?: string;
 };
 
+/** Small tile showing an icon, a headline value and a label in the stats bar. */
 function StatCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: string | number; color: string }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
@@ -55,12 +63,18 @@ function StatCard({ icon: Icon, label, value, color }: { icon: any; label: strin
   );
 }
 
+/** Formats a duration in seconds as "Xm Ys", or just "Ys" when under a minute. */
 function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+/**
+ * Page component: loads queues, agents, phone numbers and the latest 50 inbound calls,
+ * and provides create / settings / delete flows for receptionists. Creating one may
+ * redirect to Stripe checkout; the return is handled by an effect on the URL query.
+ */
 const Inbound = () => {
   const [receptionists, setReceptionists] = useState<Receptionist[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -81,6 +95,8 @@ const Inbound = () => {
   const agentsMap = new Map(agents.map((a) => [a.id, a]));
   const phonesMap = new Map(phones.map((p) => [p.id, p]));
 
+  // Reloads all four data sets in parallel; each state is only replaced when the
+  // response is an array, so a failed request keeps the previous data.
   const fetchAll = useCallback(async () => {
     const [qRes, aRes, pRes, cRes] = await Promise.all([
       api.getInboundQueues(),
@@ -98,6 +114,7 @@ const Inbound = () => {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // Handle the return from Stripe checkout (low-balance receptionist purchase).
+  // The ref guards against confirming the same session twice (e.g. StrictMode double effects).
   const confirming = useRef(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -125,6 +142,8 @@ const Inbound = () => {
     }
   }, []);
 
+  // Stats are derived from the fetched page of inbound calls only (limit 50), not all-time totals.
+  // Average duration ignores calls with no recorded duration.
   const totalCalls = callLogs.length;
   const completedCalls = callLogs.filter((c) => c.status === "Completed").length;
   const avgDuration = callLogs.filter((c) => c.duration).length > 0
@@ -132,6 +151,11 @@ const Inbound = () => {
     : 0;
   const activeReceptionists = receptionists.filter((r) => r.status === "Active").length;
 
+  /**
+   * Validates the create form and calls api.createInboundQueue. If the backend returns a
+   * Stripe checkout_url (low wallet balance) the browser is redirected there; otherwise
+   * the dialog is closed, the form reset and the data reloaded.
+   */
   const handleCreate = async () => {
     if (!createForm.name.trim()) return toast.error("Name is required");
     if (!createForm.agent_id) return toast.error("Select an AI agent");
@@ -162,6 +186,7 @@ const Inbound = () => {
     fetchAll();
   };
 
+  /** Deletes a receptionist via api.deleteInboundQueue (no confirmation prompt) and refreshes the list. */
   const handleDelete = async (r: Receptionist) => {
     const { error } = await api.deleteInboundQueue(r.id);
     if (error) return toast.error(error);
@@ -169,11 +194,13 @@ const Inbound = () => {
     fetchAll();
   };
 
+  /** Opens the settings dialog, prefilling the form with the receptionist's current values. */
   const openSettings = (r: Receptionist) => {
     setSettingsTarget(r);
     setSettingsForm({ name: r.name, agent_id: r.agent_id, status: r.status });
   };
 
+  /** Saves name, agent and status via api.updateInboundQueue, then closes the dialog and reloads. */
   const saveSettings = async () => {
     if (!settingsTarget) return;
     const { error } = await api.updateInboundQueue(settingsTarget.id, settingsForm);
@@ -183,6 +210,7 @@ const Inbound = () => {
     fetchAll();
   };
 
+  /** Copies a phone number to the clipboard and shows a confirmation toast. */
   const copyNumber = (num: string) => {
     navigator.clipboard.writeText(num);
     toast.success("Number copied to clipboard");

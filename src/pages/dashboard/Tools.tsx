@@ -1,3 +1,9 @@
+/**
+ * Dashboard "Tools" page: lists the account's custom API tools (HTTP endpoints agents can call
+ * during live calls) and lets the user create, edit, delete, test and rename/deactivate them.
+ * Uses api.getTools / createTool / updateTool / deleteTool / testTool (backend `/tools` router).
+ * Create and edit go through CreateToolWizard; quick edits go through the settings dialog.
+ */
 import { useEffect, useState } from "react";
 import { Plus, Wrench, Pencil, Trash2, PlayCircle, Settings as SettingsIcon, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -37,6 +43,11 @@ type Tool = {
   data?: ToolWizardData;
 };
 
+/**
+ * Maps a stored tool to the wizard's initial form state for editing.
+ * Headers and parameters get fresh client-side ids (the wizard keys list rows by id).
+ * bodyProperties is always empty because it is not persisted by handleSave.
+ */
 function toolToWizardData(t: Tool): Partial<ToolWizardData> {
   return {
     name: t.name,
@@ -59,6 +70,10 @@ function toolToWizardData(t: Tool): Partial<ToolWizardData> {
   };
 }
 
+/**
+ * Tools page component. Holds the tool list plus the state for the wizard (open/editing),
+ * the test dialog (testTool/testState/testLog) and the settings dialog (settingsTool/settingsForm).
+ */
 const Tools = () => {
   const [tools, setTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +87,7 @@ const Tools = () => {
   const [settingsTool, setSettingsTool] = useState<Tool | null>(null);
   const [settingsForm, setSettingsForm] = useState<Partial<Tool>>({});
 
+  /** Loads tools via api.getTools and normalizes each row (defaults, YYYY-MM-DD lastModified). */
   const fetchTools = async () => {
     setLoading(true);
     const { data } = await api.getTools();
@@ -100,7 +116,13 @@ const Tools = () => {
     fetchTools();
   }, []);
 
+  /**
+   * Wizard onSave callback: converts wizard data to the API payload and calls
+   * api.updateTool (when editing) or api.createTool, then refreshes the list.
+   * Note: contentType and bodyProperties from the wizard are not sent.
+   */
   const handleSave = async (data: ToolWizardData) => {
+    // Header rows are collapsed into an object; rows with a blank key are dropped.
     const headersObj: Record<string, string> = {};
     for (const h of data.headers) {
       if (h.key.trim()) headersObj[h.key.trim()] = h.value;
@@ -142,6 +164,7 @@ const Tools = () => {
     fetchTools();
   };
 
+  /** Deletes a tool through api.deleteTool and removes it from local state without refetching. */
   const handleDelete = async (t: Tool) => {
     const { error } = await api.deleteTool(t.id);
     if (error) return toast.error(error);
@@ -149,6 +172,11 @@ const Tools = () => {
     toast.success("Tool deleted");
   };
 
+  /**
+   * Opens the test dialog and runs api.testTool (backend POST /tools/{id}/test), which calls the
+   * tool's endpoint with sample data. Appends the outcome, latency and a response preview
+   * (first 200 chars) to the log and sets testState to success or fail. Also used by "Run Again".
+   */
   const openTest = async (t: Tool) => {
     setTestTool(t);
     setTestState("running");
@@ -178,6 +206,7 @@ const Tools = () => {
     setTestState(result.ok ? "success" : "fail");
   };
 
+  /** Opens the settings dialog, seeding the form with the tool's name, description and status. */
   const openSettings = (t: Tool) => {
     setSettingsTool(t);
     setSettingsForm({
@@ -187,6 +216,7 @@ const Tools = () => {
     });
   };
 
+  /** Saves only name, description and status via api.updateTool, then closes the dialog and refetches. */
   const saveSettings = async () => {
     if (!settingsTool) return;
     const patch = {

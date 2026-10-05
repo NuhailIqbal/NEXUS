@@ -1,3 +1,14 @@
+"""
+Voice widgets (`/voice-widgets`): embeddable "Talk to AI" buttons that let a website visitor
+start a voice call with one of the account's agents from the browser.
+
+Dashboard CRUD (JWT, scoped to the account owner) manages rows in `voice_widgets`: name,
+agent_id, status and a free-form `config`. The public `GET /voice-widgets/{public_token}/embed.js`
+endpoint serves the generated JavaScript that the dashboard's <script> snippet loads; it reads
+`voice_widgets` and `ai_agents` and talks to VAPI only from the visitor's browser, through the
+@vapi-ai/web SDK.
+"""
+
 import json
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from slowapi import Limiter
@@ -14,6 +25,8 @@ router = APIRouter(prefix="/voice-widgets", tags=["Voice Widgets"])
 
 @router.get("")
 async def list_widgets(user=Depends(get_current_user)):
+    """List the voice widgets of the caller's account, newest first. Team members see the
+    account owner's widgets."""
     result = (
         supabase.table("voice_widgets")
         .select("*")
@@ -26,6 +39,10 @@ async def list_widgets(user=Depends(get_current_user)):
 
 @router.post("")
 async def create_widget(body: VoiceWidgetCreate, user=Depends(get_current_user)):
+    """Create a voice widget owned by the caller's account. `config` is a free-form object
+    read by the embed script (buttonLabel, buttonColor, position, assistantOverrides). The
+    database generates the `public_token` that appears in the embed URL."""
+    # The body is stored as given; this handler does not check that `agent_id` belongs to the caller.
     row = body.model_dump()
     row["user_id"] = resolve_owner_id(user["user_id"])
     result = supabase.table("voice_widgets").insert(row).execute()
@@ -34,6 +51,8 @@ async def create_widget(body: VoiceWidgetCreate, user=Depends(get_current_user))
 
 @router.get("/{widget_id}")
 async def get_widget(widget_id: str, user=Depends(get_current_user)):
+    """Fetch one widget by id from the caller's account. `data` is null (not a 404) when the
+    widget does not exist or belongs to another account."""
     result = (
         supabase.table("voice_widgets")
         .select("*")
@@ -47,6 +66,9 @@ async def get_widget(widget_id: str, user=Depends(get_current_user)):
 
 @router.patch("/{widget_id}")
 async def update_widget(widget_id: str, body: VoiceWidgetUpdate, user=Depends(get_current_user)):
+    """Partially update a widget in the caller's account: only non-null fields in the body are
+    changed. A supplied `config` replaces the stored config entirely (it is not merged), so
+    send the whole object. Setting `status` to Inactive makes the embed script return 404."""
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
@@ -62,6 +84,8 @@ async def update_widget(widget_id: str, body: VoiceWidgetUpdate, user=Depends(ge
 
 @router.delete("/{widget_id}")
 async def delete_widget(widget_id: str, user=Depends(get_current_user)):
+    """Delete a widget from the caller's account. Always returns success, including when the
+    widget does not exist; pages that still embed it will get a 404 for the script."""
     supabase.table("voice_widgets").delete().eq("id", widget_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}
 
@@ -69,6 +93,12 @@ async def delete_widget(widget_id: str, user=Depends(get_current_user)):
 @router.get("/{public_token}/embed.js", include_in_schema=False)
 @limiter.limit("60/minute")
 async def serve_embed_script(request: Request, public_token: str):
+    """Public, unauthenticated endpoint (rate limited to 60/minute per client address) that
+    returns the widget's JavaScript, looked up by its `public_token`. Only Active widgets are
+    served; anything else is a 404. The script is generated per request from the widget's
+    config and its agent's VAPI assistant id."""
+    # Not listed in the OpenAPI docs (include_in_schema=False): this URL is loaded by a
+    # <script> tag on the customer's website rather than called as an API.
     result = (
         supabase.table("voice_widgets")
         .select("id, name, agent_id, config, status")
@@ -81,6 +111,8 @@ async def serve_embed_script(request: Request, public_token: str):
         raise HTTPException(status_code=404, detail="Widget not found")
 
     widget = result.data
+    # Stays empty when no agent is linked or the agent has no VAPI assistant yet; the
+    # generated script then disables itself instead of failing at call time.
     vapi_assistant_id = ""
     if widget.get("agent_id"):
         agent_res = (
@@ -93,6 +125,9 @@ async def serve_embed_script(request: Request, public_token: str):
         if agent_res.data:
             vapi_assistant_id = agent_res.data.get("vapi_assistant_id") or ""
 
+    # Every value is emitted through json.dumps so it lands in the script as a valid JS literal.
+    # The public key is VAPI's client-side key (visible to every page that embeds the widget),
+    # not the server's private API key.
     cfg = widget.get("config") or {}
     cfg_json = json.dumps(cfg)
     button_label = json.dumps(cfg.get("buttonLabel") or "Talk to AI")
@@ -101,6 +136,14 @@ async def serve_embed_script(request: Request, public_token: str):
     public_key = json.dumps(settings.vapi_public_key)
     assistant_id_js = json.dumps(vapi_assistant_id)
 
+    # The JavaScript below is a Python f-string, so its literal braces are doubled ({{ }});
+    # only the {...} placeholders above are substituted. What the script does in the browser:
+    # bail out with a console warning if the public key or assistant id is missing; add a
+    # fixed-position button (position from config, default bottom-right); lazy-load the
+    # @vapi-ai/web SDK from jsDelivr on the first click; then toggle between
+    # vapi.start(assistantId, config.assistantOverrides) and vapi.stop(), switching the label
+    # to "End Call" while active. Call state is tracked only by the clicks (no SDK event
+    # listeners), so the label is not reset if the call ends on its own.
     script = f"""
 (function () {{
   var CONFIG = {cfg_json};

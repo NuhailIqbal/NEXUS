@@ -1,3 +1,10 @@
+/**
+ * Client-side bookkeeping for admin "view as user" sessions. The token itself comes from the
+ * backend (POST /admin/users/{id}/impersonate, called in pages/dashboard/Admin.tsx, which then
+ * uses `openImpersonation` / `startImpersonation`). `markImpersonating` and `clearImpersonation`
+ * are used by contexts/AuthContext.tsx; `getImpersonatedEmail` and `stopImpersonation` by
+ * components/ImpersonationBanner.tsx.
+ */
 // Admin "view as user" (impersonation) helpers.
 //
 // The admin portal (admin.edmnexus.ai) and the main app (edmnexus.ai) are different origins in
@@ -9,9 +16,16 @@
 
 import { mainAppOrigin, adminOrigin } from "@/lib/adminHost";
 
+/** localStorage key of the dashboard session token. */
 const TOKEN_KEY = "nexus_token";            // must match api.ts
+/** localStorage key whose presence marks the current session as an impersonation. */
 const FLAG_KEY = "nexus_impersonating";      // holds the impersonated user's email
 
+/**
+ * Builds the main-app URL that carries the impersonation token and email as query params
+ * (the cross-origin handoff); AuthContext consumes and strips them on load. The landing
+ * page is /dashboard/quick-setup.
+ */
 function impersonationUrl(token: string, email: string): string {
   const params = new URLSearchParams({ impersonate_token: token, impersonate_email: email });
   return `${mainAppOrigin()}/dashboard/quick-setup?${params.toString()}`;
@@ -43,6 +57,7 @@ export function getImpersonatedEmail(): string | null {
   return localStorage.getItem(FLAG_KEY);
 }
 
+/** True when an impersonation flag is set in localStorage. */
 export function isImpersonating(): boolean {
   return !!localStorage.getItem(FLAG_KEY);
 }

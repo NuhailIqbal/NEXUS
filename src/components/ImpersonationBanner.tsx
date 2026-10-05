@@ -1,9 +1,21 @@
+/**
+ * "Viewing as <email> (admin)" pill for admin impersonation sessions. Rendered by DashboardLayout.
+ * The impersonated email comes from localStorage via lib/impersonation (the flag is set by
+ * AuthContext when it consumes the impersonation token from the URL); no API calls are made here.
+ */
 import { Eye } from "lucide-react";
 import { getImpersonatedEmail, stopImpersonation } from "@/lib/impersonation";
 
 // Floating pill shown whenever an admin is viewing the app as a user.
 // Fixed-position so it never shifts the dashboard layout.
+/**
+ * Renders nothing in a normal session. The "Exit admin view" button calls stopImpersonation(),
+ * which removes the stored auth token and impersonation flag and does a full-page redirect to the
+ * admin portal, so there is no React state to reset here.
+ */
 export default function ImpersonationBanner() {
+  // Plain localStorage read on each render, not a subscription: the flag is set once on page load
+  // (AuthContext) and cleared either by sign-out or by the full-page redirect described above.
   const email = getImpersonatedEmail();
   if (!email) return null;
 

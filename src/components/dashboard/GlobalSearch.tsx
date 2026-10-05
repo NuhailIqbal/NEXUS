@@ -1,9 +1,17 @@
+/**
+ * Top-bar search box (hidden below the md breakpoint) rendered by DashboardLayout. Matches the
+ * typed text, case-insensitively, against a static list of dashboard pages and against the
+ * account's agents, contacts, phone numbers and campaigns, which are fetched once on first focus
+ * (GET /agents, /contacts, /telephony/phone-numbers, /telephony/campaigns). Filtering is done
+ * entirely in the browser; picking a result navigates to the matching list page.
+ */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Bot, Users, Phone, PhoneOutgoing, X } from "lucide-react";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
 
+/** One row in the results dropdown; `group` is its section heading and `to` the route opened on select. */
 type ResultItem = {
   id: string;
   label: string;
@@ -13,6 +21,11 @@ type ResultItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+/**
+ * Searchable dashboard destinations. Hand-maintained: it follows the sidebar (NAV in
+ * DashboardLayout) and adds a few sub-pages the sidebar does not list, such as Callbacks and the
+ * Billing tabs, so a new route needs an entry here to be findable.
+ */
 const PAGES: { label: string; to: string }[] = [
   { label: "Quick Setup", to: "/dashboard/quick-setup" },
   { label: "AI Agents", to: "/dashboard/ai-agents" },
@@ -40,6 +53,11 @@ const PAGES: { label: string; to: string }[] = [
   { label: "Support", to: "/dashboard/support" },
 ];
 
+/**
+ * Search input plus a grouped, keyboard-navigable results dropdown (ArrowUp/ArrowDown move the
+ * highlight, Enter opens it, Escape closes). The four record lists are loaded lazily by
+ * loadRecords on the first focus, so the dashboard does not fetch them until the user searches.
+ */
 export default function GlobalSearch() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -53,8 +71,11 @@ export default function GlobalSearch() {
     campaigns: { id: string; name: string; status?: string }[];
   }>({ agents: [], contacts: [], phoneNumbers: [], campaigns: [] });
   const containerRef = useRef<HTMLDivElement>(null);
+  // Set as soon as loading starts (not when it finishes), so repeated focus events cannot start
+  // duplicate fetches. It is never reset, so the records are fetched once per mount.
   const loadedRef = useRef(false);
 
+  // Close the dropdown when the user presses the mouse anywhere outside the search container.
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -65,6 +86,11 @@ export default function GlobalSearch() {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
+  /**
+   * Fetches the four searchable collections in parallel, once per mount. api.* resolves with
+   * `data: null` on failure instead of throwing, so a failed source simply yields an empty list
+   * and is not retried until the component remounts.
+   */
   const loadRecords = async () => {
     if (loadedRef.current) return;
     loadedRef.current = true;
@@ -84,6 +110,9 @@ export default function GlobalSearch() {
     setLoading(false);
   };
 
+  // Flat, ordered result list for the current query: pages first, then agents, contacts, phone
+  // numbers and campaigns, truncated to 30 in total (so later groups are cut first). Contacts also
+  // match on phone and email. Record results link to their list page, not to the individual record.
   const results = useMemo<ResultItem[]>(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -156,6 +185,8 @@ export default function GlobalSearch() {
     ].slice(0, 30);
   }, [query, records]);
 
+  // Buckets `results` by group for rendering. A Map keeps insertion order, so the sections appear
+  // in the same order as the flat list that the keyboard highlight indexes into.
   const grouped = useMemo(() => {
     const map = new Map<string, ResultItem[]>();
     for (const r of results) {
@@ -166,16 +197,23 @@ export default function GlobalSearch() {
     return map;
   }, [results]);
 
+  // Restart the highlight at the first result whenever the query changes.
   useEffect(() => {
     setActiveIndex(0);
   }, [query]);
 
+  /** Navigates to the result's route, then closes the dropdown and clears the query. */
   const selectResult = (item: ResultItem) => {
     navigate(item.to);
     setOpen(false);
     setQuery("");
   };
 
+  /**
+   * Keyboard control for the input: arrows move the highlight (clamped at both ends), Enter
+   * opens the highlighted result and Escape closes the dropdown. Ignored while the dropdown is
+   * closed or empty, so Enter and the arrows keep their normal input behaviour then.
+   */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!open || results.length === 0) return;
     if (e.key === "ArrowDown") {
@@ -193,6 +231,10 @@ export default function GlobalSearch() {
     }
   };
 
+  // Render-time counter, incremented once per rendered item. The JSX below is grouped by section,
+  // so this recovers each item's position in the flat `results` list, which is what `activeIndex`
+  // (keyboard and hover highlight) refers to. The dropdown shows "Searching…" while the first load
+  // is in flight with nothing loaded yet, "No results", or the grouped results.
   let runningIndex = -1;
 
   return (

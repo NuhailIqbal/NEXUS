@@ -1,3 +1,9 @@
+/**
+ * Filter bar for card/list pages: a search box plus an "Advanced" panel with status, optional
+ * category and date-range selects. It only collects the user's choices and reports them through
+ * callbacks; the page does the actual filtering (see pages/dashboard/AIAgents.tsx, its current
+ * user, which also turns the date-range label into a cutoff date). No API calls.
+ */
 import { useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -5,11 +11,23 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+/** Select value meaning "no status filter"; pages compare against it to skip filtering. */
 export const STATUS_DEFAULT = "All statuses";
+/** Select value meaning "no category filter". */
 export const CATEGORY_DEFAULT = "All categories";
+/** Select value meaning "no date filter". The date select does not add it automatically, so it must be one of the date-range options. */
 export const DATE_DEFAULT = "All time";
+/** Default date-range choices. These are display labels only: the consuming page maps each one to a cutoff date. */
 export const DATE_RANGE_OPTIONS = ["All time", "Last 7 days", "Last 30 days", "This year"];
 
+/**
+ * Search box with a collapsible "Advanced" panel (status, optional category, date range) and a
+ * Clear button that appears once anything differs from its default.
+ * `value`/`onChange` hold the search text and are always controlled by the page. Status, category
+ * and date range are controlled when the page passes the value, otherwise the component falls back
+ * to its own local state. The category select is shown only when `categoryOptions` is provided.
+ * `extra` renders after the buttons in the search row.
+ */
 export function SmartFilters({
   placeholder = "Search…",
   value,
@@ -46,11 +64,14 @@ export function SmartFilters({
   const [localCategory, setLocalCategory] = useState(CATEGORY_DEFAULT);
   const [localDateRange, setLocalDateRange] = useState(DATE_DEFAULT);
 
+  // A value passed in by the page takes precedence over the local fallback state.
   const effectiveStatus = status ?? localStatus;
   const effectiveCategory = category ?? localCategory;
   const effectiveDateRange = dateRange ?? localDateRange;
   const showCategory = categoryOptions !== undefined;
 
+  // Each setter updates the local state and also notifies the page, so the fallback keeps
+  // working when no onXChange prop is wired.
   const setStatus = (v: string) => {
     setLocalStatus(v);
     onStatusChange?.(v);
@@ -64,12 +85,15 @@ export function SmartFilters({
     onDateRangeChange?.(v);
   };
 
+  // True when the search text or any dropdown differs from its default; controls the Clear button.
   const hasFilters =
     (value ?? "").length > 0 ||
     effectiveStatus !== STATUS_DEFAULT ||
     effectiveCategory !== CATEGORY_DEFAULT ||
     effectiveDateRange !== DATE_DEFAULT;
 
+  // The search text has no local copy, so it is cleared through the page's onChange.
+  // Category is reset only when that select is actually shown.
   const clearAll = () => {
     onChange?.("");
     setStatus(STATUS_DEFAULT);

@@ -1,3 +1,8 @@
+/**
+ * Top-up dialog: pick a preset or custom amount, then redirect to Stripe Checkout.
+ * Uses api.topupCheckout(amount); amount bounds come from TOPUP_* in ./types.
+ * Rendered by BillingOverview.
+ */
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";

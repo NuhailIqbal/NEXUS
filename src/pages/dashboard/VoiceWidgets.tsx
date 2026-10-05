@@ -1,3 +1,9 @@
+/**
+ * Voice Widgets dashboard page: manage embeddable website call widgets.
+ * Uses api.getVoiceWidgets / getAgents / createVoiceWidget / updateVoiceWidget /
+ * deleteVoiceWidget (backend /voice-widgets). Creation goes through CreateVoiceWidgetDialog;
+ * the embed snippet points at the public GET /voice-widgets/{public_token}/embed.js endpoint.
+ */
 import { useState, useEffect, useCallback } from "react";
 import { Radio, Plus, Code, Loader2, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +30,7 @@ import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
+/** UI-shaped widget: agent is the agent's display name and position a title-cased label, not the raw API values. */
 type Widget = {
   id: string;
   name: string;
@@ -33,10 +40,16 @@ type Widget = {
   public_token?: string;
 };
 
+/** Origin used in embed snippets: VITE_API_PUBLIC_URL if set, otherwise the current page origin. */
 const EMBED_BASE_URL =
   (import.meta as any).env?.VITE_API_PUBLIC_URL ||
   (typeof window !== "undefined" ? window.location.origin : "");
 
+/**
+ * Lists the account's voice widgets as cards with embed/test/settings/delete actions.
+ * Loads widgets and agents on mount; edits and deletes call the API and then update local state.
+ * The "Test" dialog is a purely simulated delay and does not load the real widget.
+ */
 const VoiceWidgets = () => {
   const [open, setOpen] = useState(false);
   const [widgets, setWidgets] = useState<Widget[]>([]);
@@ -48,6 +61,10 @@ const VoiceWidgets = () => {
   const [settingsForm, setSettingsForm] = useState<Partial<Widget>>({});
   const [embedFor, setEmbedFor] = useState<Widget | null>(null);
 
+  /**
+   * Fetches widgets and agents in parallel, then maps each widget to the UI shape
+   * (agent id resolved to its name, position slug to a label). Toasts on API error.
+   */
   const fetchWidgets = useCallback(async () => {
     const [widgetsRes, agentsRes] = await Promise.all([
       api.getVoiceWidgets(),
@@ -83,6 +100,7 @@ const VoiceWidgets = () => {
     fetchWidgets();
   }, [fetchWidgets]);
 
+  /** Deletes the widget via the API and removes it from the list on success. */
   const handleDelete = async (w: Widget) => {
     const { error } = await api.deleteVoiceWidget(w.id);
     if (error) return toast.error(error);
@@ -90,17 +108,23 @@ const VoiceWidgets = () => {
     toast.success("Widget removed");
   };
 
+  /** Opens the test dialog and shows a fake 800ms loading state before reporting success. */
   const openTest = (w: Widget) => {
     setTestTarget(w);
     setTestState("loading");
     setTimeout(() => setTestState("ready"), 800);
   };
 
+  /** Opens the settings dialog with the form prefilled from the widget. */
   const openSettings = (w: Widget) => {
     setSettingsTarget(w);
     setSettingsForm({ name: w.name, status: w.status, agent: w.agent, position: w.position });
   };
 
+  /**
+   * PATCHes name, status and position (as a slug) for the widget being edited, then
+   * mirrors the change in local state and closes the dialog.
+   */
   const saveSettings = async () => {
     if (!settingsTarget) return;
     // The settings dialog only edits display fields (name, status, position label).
@@ -122,6 +146,11 @@ const VoiceWidgets = () => {
     setSettingsTarget(null);
   };
 
+  /**
+   * onCreate callback for CreateVoiceWidgetDialog: POSTs the widget, packing the wizard
+   * options into `config`, and prepends the result to the list. The button label is derived
+   * from the call type.
+   */
   const handleCreate = async (d: {
     widgetName: string;
     status: string;
@@ -161,6 +190,7 @@ const VoiceWidgets = () => {
     }
   };
 
+  /** Builds the <script> tag for a widget, or an HTML comment placeholder when it has no public token. */
   const embedSnippet = (w: Widget) => {
     if (!w.public_token) {
       return "<!-- Save this widget to generate an embed snippet -->";

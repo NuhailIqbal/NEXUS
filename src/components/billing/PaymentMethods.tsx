@@ -1,3 +1,8 @@
+/**
+ * Billing > Payment methods tab: lists saved cards, sets the default, removes cards,
+ * and opens AddCardDialog. Uses api.getPaymentMethods, setDefaultPaymentMethod and
+ * deletePaymentMethod. Route: /dashboard/billing/payment-methods (App.tsx).
+ */
 import { useCallback, useEffect, useState } from "react";
 import { CreditCard, Loader2, Plus, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";

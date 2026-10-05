@@ -1,3 +1,9 @@
+/**
+ * Searchable single-select dropdown of industries, each with an icon and color chip, built from
+ * the INDUSTRIES list in lib/industries.ts. The industry label is the value itself; the
+ * create-agent wizard (pages/dashboard/CreateAIAgent.tsx) stores it as the agent's `category`.
+ * Purely presentational: no API calls.
+ */
 import { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -5,10 +11,17 @@ import { INDUSTRIES } from "@/lib/industries";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 
+/**
+ * Popover with a filterable list of industries. `value` is the selected industry label and
+ * `onChange` receives the chosen label; picking an item closes the popover. A `value` that is
+ * not in INDUSTRIES is still displayed, as plain text without an icon, and `placeholder` shows
+ * only when `value` is empty.
+ */
 export function IndustryCombobox({
   value, onChange, placeholder = "Select an industry…",
 }: { value: string; onChange: (label: string) => void; placeholder?: string }) {
   const [open, setOpen] = useState(false);
+  // Undefined when `value` is empty or not a known label; the trigger then falls back to plain text.
   const selected = INDUSTRIES.find((ind) => ind.label === value);
 
   return (

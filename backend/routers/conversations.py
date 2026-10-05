@@ -1,3 +1,13 @@
+"""Conversations API: the call log, mounted under /conversations.
+
+Lists and filters rows of the `conversations` table, serves per-call detail (transcript,
+playable recording, agent-raised call events), returns aggregate stats, and offers a
+manual pull-sync of recent VAPI calls (POST /sync-from-vapi). The sync reuses
+routers.webhooks.import_vapi_call, the same upsert the background poller
+(services.vapi_sync) uses. Talks to the VAPI REST API through services.vapi_client and
+to the tables conversations, ai_agents and call_event_hits. All data is scoped to the
+account owner's id (see routers.team.resolve_owner_id).
+"""
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
@@ -30,6 +40,14 @@ async def list_conversations(
     limit: int = Query(50, le=1000),
     offset: int = 0,
 ):
+    """List the account's conversations, newest call first, with limit/offset paging.
+
+    Exact-match filters: status, agent_id, campaign_id, direction. Case-insensitive
+    substring filters: channel, agent_name, contact_name, phone, duration, call_outcome.
+    `qualified` accepts "yes" or "no" (any other value is ignored) and `call_date` a
+    YYYY-MM-DD day. Each row is returned with a derived `agent_name`, and meta.count is
+    the total number of matches before paging.
+    """
     owner_id = resolve_owner_id(user["user_id"])
     query = (
         supabase.table("conversations")
@@ -72,11 +90,15 @@ async def list_conversations(
     if call_outcome:
         query = query.ilike("call_outcome", f"%{call_outcome}%")
     if call_date:
+        # Matches the whole calendar day. The bounds carry no UTC offset, so PostgreSQL
+        # resolves them in the database session's timezone.
         query = query.gte("call_time", f"{call_date}T00:00:00").lte("call_time", f"{call_date}T23:59:59.999999")
 
     result = query.order("call_time", desc=True).range(offset, offset + limit - 1).execute()
     rows = result.data or []
 
+    # Look up display names only for the agents on this page of results. Conversations
+    # whose agent was deleted (agent_id is NULL) get an empty agent_name.
     agent_ids = {r["agent_id"] for r in rows if r.get("agent_id")}
     agent_names: dict[str, str] = {}
     if agent_ids:
@@ -93,8 +115,13 @@ async def list_conversations(
     return {"data": rows, "error": None, "meta": {"count": result.count}}
 
 
+# Must stay above the /{conversation_id} routes: FastAPI matches routes in declaration
+# order, so otherwise "stats" would be captured as a conversation id.
 @router.get("/stats")
 async def conversation_stats(user=Depends(get_current_user), direction: Optional[str] = None):
+    """Aggregate call counts for the account, optionally for one direction (inbound or
+    outbound): total, completed, failed, in progress, inbound/outbound split, qualified
+    calls and total talk time in seconds. Tallied in Python over every matching row."""
     query = (
         supabase.table("conversations")
         .select("status, duration_seconds, direction, qualified")
@@ -133,6 +160,8 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
     """Pull recent VAPI calls (recording + transcript) for this user's agents into
     the conversations table. Idempotent: existing rows are updated, new ones inserted."""
     owner_id = resolve_owner_id(user["user_id"])
+    # VAPI's call list is org-wide, shared by every NEXUS account, so ownership is
+    # decided by matching each call's assistantId against this account's agents.
     agents = (
         supabase.table("ai_agents")
         .select("id, vapi_assistant_id")
@@ -148,9 +177,12 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
     try:
         calls = await vapi_client.list_calls(limit=limit)
     except Exception as e:
+        # The raw error goes to the log only; the client gets a generic 502.
         logger.error("Could not reach VAPI: %s", e)
         raise HTTPException(status_code=502, detail="Could not reach the voice service. Please try again.")
 
+    # At most 100 of this account's calls are imported per request, whatever `limit`
+    # was, which bounds the number of follow-up get_call requests below.
     mine = [c for c in calls if c.get("assistantId") in assistant_ids][:100]
     imported = updated = failed = 0
     for c in mine:
@@ -163,6 +195,7 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
             elif res == "updated":
                 updated += 1
         except Exception as e:
+            # One bad call must not abort the whole sync; it is counted in `failed`.
             failed += 1
             logger.warning(f"sync-from-vapi: failed to import call {c.get('id')}: {e}")
 
@@ -174,6 +207,8 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
 
 @router.get("/{conversation_id}")
 async def get_conversation(conversation_id: str, user=Depends(get_current_user)):
+    """Fetch one full conversation row by id. Responds 404 if it does not exist or
+    belongs to another account."""
     result = (
         supabase.table("conversations")
         .select("*")
@@ -189,6 +224,10 @@ async def get_conversation(conversation_id: str, user=Depends(get_current_user))
 
 @router.get("/{conversation_id}/transcript")
 async def get_transcript(conversation_id: str, user=Depends(get_current_user)):
+    """Return only the transcript-related fields of a conversation: plain-text
+    transcript, per-message transcript, stored recording URLs and the AI summary.
+    The stored recording URLs may not be directly playable; see get_recording_url.
+    Responds 404 if the conversation is not this account's."""
     result = (
         supabase.table("conversations")
         .select("id, transcript, transcript_messages, recording_url, stereo_recording_url, ai_summary")
@@ -216,6 +255,7 @@ async def get_conversation_events(conversation_id: str, user=Depends(get_current
     if not conv.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
     vapi_call_id = conv.data.get("vapi_call_id")
+    # Event hits are keyed by VAPI call id, so a conversation without one has none.
     return {"data": get_hits(vapi_call_id) if vapi_call_id else [], "error": None}
 
 
@@ -252,5 +292,8 @@ async def get_recording_url(conversation_id: str, user=Depends(get_current_user)
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(conversation_id: str, user=Depends(get_current_user)):
+    """Delete one conversation (call log row) from the account; succeeds even if the id
+    does not exist. The TeamRoleGuard middleware (main.py) rejects DELETE for team
+    sub-users."""
     supabase.table("conversations").delete().eq("id", conversation_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": None, "error": None}

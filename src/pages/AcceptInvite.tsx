@@ -1,3 +1,10 @@
+/**
+ * Team-invite acceptance page, routed at /accept-invite?token=... (see App.tsx). The link is
+ * emailed by the backend when an account owner invites a new email address (POST /team/invite).
+ * Looks up the invite with api.getInvite (GET /team/invite/{token}, public) to show who invited
+ * whom, then creates the invitee's account with api.acceptInvite (POST /team/accept-invite).
+ * The returned JWT is stored and the user is sent to /dashboard.
+ */
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,8 +15,16 @@ import { useToast } from "@/hooks/use-toast";
 import { api, setStoredToken } from "@/services/api";
 import Logo from "@/components/Logo";
 
+/** Response of GET /team/invite/{token}: the invited email, the role offered, and the inviting owner's display name. */
 type InviteInfo = { email: string; role: string; owner_name: string };
 
+/**
+ * Invite landing page with three mutually exclusive views, derived from state: an error panel
+ * (`loadError` set), a loading spinner (no error and `invite` not loaded yet), or the
+ * set-a-password form (`invite` loaded).
+ * The invited email and role are fixed by the invite; the user supplies only an optional full
+ * name and a password.
+ */
 const AcceptInvite = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -22,6 +37,8 @@ const AcceptInvite = () => {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Fetches the invite details for the token in the URL. The backend answers with an error for
+  // unknown, already-used and expired invites, which is shown as-is in the error panel.
   useEffect(() => {
     if (!token) {
       setLoadError("This invite link is missing its token.");
@@ -36,9 +53,16 @@ const AcceptInvite = () => {
     });
   }, [token]);
 
+  /**
+   * Form submit handler: redeems the invite via api.acceptInvite, which creates the account
+   * (already email-verified, since the invite email served as verification) and links it to the
+   * inviting team. On success it stores the returned JWT and goes to /dashboard; on failure it
+   * shows the backend's error in a toast and leaves the form in place.
+   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    // An empty name becomes undefined so the field is omitted from the request body.
     const { data, error } = await api.acceptInvite({ token, password, full_name: fullName || undefined });
     setSubmitting(false);
     if (error || !data?.access_token) {
@@ -47,6 +71,8 @@ const AcceptInvite = () => {
     }
     setStoredToken(data.access_token);
     toast({ title: "Welcome aboard!", description: "Your account is set up." });
+    // Full page load rather than navigate(): AuthProvider only reads the stored token on mount,
+    // so a reload is what makes it pick up the new session.
     window.location.href = "/dashboard";
   };
 

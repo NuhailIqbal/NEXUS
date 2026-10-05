@@ -20,16 +20,23 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# Path (appended to settings.public_api_url) that VAPI POSTs to when the agent calls the
+# `trigger_event` tool; served by routers/agent_tool_callbacks.py.
 TOOL_CALLBACK_PATH = "/tools/internal/trigger-event"
+# Limits: events per agent, events per account library, and max characters per text field.
 MAX_EVENTS_PER_AGENT = 20
 LABEL_MAX = 60
 OUTCOME_MAX = 60
 DESCRIPTION_MAX = 200
 LIBRARY_MAX = 100
+# Call directions an event may fire on.
 APPLIES_TO = ("both", "inbound", "outbound")
 
 
 def _slug(text) -> str:
+    """Turn a label into an event key: lowercase, every run of characters other than a-z/0-9
+    becomes one `_`, trimmed, capped at LABEL_MAX. Returns "" for a non-string or for text
+    with no latin letters/digits (e.g. Urdu), so callers must handle the empty case."""
     if not isinstance(text, str):
         return ""
     return re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")[:LABEL_MAX]
@@ -47,6 +54,7 @@ def normalize_events(events: list[dict] | None) -> list[dict]:
             continue
         key = _slug(e.get("event_key") or label)
         if not key:
+            # Nothing usable survived slugging: use the first `event_<n>` not already taken.
             n = len(out) + 1
             key = f"event_{n}"
             while key in seen:
@@ -60,16 +68,20 @@ def normalize_events(events: list[dict] | None) -> list[dict]:
             "label": label,
             "description": str(e.get("description") or "").strip()[:DESCRIPTION_MAX],
             "outcome": (str(e.get("outcome") or "").strip() or label)[:OUTCOME_MAX],
+            # An unknown or missing scope falls back to "both".
             "applies_to": e.get("applies_to") if e.get("applies_to") in APPLIES_TO else "both",
             "schedules_callback": bool(e.get("schedules_callback")),
+            # Order of the cleaned list, after blanks and duplicates were dropped.
             "position": len(out),
         })
+        # Events past the per-agent cap are silently ignored.
         if len(out) >= MAX_EVENTS_PER_AGENT:
             break
     return out
 
 
 def get_events(agent_id: str) -> list[dict]:
+    """Return the agent's event rows (`call_events`) ordered by `position`; empty if none."""
     res = (
         supabase.table("call_events")
         .select("*")
@@ -89,11 +101,15 @@ def replace_events(user_id: str, agent_id: str, events: list[dict]) -> list[dict
     existing = {e["event_key"]: e for e in get_events(agent_id)}
     wanted = {e["event_key"] for e in events}
 
+    # Hits of a removed event keep their own copy of key/label/outcome; only their
+    # event_id link becomes NULL.
     for key, row in existing.items():
         if key not in wanted:
             supabase.table("call_events").delete().eq("id", row["id"]).execute()
 
     for e in events:
+        # Columns that may change on an existing row. event_key, user_id and agent_id are
+        # written only on insert because they never change afterwards.
         fields = {
             "label": e["label"],
             "description": e.get("description", ""),
@@ -102,6 +118,8 @@ def replace_events(user_id: str, agent_id: str, events: list[dict]) -> list[dict
             "applies_to": e.get("applies_to") if e.get("applies_to") in APPLIES_TO else "both",
             "schedules_callback": bool(e.get("schedules_callback")),
         }
+        # Only touch the library link when the caller supplies one, so an input without it
+        # never detaches an already-linked row.
         if e.get("library_event_id"):
             fields["library_event_id"] = e["library_event_id"]
         row = existing.get(e["event_key"])
@@ -125,11 +143,16 @@ class LibraryError(Exception):
     """Raised for user-fixable library problems; `.status` is the HTTP status to use."""
 
     def __init__(self, message: str, status: int = 400):
+        """Keep the user-facing message and the HTTP status the router should answer with."""
         super().__init__(message)
         self.status = status
 
 
 def _library_row_fields(label, description, outcome, applies_to, schedules_callback=False) -> dict:
+    """Validate and clean the editable fields of a library event and return them as a dict
+    ready to write to `call_event_library` (and copy to `call_events`). Text is trimmed and
+    capped; the outcome defaults to the label. Raises LibraryError: 400 for a blank name,
+    422 for an `applies_to` outside APPLIES_TO."""
     label = str(label or "").strip()[:LABEL_MAX]
     if not label:
         raise LibraryError("Event name is required.")
@@ -145,6 +168,7 @@ def _library_row_fields(label, description, outcome, applies_to, schedules_callb
 
 
 def list_library(user_id: str) -> list[dict]:
+    """Return all library events of the account `user_id`, oldest first."""
     res = (
         supabase.table("call_event_library")
         .select("*")
@@ -156,6 +180,8 @@ def list_library(user_id: str) -> list[dict]:
 
 
 def get_library_event(user_id: str, event_id) -> dict | None:
+    """Fetch one library event, scoped to `user_id` so another account's event is never
+    returned. Returns None if the id is missing, malformed, unknown or owned by someone else."""
     if not event_id or not isinstance(event_id, str):
         return None
     try:
@@ -173,6 +199,9 @@ def get_library_event(user_id: str, event_id) -> dict | None:
 
 
 def _unique_key(label: str, taken: set) -> str:
+    """Key for a new library event: the slug of `label`, or the first unused `event_<n>` when
+    the label has no latin letters/digits. A normal slug is returned even if it is already in
+    `taken`; the caller treats that as a duplicate name."""
     key = _slug(label)
     if key:
         return key
@@ -184,14 +213,20 @@ def _unique_key(label: str, taken: set) -> str:
 
 def create_library_event(user_id: str, label, description=None, outcome=None,
                          applies_to: str = "both", schedules_callback: bool = False) -> dict:
+    """Add an event to the account's library and return the inserted row (the key is derived
+    from the label). Raises LibraryError: 400 for invalid fields or a full library
+    (LIBRARY_MAX), 422 for a bad scope, 409 if an event with the same key already exists."""
     fields = _library_row_fields(label, description, outcome, applies_to, schedules_callback)
     existing = list_library(user_id)
     if len(existing) >= LIBRARY_MAX:
         raise LibraryError(f"You can keep at most {LIBRARY_MAX} events in the library.")
     taken = {e["event_key"] for e in existing}
     key = _unique_key(fields["label"], taken)
+    # Names that slug to the same key (case and punctuation differences) count as duplicates.
     if key in taken:
         raise LibraryError(f"An event named '{fields['label']}' already exists.", 409)
+    # The pre-check above is not atomic; UNIQUE (user_id, event_key) in the table settles
+    # a race between two concurrent creates.
     try:
         res = supabase.table("call_event_library").insert(
             {**fields, "event_key": key, "user_id": user_id}
@@ -207,6 +242,7 @@ def update_library_event(user_id: str, event_id: str, changes: dict) -> dict:
     row = get_library_event(user_id, event_id)
     if not row:
         raise LibraryError("Event not found.", 404)
+    # Overlay the supplied changes on the current values and validate the full set again.
     fields = _library_row_fields(
         changes.get("label", row["label"]),
         changes.get("description", row.get("description")),
@@ -216,11 +252,14 @@ def update_library_event(user_id: str, event_id: str, changes: dict) -> dict:
     )
     supabase.table("call_event_library").update({**fields, "updated_at": "now()"}) \
         .eq("id", event_id).execute()
+    # Agent rows hold a snapshot of the definition, so propagate the edit to all of them.
+    # VAPI is not touched here; the router re-syncs the affected agents afterwards.
     supabase.table("call_events").update(fields).eq("library_event_id", event_id).execute()
     return {**row, **fields}
 
 
 def agents_using_event(event_id: str) -> list[str]:
+    """Return the sorted, de-duplicated ids of the agents that have this library event attached."""
     res = supabase.table("call_events").select("agent_id").eq("library_event_id", event_id).execute()
     return sorted({r["agent_id"] for r in (res.data or [])})
 
@@ -228,8 +267,10 @@ def agents_using_event(event_id: str) -> list[str]:
 def delete_library_event(user_id: str, event_id: str) -> list[str]:
     """Remove the event from every agent and from the library. Returns the ids of the
     agents that used it (the caller re-syncs their VAPI tools). Past hits are kept."""
+    # Ownership check: an id from another account is reported as not found.
     if not get_library_event(user_id, event_id):
         raise LibraryError("Event not found.", 404)
+    # Read the affected agents first; once the rows below are deleted they can no longer be found.
     agent_ids = agents_using_event(event_id)
     supabase.table("call_events").delete().eq("library_event_id", event_id).execute()
     supabase.table("call_event_library").delete().eq("id", event_id).eq("user_id", user_id).execute()
@@ -250,6 +291,8 @@ def resolve_agent_events(user_id: str, items: list | None) -> list[dict]:
             if not lib:
                 raise LibraryError("One of the selected events no longer exists.", 404)
         else:
+            # Older by-name form: reuse the library event with the same key, or add it to the
+            # library so other agents can pick it too.
             norm = normalize_events([item])
             if not norm:
                 continue
@@ -258,9 +301,11 @@ def resolve_agent_events(user_id: str, items: list | None) -> list[dict]:
             if not lib:
                 lib = create_library_event(user_id, n["label"], n["description"], n["outcome"], n["applies_to"],
                                            n.get("schedules_callback", False))
+        # Selecting the same event twice yields a single agent row.
         if lib["event_key"] in seen:
             continue
         seen.add(lib["event_key"])
+        # Snapshot of the library definition, in the shape replace_events expects.
         rows.append({
             "event_key": lib["event_key"], "label": lib["label"],
             "description": lib.get("description") or "", "outcome": lib.get("outcome"),
@@ -273,7 +318,13 @@ def resolve_agent_events(user_id: str, items: list | None) -> list[dict]:
     return rows
 
 
+# Suffix added to an event's line in the system-prompt directive when its scope is limited
+# (see prompt_directive).
 SCOPE_NOTE = {"inbound": " (inbound calls only)", "outbound": " (outbound calls only)"}
+# Instructions appended to events flagged `schedules_callback`: they tell the model which
+# argument to send for the caller's wording. The model cannot see the clock, so it must never
+# compute a clock time itself; the server turns these values into a real moment
+# (callback_service.resolve_due).
 CALLBACK_NOTE = (" — this schedules a callback: if the caller says how long to wait (\"in 30 minutes\", \"after an hour\"), "
                  "pass callback_in_minutes as a whole number and nothing else (you cannot see the clock, so never work "
                  "out a clock time yourself); if they name a day or time, pass callback_in_days (0 = today, "
@@ -284,6 +335,7 @@ def event_applies(applies_to, call_type) -> bool:
     """Whether an event with this scope may fire on a call of this VAPI type
     (inboundPhoneCall / outboundPhoneCall / webCall). Unknown types and web calls
     (voice widget, in-app tests) are never blocked."""
+    # Substring match because VAPI call types are strings like "outboundPhoneCall".
     t = (call_type or "").lower()
     if applies_to == "inbound" and "outbound" in t:
         return False
@@ -293,6 +345,11 @@ def event_applies(applies_to, call_type) -> bool:
 
 
 def tool_payload(agent_name: str | None, events: list[dict]) -> dict:
+    """Build the VAPI function-tool definition for `trigger_event`. `event` is an enum of the
+    agent's event keys, so the model can only report known events; the `callback_*` arguments
+    apply only to events that schedule a callback. `server.url` is where VAPI POSTs the call.
+    `agent_name` is currently unused."""
+    # Strip any trailing slash so the joined URL has exactly one.
     base = settings.public_api_url.rstrip("/")
     return {
         "type": "function",
@@ -338,6 +395,7 @@ def prompt_directive(events: list[dict]) -> str:
     """Appended to the system prompt sent to VAPI (never stored in ai_agents)."""
     if not events:
         return ""
+    # One bullet per event: key, then description (or label), then the scope and callback notes.
     lines = "\n".join(
         f"- {e['event_key']}: {e.get('description') or e['label']}"
         f"{SCOPE_NOTE.get(e.get('applies_to'), '')}"
@@ -355,9 +413,13 @@ async def sync_events_tool(agent_name: str | None, events: list[dict],
                            existing_tool_id: str | None) -> str | None:
     """Create/update/delete the agent's trigger_event tool. Returns the tool id to
     store (None when there are no events or VAPI isn't configured)."""
+    # Without a VAPI key and a public URL that VAPI can reach, nothing can be synced. Keep the
+    # stored tool id while events remain so it is not lost.
     if not settings.vapi_api_key or not settings.public_api_url:
         return existing_tool_id if events else None
     if not events:
+        # No events left: remove the tool from VAPI. A failed delete is only logged, and None
+        # is returned either way, so the stored id is dropped.
         if existing_tool_id:
             try:
                 await vapi_client.delete_tool(existing_tool_id)
@@ -365,6 +427,7 @@ async def sync_events_tool(agent_name: str | None, events: list[dict],
                 logger.warning("Failed to delete events tool %s: %s", existing_tool_id, e)
         return None
     payload = tool_payload(agent_name, events)
+    # Errors from update/create are not caught here; the caller decides how to report them.
     if existing_tool_id:
         # VAPI rejects `type` on tool updates.
         await vapi_client.update_tool(existing_tool_id, {k: v for k, v in payload.items() if k != "type"})
@@ -385,6 +448,8 @@ def record_hit(user_id: str, agent_id: str, vapi_call_id: str, event_key,
     key = _slug(event_key)
     if not key:
         return None
+    # Look the key up among THIS agent's events (not the library): agent rows carry the
+    # definition snapshot, so no join is needed.
     defs = (
         supabase.table("call_events")
         .select("id, event_key, label, outcome, applies_to, schedules_callback")
@@ -398,6 +463,8 @@ def record_hit(user_id: str, agent_id: str, vapi_call_id: str, event_key,
     d = defs.data[0]
     if not event_applies(d.get("applies_to"), call_type):
         return {**d, "skipped": True}
+    # Cheap retry check first. The unique index on (vapi_call_id, tool_call_id) is the backstop
+    # for the race handled in the except block below.
     if tool_call_id:
         seen = (
             supabase.table("call_event_hits")
@@ -418,6 +485,7 @@ def record_hit(user_id: str, agent_id: str, vapi_call_id: str, event_key,
             "event_key": d["event_key"],
             "label": d["label"],
             "outcome": d["outcome"],
+            # Free-text detail from the model: trimmed, capped at 500 characters, blank -> NULL.
             "note": (note or "").strip()[:500] or None,
             "tool_call_id": tool_call_id,
         }).execute()
@@ -427,6 +495,8 @@ def record_hit(user_id: str, agent_id: str, vapi_call_id: str, event_key,
         # Lost a race against a concurrent retry of the same tool call — already stored.
         logger.info("call event %s for %s already recorded (tool call %s)", key, vapi_call_id, tool_call_id)
         return d
+    # Only reached for a newly stored hit (out-of-scope events and duplicate tool call ids
+    # returned above), so a retry of the same tool call does not schedule another callback.
     if d.get("schedules_callback"):
         try:
             from services import callback_service
@@ -438,6 +508,7 @@ def record_hit(user_id: str, agent_id: str, vapi_call_id: str, event_key,
 
 
 def get_hits(vapi_call_id: str) -> list[dict]:
+    """Return every event hit recorded for a VAPI call, oldest first (the order they were raised)."""
     res = (
         supabase.table("call_event_hits")
         .select("*")
@@ -459,8 +530,10 @@ def finalize_call_events(vapi_call_id: str, conversation_id: str | None) -> list
             return []
         supabase.table("call_event_hits").update({"conversation_id": conversation_id}) \
             .eq("vapi_call_id", vapi_call_id).execute()
+        # hits are ordered oldest first, so the last element is the final event of the call.
         supabase.table("conversations").update({"call_outcome": hits[-1].get("outcome")}) \
             .eq("id", conversation_id).execute()
+        # Callbacks scheduled during the call get linked to the conversation too.
         from services import callback_service
         callback_service.attach_conversation(vapi_call_id, conversation_id)
         return hits
