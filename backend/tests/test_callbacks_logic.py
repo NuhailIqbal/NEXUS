@@ -41,6 +41,17 @@ class Settings(unittest.TestCase):
             with self.assertRaises(cbs.CallbackError, msg=repr(bad)):
                 S(**bad)
 
+    def test_B04b_midnight_close_means_end_of_day(self):
+        s = S(start_time="21:00", end_time="00:00", default_time="22:00", timezone=KHI)
+        self.assertEqual(s["end_time"], "00:00")
+        for bad in ({"default_time": "08:00"}, {"start_time": "00:00"}):       # 00:00 start..00:00 end is not a window
+            with self.assertRaises(cbs.CallbackError, msg=repr(bad)):
+                S(**{**dict(start_time="21:00", end_time="00:00", default_time="22:00"), **bad})
+        mk = lambda h, m=0: datetime(2026, 10, 5, h, m, tzinfo=ZoneInfo(KHI))
+        self.assertTrue(cbs.in_calling_window(mk(23, 59), s))
+        self.assertFalse(cbs.in_calling_window(mk(20, 59), s))
+        self.assertFalse(cbs.in_calling_window(mk(0, 0) + timedelta(days=1), s))   # Tue 00:00 is closed
+
     def test_B05_limits_are_inclusive(self):
         self.assertEqual(S(retry_minutes=5, max_attempts=1)["max_attempts"], 1)
         self.assertEqual(S(retry_minutes=1440, max_attempts=5)["retry_minutes"], 1440)
@@ -166,6 +177,49 @@ class ResolveDue(unittest.TestCase):
     def test_R17_max_days(self):
         self.assertIsNotNone(cbs._int_days(60))
         self.assertIsNone(cbs._int_days(61))
+
+
+class RelativeMinutes(unittest.TestCase):
+    """'Call me in 30 minutes': the AI cannot see the clock, so it sends minutes and the server adds them."""
+    NOW = datetime(2026, 10, 5, 8, 0, tzinfo=UTC)
+
+    def mins(self, m, days=None, t=None, **kw):
+        return cbs.resolve_due(days, t, S(**kw), self.NOW, minutes=m)
+
+    def test_M01_adds_the_minutes_to_now(self):
+        d, src, note = self.mins(30)
+        self.assertEqual((d, src, note), (self.NOW + timedelta(minutes=30), "caller", None))
+
+    def test_M02_an_hour_and_longer_waits(self):
+        self.assertEqual(self.mins(60)[0], self.NOW + timedelta(hours=1))
+        self.assertEqual(self.mins(90)[0], self.NOW + timedelta(minutes=90))
+        self.assertEqual(self.mins(7 * 24 * 60)[0], self.NOW + timedelta(days=7))
+
+    def test_M03_it_does_not_depend_on_the_account_timezone(self):
+        self.assertEqual(self.mins(30, timezone=KHI)[0], self.mins(30, timezone="America/New_York")[0])
+
+    def test_M04_very_short_waits_are_raised_to_the_minimum_notice_and_say_so(self):
+        d, _, note = self.mins(1)
+        self.assertEqual(d, self.NOW + timedelta(minutes=cbs.MIN_NOTICE_MINUTES))
+        self.assertIn("minimum", note)
+
+    def test_M05_minutes_win_over_a_day_and_time_the_ai_may_have_guessed(self):
+        d, src, _ = self.mins(30, days=3, t="17:00")
+        self.assertEqual((d, src), (self.NOW + timedelta(minutes=30), "caller"))
+
+    def test_M06_whole_numbers_in_other_shapes_are_accepted(self):
+        for v in ("30", " 30 ", 30.0):
+            self.assertEqual(self.mins(v)[0], self.NOW + timedelta(minutes=30), repr(v))
+
+    def test_M07_unusable_values_are_ignored_not_guessed(self):
+        # falls back to the day/time (or the default) exactly as if no minutes were sent
+        fallback = cbs.resolve_due(None, None, S(), self.NOW)
+        for bad in (0, -5, 1.5, "soon", "", None, True, [30], 7 * 24 * 60 + 1):
+            self.assertEqual(self.mins(bad), fallback, repr(bad))
+
+    def test_M08_a_bad_minutes_value_still_lets_a_valid_day_and_time_through(self):
+        d, src, _ = self.mins("soon", days=1, t="17:00", timezone=KHI)
+        self.assertEqual((d.astimezone(ZoneInfo(KHI)).strftime("%Y-%m-%d %H:%M"), src), ("2026-10-06 17:00", "caller"))
 
 
 class Window(unittest.TestCase):

@@ -80,14 +80,21 @@ export const isOverdue = (cb: Callback, now: Date = new Date()): boolean =>
 
 export const CALLBACK_LIMITS = { retry_minutes: [5, 1440], max_attempts: [1, 5] } as const;
 
+/** Minutes since midnight; a closing time of 00:00 (12:00 AM) means the end of the day. */
+const minutes = (hhmm: string, closing = false): number => {
+  const m = Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+  return closing && m === 0 ? 24 * 60 : m;
+};
+
 /** Mirrors the server's checks so the form can explain a problem before saving. */
 export function validateCallbackSettings(s: CallbackSettings, zones: string[] = knownTimezones()): string | null {
   const t = /^([01]\d|2[0-3]):[0-5]\d$/;
   if (!s.timezone.trim() || (zones.length > 0 && !["UTC", ...zones].includes(s.timezone))) return "Choose a timezone from the list.";
   if (s.work_days.length === 0) return "Pick at least one calling day.";
   if (![s.start_time, s.end_time, s.default_time].every((x) => t.test(x))) return "Enter the start, end and default times.";
-  if (s.start_time >= s.end_time) return "End time must be after start time.";
-  if (s.default_time < s.start_time || s.default_time >= s.end_time) return "The default callback time must fall inside your calling hours.";
+  const [start, end, def] = [minutes(s.start_time), minutes(s.end_time, true), minutes(s.default_time)];
+  if (start >= end) return "End time must be after start time.";
+  if (def < start || def >= end) return "The default callback time must fall inside your calling hours.";
   if (!Number.isInteger(s.retry_minutes) || s.retry_minutes < 5 || s.retry_minutes > 1440) return "Retry delay must be a whole number from 5 to 1440.";
   if (!Number.isInteger(s.max_attempts) || s.max_attempts < 1 || s.max_attempts > 5) return "Attempts must be a whole number from 1 to 5.";
   return null;

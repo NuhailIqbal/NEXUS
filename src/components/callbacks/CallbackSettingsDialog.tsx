@@ -98,7 +98,7 @@ export function CallbackSettingsDialog({
             <div className="space-y-1.5">
               <Label htmlFor="cbs-tz">Timezone</Label>
               <TimezoneSelect id="cbs-tz" value={form.timezone} zones={zones} disabled={!isOwner} onChange={(tz) => set("timezone", tz)} />
-              <p className="text-xs text-muted-foreground">Days and times the caller names are understood in this timezone.</p>
+              <p className="text-xs text-muted-foreground">Everything here follows this timezone: your calling days and hours, the default time, and any day or time a caller asks for.</p>
             </div>
 
             <div className="space-y-1.5">

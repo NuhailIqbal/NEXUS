@@ -10,14 +10,16 @@ import {
 import { api } from "@/services/api";
 import { toLocalInput, type Callback } from "./callbackTypes";
 
-/** Change when a callback should happen. The time is read in the callback's own timezone. */
+/** Change when a callback should happen. The time is read in the account's timezone (falls back to the callback's own). */
 export function RescheduleDialog({
-  callback, onOpenChange, onSaved,
+  callback, timezone, onOpenChange, onSaved,
 }: {
   callback: Callback | null;
+  timezone?: string;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
+  const tz = timezone || callback?.timezone || "UTC";
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,10 +28,10 @@ export function RescheduleDialog({
     if (callback) {
       // Start from the current time if it is still ahead, otherwise from "now + 1 hour".
       const ahead = new Date(callback.due_at).getTime() > Date.now();
-      setValue(toLocalInput(ahead ? callback.due_at : new Date(Date.now() + 3600_000).toISOString(), callback.timezone));
+      setValue(toLocalInput(ahead ? callback.due_at : new Date(Date.now() + 3600_000).toISOString(), tz));
       setError(null);
     }
-  }, [callback]);
+  }, [callback, tz]);
 
   const save = async () => {
     if (!callback) return;
@@ -50,7 +52,7 @@ export function RescheduleDialog({
         <DialogHeader>
           <DialogTitle>Reschedule callback</DialogTitle>
           <DialogDescription>
-            {callback ? `${callback.contact_name || callback.phone || "This customer"} — time is in ${callback.timezone}.` : ""}
+            {callback ? `${callback.contact_name || callback.phone || "This customer"} — time is in ${tz}.` : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">

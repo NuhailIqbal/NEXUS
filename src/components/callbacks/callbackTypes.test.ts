@@ -59,6 +59,11 @@ describe("validateCallbackSettings", () => {
     expect(check({ default_time: "09:00" })).toBeNull();
     expect(check({ timezone: "UTC" })).toBeNull();                               // always allowed
   });
+  it("treats a 12:00 AM closing time as the end of the day", () => {
+    expect(check({ start_time: "21:00", end_time: "00:00", default_time: "22:00" })).toBeNull();
+    expect(check({ start_time: "21:00", end_time: "00:00", default_time: "08:00" })).toMatch(/inside your calling hours/);
+    expect(check({ start_time: "00:00", end_time: "00:00", default_time: "00:00" })).toMatch(/after start/);
+  });
   it("rejects what the server rejects", () => {
     expect(check({ timezone: "Mars/Olympus" })).toMatch(/timezone/i);
     expect(check({ work_days: [] })).toMatch(/calling day/);

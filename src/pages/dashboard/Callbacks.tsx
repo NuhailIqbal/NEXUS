@@ -170,7 +170,7 @@ const Callbacks = () => {
                       </td>
                       <td className="px-4 py-3 text-center text-muted-foreground">{cb.agent_name || "—"}</td>
                       <td className="px-4 py-3 text-center">
-                        <div className="whitespace-nowrap">{formatDue(cb.due_at, cb.timezone)}</div>
+                        <div className="whitespace-nowrap">{formatDue(cb.due_at, settings?.timezone || cb.timezone)}</div>
                         <div className="text-xs text-muted-foreground">{SOURCE_LABEL[cb.time_source]}</div>
                         {overdue && !settings?.auto_call && (
                           <span className="mt-1 inline-block rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">Overdue — call them</span>
@@ -218,7 +218,7 @@ const Callbacks = () => {
         <CallbackSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} isOwner={isOwner}
           onSaved={(s) => { setSettings(s); load(); }} />
       )}
-      <RescheduleDialog callback={rescheduling} onOpenChange={(o) => !o && setRescheduling(null)} onSaved={load} />
+      <RescheduleDialog callback={rescheduling} timezone={settings?.timezone} onOpenChange={(o) => !o && setRescheduling(null)} onSaved={load} />
 
       <AlertDialog open={!!cancelling} onOpenChange={(o) => !o && !busy && setCancelling(null)}>
         <AlertDialogContent>

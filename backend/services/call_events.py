@@ -274,9 +274,10 @@ def resolve_agent_events(user_id: str, items: list | None) -> list[dict]:
 
 
 SCOPE_NOTE = {"inbound": " (inbound calls only)", "outbound": " (outbound calls only)"}
-CALLBACK_NOTE = (" — this schedules a callback: if the caller names a day or time, also pass callback_in_days "
-                 "(0 = today, 1 = tomorrow) and callback_time (24-hour HH:MM in THEIR local time); "
-                 "if they name none, pass neither")
+CALLBACK_NOTE = (" — this schedules a callback: if the caller says how long to wait (\"in 30 minutes\", \"after an hour\"), "
+                 "pass callback_in_minutes as a whole number and nothing else (you cannot see the clock, so never work "
+                 "out a clock time yourself); if they name a day or time, pass callback_in_days (0 = today, "
+                 "1 = tomorrow) and callback_time (24-hour HH:MM in THEIR local time); if they name none, pass nothing")
 
 
 def event_applies(applies_to, call_type) -> bool:
@@ -312,6 +313,10 @@ def tool_payload(agent_name: str | None, events: list[dict]) -> dict:
                     "note": {
                         "type": "string",
                         "description": "Optional short detail, e.g. what the caller said.",
+                    },
+                    "callback_in_minutes": {
+                        "type": "integer",
+                        "description": "Only for events that schedule a callback, when the caller says how long to wait, e.g. 30 for 'in 30 minutes' or 60 for 'after an hour'. Use this instead of working out a clock time.",
                     },
                     "callback_in_days": {
                         "type": "integer",

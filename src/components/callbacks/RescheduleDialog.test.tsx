@@ -39,6 +39,13 @@ describe("RescheduleDialog", () => {
     expect(screen.getByText(/Ali Khan — time is in Asia\/Karachi/)).toBeInTheDocument();
   });
 
+  it("reads and shows the time in the account timezone when it has changed since the callback was made", () => {
+    const onSaved = vi.fn();
+    render(<RescheduleDialog callback={cb({ due_at: "2030-06-06T12:00:00Z" })} timezone="America/New_York" onOpenChange={vi.fn()} onSaved={onSaved} />);
+    expect(screen.getByText(/time is in America\/New_York/)).toBeInTheDocument();
+    expect(input().value).toBe("2030-06-06T08:00");
+  });
+
   it("starts from the current callback time, shown in that timezone", () => {
     setup(cb({ due_at: "2030-06-06T12:00:00Z" }));
     expect(input().value).toBe("2030-06-06T17:00");

@@ -1,10 +1,11 @@
 """
 Callbacks: when a caller says "call me back at 5", the event that carries
-`callback_in_days` + `callback_time` becomes a row in `callbacks`.
+`callback_in_minutes` (or `callback_in_days` + `callback_time`) becomes a row in `callbacks`.
 
-The AI never has to know today's date: it sends how many days from today (0 = today) and a
-24-hour clock time in the caller's local time, and the server turns that into a real moment
-using the account's timezone. A callback is only a RECORD until the account turns on
+The AI never has to know today's date or the time: for "in 30 minutes" it sends the number of
+minutes, for a day/clock time it sends how many days from today (0 = today) and a 24-hour clock
+time in the caller's local time, and the server turns that into a real moment using the
+account's timezone. A callback is only a RECORD until the account turns on
 `callback_settings.auto_call` (off by default) — see services/callback_scheduler.py.
 """
 
@@ -30,6 +31,7 @@ DEFAULT_SETTINGS = {
 }
 MIN_NOTICE_MINUTES = 5       # "today at 17:00" said at 16:58 means tomorrow, not "right now"
 MAX_DAYS_AHEAD = 60
+MAX_MINUTES_AHEAD = 7 * 24 * 60    # "in N minutes" is for short waits; longer ones use a day + time
 STATUSES = ("pending", "calling", "called", "failed", "cancelled", "skipped")
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
@@ -45,6 +47,12 @@ class CallbackError(Exception):
 def parse_hhmm(value) -> dtime | None:
     m = _HHMM.match(value.strip()) if isinstance(value, str) else None
     return dtime(int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _minutes(t: dtime, *, closing: bool = False) -> int:
+    """Minutes since midnight. A closing time of 00:00 (12:00 AM) means the end of the day, not its start."""
+    m = t.hour * 60 + t.minute
+    return 24 * 60 if closing and m == 0 else m
 
 
 def validate_settings(current: dict, changes: dict) -> dict:
@@ -67,9 +75,10 @@ def validate_settings(current: dict, changes: dict) -> dict:
             raise CallbackError(f"{label} must look like 09:30.")
         s[key] = f"{t.hour:02d}:{t.minute:02d}"
         times[key] = t
-    if times["start_time"] >= times["end_time"]:
+    start, end, default = _minutes(times["start_time"]), _minutes(times["end_time"], closing=True), _minutes(times["default_time"])
+    if start >= end:
         raise CallbackError("End time must be after start time.")
-    if not times["start_time"] <= times["default_time"] < times["end_time"]:
+    if not start <= default < end:
         raise CallbackError("The default callback time must fall inside your calling hours.")
     for key, lo, hi, label in (("retry_minutes", 5, 1440, "Retry delay"), ("max_attempts", 1, 5, "Attempts")):
         v = s[key]
@@ -106,6 +115,17 @@ def _int_days(value) -> int | None:
     return value if isinstance(value, int) and 0 <= value <= MAX_DAYS_AHEAD else None
 
 
+def _int_minutes(value) -> int | None:
+    """A whole number of minutes (1..MAX_MINUTES_AHEAD). Anything else is treated as not given."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return value if isinstance(value, int) and 1 <= value <= MAX_MINUTES_AHEAD else None
+
+
 def _at(day: date, t: dtime, tz: ZoneInfo) -> datetime:
     return datetime.combine(day, t, tzinfo=tz)
 
@@ -118,9 +138,12 @@ def _next_work_day(day: date, work_days: list) -> date:
     return day
 
 
-def resolve_due(days, time_str, s: dict, now: datetime | None = None) -> tuple[datetime, str, str | None]:
+def resolve_due(days, time_str, s: dict, now: datetime | None = None, *,
+                minutes=None) -> tuple[datetime, str, str | None]:
     """-> (due moment in UTC, source 'caller' | 'default', note about any adjustment).
 
+    caller said how long to wait ("in 30 minutes") -> now + that many minutes (never sooner than
+                          MIN_NOTICE_MINUTES); it wins over days/time, which the AI could only guess at
     caller gave a time  -> that clock time (today if still ahead, else tomorrow; `days` shifts the date)
     caller gave only days -> that day at the default time
     nothing usable       -> the next calling day at the default time"""
@@ -133,6 +156,14 @@ def resolve_due(days, time_str, s: dict, now: datetime | None = None) -> tuple[d
     d = _int_days(days)
     default_t = parse_hhmm(s["default_time"])
     note = None
+
+    m = _int_minutes(minutes)
+    if m is not None:
+        due = now + timedelta(minutes=m)
+        if due < earliest:
+            due = earliest
+            note = f"Moved to the {MIN_NOTICE_MINUTES}-minute minimum."
+        return due, "caller", note
 
     if t is not None:
         day = today + timedelta(days=d if d is not None else 0)
@@ -155,7 +186,8 @@ def resolve_due(days, time_str, s: dict, now: datetime | None = None) -> tuple[d
 def in_calling_window(moment: datetime, s: dict) -> bool:
     local = moment.astimezone(ZoneInfo(s["timezone"]))
     return (local.weekday() in s["work_days"]
-            and parse_hhmm(s["start_time"]) <= local.time().replace(tzinfo=None) < parse_hhmm(s["end_time"]))
+            and _minutes(parse_hhmm(s["start_time"])) <= _minutes(local.time())
+            < _minutes(parse_hhmm(s["end_time"]), closing=True))
 
 
 def next_window_start(moment: datetime, s: dict) -> datetime:
@@ -190,7 +222,8 @@ def schedule_from_event(user_id: str, agent_id: str, vapi_call_id: str, tool_cal
     """Record the callback a caller asked for. A newer request from the same caller replaces
     an older pending one, and a retried tool call never creates a second row."""
     s = get_settings(user_id)
-    due, source, adjust = resolve_due(args.get("callback_in_days"), args.get("callback_time"), s, now)
+    due, source, adjust = resolve_due(args.get("callback_in_days"), args.get("callback_time"), s, now,
+                                      minutes=args.get("callback_in_minutes"))
     said = (note or "").strip()
     text = " ".join(x for x in (said, f"({adjust})" if adjust else "") if x)[:500] or None
     phone = (phone or "").strip() or None
@@ -286,13 +319,16 @@ def reschedule(user_id: str, callback_id: str, due_local: str, *, now: datetime 
         when = datetime.fromisoformat(str(due_local).strip())
     except ValueError:
         raise CallbackError("Enter the callback time as a date and time.")
-    zone = ZoneInfo(cb["timezone"] if valid_timezone(cb["timezone"]) else "UTC")
+    # A typed date/time is read in the account's CURRENT timezone (what the page shows), not the one
+    # the callback happened to be created under.
+    tz_name = get_settings(user_id)["timezone"]
+    zone = ZoneInfo(tz_name if valid_timezone(tz_name) else "UTC")
     when = (when.replace(tzinfo=zone) if when.tzinfo is None else when).astimezone(timezone.utc)
     if when < now + timedelta(minutes=1):
         raise CallbackError("Pick a time in the future.")
     if when > now + timedelta(days=MAX_DAYS_AHEAD):
         raise CallbackError(f"Callbacks can be scheduled at most {MAX_DAYS_AHEAD} days ahead.")
-    fields = {"due_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "pending", "attempts": 0,
+    fields = {"due_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "timezone": zone.key, "status": "pending", "attempts": 0,
               "time_source": "manual", "last_error": None, "updated_at": "now()"}
     supabase.table("callbacks").update(fields).eq("id", callback_id).execute()
     return _owned(user_id, callback_id)

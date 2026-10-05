@@ -123,7 +123,8 @@ export function CallEventDialog({
               <span className="block font-medium">Schedule a callback when this happens</span>
               <span className="block text-xs text-muted-foreground">
                 Use this when the event means the caller wants to be contacted again. If the caller names a day or
-                time, the agent passes it along and a callback is recorded in the Callbacks tab.
+                time, or how long to wait (such as "in 30 minutes"), the agent passes it along and a callback is
+                recorded in the Callbacks tab.
               </span>
             </span>
           </label>

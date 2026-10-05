@@ -89,6 +89,16 @@ class EventFlag(Base):
         self.assertIn("callback_in_days", props["properties"])
         self.assertIn("callback_time", props["properties"])
 
+    def test_E07_tool_offers_minutes_and_the_directive_tells_the_ai_not_to_guess_clock_times(self):
+        props = ce.tool_payload("x", ce.get_events(self.agent["id"]))["function"]["parameters"]
+        self.assertEqual(props["properties"]["callback_in_minutes"]["type"], "integer")
+        self.assertNotIn("callback_in_minutes", props["required"])
+        d = ce.prompt_directive(ce.get_events(self.agent["id"]))
+        line = next(l for l in d.splitlines() if l.startswith("- callback_requested"))
+        self.assertIn("callback_in_minutes", line)
+        self.assertIn("never work out a clock time", line)
+        self.assertNotIn("callback_in_minutes", next(l for l in d.splitlines() if l.startswith("- interested")))
+
     def test_E06_directive_mentions_callbacks_only_for_flagged_events(self):
         d = ce.prompt_directive(ce.get_events(self.agent["id"]))
         lines = {l.split(":")[0].lstrip("- "): l for l in d.splitlines() if l.startswith("- ")}
@@ -107,6 +117,28 @@ class RecordingCallbacks(Base):
         self.assertIn("kal shaam 5 baje", cb["requested_text"])
         tomorrow = (datetime.now(ZoneInfo(KHI)) + timedelta(days=1)).date()
         self.assertEqual(datetime.fromisoformat(cb["due_at"]).astimezone(ZoneInfo(KHI)).date(), tomorrow)
+
+    def test_K09_in_thirty_minutes_becomes_a_callback_thirty_minutes_from_now(self):
+        before = datetime.now(timezone.utc)
+        res = self.fire(args={"callback_in_minutes": 30, "note": "call me after 30 minutes"})
+        after = datetime.now(timezone.utc)
+        self.assertIn("recorded", res)
+        cb = self.rows()[0]
+        due = datetime.fromisoformat(cb["due_at"].replace("Z", "+00:00"))
+        self.assertGreaterEqual(due, before.replace(microsecond=0) + timedelta(minutes=30))
+        self.assertLessEqual(due, after + timedelta(minutes=30))
+        self.assertEqual((cb["status"], cb["time_source"]), ("pending", "caller"))
+        self.assertIn("after 30 minutes", cb["requested_text"])
+
+    def test_K10_minutes_as_a_string_or_with_a_guessed_time_still_mean_minutes(self):
+        self.fire(args={"callback_in_minutes": "45", "callback_in_days": 2, "callback_time": "09:00"})
+        due = datetime.fromisoformat(self.rows()[0]["due_at"].replace("Z", "+00:00"))
+        self.assertAlmostEqual((due - datetime.now(timezone.utc)).total_seconds() / 60, 45, delta=2)
+
+    def test_K11_unusable_minutes_never_break_the_event(self):
+        res = self.fire(args={"callback_in_minutes": "soon"})
+        self.assertIn("recorded", res)
+        self.assertEqual(self.rows()[0]["time_source"], "default")
 
     def test_K02_no_time_given_uses_the_default_and_says_so(self):
         self.fire(args={"note": "baad mein"})
@@ -232,6 +264,15 @@ class CallbacksApi(Base):
         row = r.json()["data"]
         self.assertEqual((row["status"], row["time_source"], row["attempts"]), ("pending", "manual", 0))
         self.assertEqual(self.local(row), "14:15")
+
+    def test_L10b_reschedule_follows_the_accounts_current_timezone(self):
+        cbs.save_settings(self.user, {"timezone": "America/New_York"})        # changed after the callback was made
+        when = (datetime.now(ZoneInfo("America/New_York")) + timedelta(days=3)).replace(hour=14, minute=15, second=0, microsecond=0)
+        r = self.patch_cb({"due_local": when.strftime("%Y-%m-%dT%H:%M")})
+        self.assertEqual(r.status_code, 200, r.text)
+        row = r.json()["data"]
+        self.assertEqual(row["timezone"], "America/New_York")
+        self.assertEqual(datetime.fromisoformat(row["due_at"].replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York")).strftime("%H:%M"), "14:15")
 
     def test_L11_reschedule_accepts_an_explicit_offset(self):
         when = datetime.now(timezone.utc) + timedelta(days=2)
