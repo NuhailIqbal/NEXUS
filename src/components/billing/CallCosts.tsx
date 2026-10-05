@@ -31,6 +31,8 @@ const CallCosts = () => {
   const [callCosts, setCallCosts] = useState<CallCostEntry[]>([]);
   const [totalCost, setTotalCost] = useState(0);
   const [totalMinutes, setTotalMinutes] = useState(0);
+  const [totalCalls, setTotalCalls] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [callSortKey, setCallSortKey] = useState<CallColumnKey | null>(null);
   const [callSortDir, setCallSortDir] = useState<"asc" | "desc">("asc");
@@ -47,6 +49,8 @@ const CallCosts = () => {
         setCallCosts(data.calls || []);
         setTotalCost(data.total_cost || 0);
         setTotalMinutes(data.total_minutes || 0);
+        setTotalCalls(data.total_calls || 0);
+        setTruncated(!!data.truncated);
       }
       setLoading(false);
     });
@@ -143,6 +147,12 @@ const CallCosts = () => {
   return (
     <div>
       <h2 className="mb-4 text-lg font-semibold text-foreground">Call Cost Breakdown</h2>
+      {truncated && (
+        <p className="mb-3 text-sm text-muted-foreground">
+          Showing the latest {callCosts.length.toLocaleString()} of {totalCalls.toLocaleString()} calls.
+          The totals below include every call.
+        </p>
+      )}
       <div className="overflow-hidden rounded-xl border border-border">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

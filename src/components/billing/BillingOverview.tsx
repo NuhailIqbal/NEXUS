@@ -22,7 +22,7 @@ const BillingOverview = () => {
   const fetchAll = useCallback(async () => {
     const [statusRes, costsRes, txnRes] = await Promise.all([
       api.getBillingStatus(),
-      api.getBillingCallCosts(),
+      api.getBillingCallCosts(true),
       api.getWalletTransactions(),
     ]);
     if (statusRes.data) setBilling(statusRes.data);

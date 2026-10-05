@@ -1034,6 +1034,13 @@ async def topup_confirm(body: TopupConfirm, user=Depends(get_current_user)):
     return {"data": {"balance": new_balance, "added": amount}, "error": None}
 
 
+# The Call Costs and Purchase History tables filter, sort and page entirely in the
+# browser, so they need the account's whole history -- not a "latest N" window. This
+# ceiling only guards the response size on a pathological account; call-costs reports
+# when it is hit (`truncated`) and its totals always cover every call regardless.
+BILLING_LIST_MAX_ROWS = 10_000
+
+
 @router.get("/transactions")
 async def list_transactions(user=Depends(get_current_user), include_calls: bool = Query(False)):
     """Wallet ledger for the Purchase History. Excludes per-call charges by default
@@ -1045,31 +1052,41 @@ async def list_transactions(user=Depends(get_current_user), include_calls: bool 
     )
     if not include_calls:
         query = query.neq("kind", "call")
-    result = query.order("created_at", desc=True).limit(50).execute()
+    result = query.order("created_at", desc=True).limit(BILLING_LIST_MAX_ROWS).execute()
     return {"data": result.data or [], "error": None}
 
 
 @router.get("/call-costs")
-async def get_call_costs(user=Depends(get_current_user)):
+async def get_call_costs(user=Depends(get_current_user), summary_only: bool = Query(False)):
+    """Call Cost Breakdown rows plus account-wide totals. ?summary_only=true skips the
+    rows (the Overview only needs the totals, which can be a lot of data to send)."""
     result = (
         supabase.table("conversations")
         # NB: the conversations table timestamps calls in `call_time`, not `created_at`.
-        .select("id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, call_time")
+        .select(
+            "contact_name, duration_seconds, call_cost" if summary_only else
+            "id, vapi_call_id, direction, phone, contact_name, duration, duration_seconds, call_cost, status, call_time"
+        )
         .eq("user_id", resolve_owner_id(user["user_id"]))
         .order("call_time", desc=True)
-        .limit(50)
         .execute()
     )
-    calls = result.data or []
     # Exclude seeded demo/sample rows so the breakdown only reflects real calls.
-    calls = [c for c in calls if not str(c.get("contact_name") or "").startswith("[SAMPLE]")]
+    all_calls = [
+        c for c in (result.data or [])
+        if not str(c.get("contact_name") or "").startswith("[SAMPLE]")
+    ]
+    # Totals are taken over every call, before the response is capped.
+    total_cost = sum(float(c.get("call_cost") or 0) for c in all_calls)
+    total_minutes = sum(int(c.get("duration_seconds") or 0) for c in all_calls) / 60.0
+    calls = [] if summary_only else all_calls[:BILLING_LIST_MAX_ROWS]
     for c in calls:
         c["created_at"] = c.get("call_time")  # the UI reads `created_at`
-    total_cost = sum(float(c.get("call_cost") or 0) for c in calls)
-    total_minutes = sum(int(c.get("duration_seconds") or 0) for c in calls) / 60.0
     return {
         "data": {
             "calls": calls,
+            "total_calls": len(all_calls),
+            "truncated": not summary_only and len(all_calls) > len(calls),
             "total_cost": round(total_cost, 2),
             "total_minutes": round(total_minutes, 1),
         },

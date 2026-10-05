@@ -251,7 +251,8 @@ export const api = {
   // Billing
   getBillingStatus: () => get("/billing/status"),
   getBillingInvoices: () => get("/billing/invoices"),
-  getBillingCallCosts: () => get("/billing/call-costs"),
+  getBillingCallCosts: (summaryOnly = false) =>
+    get(`/billing/call-costs${summaryOnly ? "?summary_only=true" : ""}`),
   // Wallet / balance
   topupCheckout: (amount: number) => post("/billing/topup/checkout", {
     amount,
