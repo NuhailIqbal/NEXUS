@@ -123,6 +123,17 @@ const CallCosts = () => {
   const totalPages = Math.max(1, Math.ceil(sortedCallCosts.length / pageSize));
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
+  // With no filter applied the footer shows the account-wide totals from the server
+  // (they cover every call, even past the list ceiling); with a filter it sums just
+  // the matching rows.
+  const filtersActive = !!callDateFilter || Object.values(callFilters).some((v) => v.trim() !== "");
+  const footerCost = filtersActive
+    ? sortedCallCosts.reduce((sum, c) => sum + (c.call_cost || 0), 0)
+    : totalCost;
+  const footerMinutes = filtersActive
+    ? sortedCallCosts.reduce((sum, c) => sum + (c.duration_seconds || 0), 0) / 60
+    : totalMinutes;
+
   const visibleCallCosts = useMemo(
     () => sortedCallCosts.slice((page - 1) * pageSize, page * pageSize),
     [sortedCallCosts, page, pageSize]
@@ -150,7 +161,7 @@ const CallCosts = () => {
       {truncated && (
         <p className="mb-3 text-sm text-muted-foreground">
           Showing the latest {callCosts.length.toLocaleString()} of {totalCalls.toLocaleString()} calls.
-          The totals below include every call.
+          With no filter applied, the total below includes every call.
         </p>
       )}
       <div className="overflow-hidden rounded-xl border border-border">
@@ -232,9 +243,9 @@ const CallCosts = () => {
                 ))
               )}
               <tr className="divide-x divide-border border-t-2 border-border bg-muted/30 font-semibold">
-                <td className="px-4 py-3 text-center text-foreground" colSpan={3}>Total</td>
-                <td className="px-4 py-3 text-center text-foreground">{totalMinutes.toFixed(1)} min</td>
-                <td className="px-4 py-3 text-center text-foreground">${totalCost.toFixed(2)}</td>
+                <td className="px-4 py-3 text-center text-foreground" colSpan={3}>{filtersActive ? "Total (filtered)" : "Total"}</td>
+                <td className="px-4 py-3 text-center text-foreground">{footerMinutes.toFixed(1)} min</td>
+                <td className="px-4 py-3 text-center text-foreground">${footerCost.toFixed(2)}</td>
                 <td></td>
               </tr>
             </tbody>
