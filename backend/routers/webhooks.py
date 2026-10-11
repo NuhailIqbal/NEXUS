@@ -6,6 +6,12 @@ update the call's `conversations` row, store transcript/recording/duration, char
 owner's wallet via `routers.billing.record_call_cost`, link call events, and schedule
 post-call AI work (Gemini summary + automation flows).
 
+`assistant-request` is the one event that expects a real answer: for a number with caller
+verification on, VAPI asks who should pick up each inbound call and
+services/caller_verification.py replies with the agent or a refusal. Those numbers point VAPI at
+`POST /webhooks/vapi/inbound`, which behaves exactly like `/webhooks/vapi` but with a higher
+rate limit, because a rate-limited request there would drop a live call.
+
 `import_vapi_call` reuses the same extractors for call objects fetched from the VAPI REST
 API; it is called by `services/vapi_sync.py` (background poll) and by
 `POST /conversations/sync-from-vapi`.
@@ -14,20 +20,40 @@ Tables read/written: ai_agents (assistant -> owner), contacts, phone_numbers, co
 """
 import hashlib
 import hmac
+import json
 import logging
 import asyncio
-from fastapi import APIRouter, Request, HTTPException, Header
+from fastapi import APIRouter, Request, HTTPException
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from limits import parse as parse_rate_limit
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
 from config import settings
 from database import supabase
 from services.gemini import summarize_transcript
 from services.automation_engine import run_post_call_automations
 from services.call_events import finalize_call_events
+from services.caller_verification import answered_calls, handle_assistant_request
 from routers.billing import record_call_cost
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
+
+# /webhooks/vapi/inbound is not rate limited by a decorator: a decorator counts every request,
+# authenticated or not, BEFORE authentication runs, so anyone could fill the bucket with junk and
+# get VAPI's real assistant-requests a 429 (a dropped live call). Behind the proxy every client
+# shares one address, so that would be every call on every verified number. Instead only requests
+# that FAIL authentication are counted, in a bucket of their own; requests carrying the secret
+# (VAPI, or this server's own reachability probe) are never throttled.
+_INBOUND_UNAUTHENTICATED_LIMIT = parse_rate_limit("60/minute")
+_inbound_rate_storage = MemoryStorage()
+_inbound_rate_limiter = FixedWindowRateLimiter(_inbound_rate_storage)
+
+
+def reset_inbound_rate_limit() -> None:
+    """Forget the failed-authentication counts (used by tests)."""
+    _inbound_rate_storage.reset()
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -47,8 +73,32 @@ def _verify_signature(body: bytes, signature: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
     # Constant-time comparison so the check does not leak how much of the signature
-    # matched; a missing header becomes "" and therefore never matches.
-    return hmac.compare_digest(expected, signature or "")
+    # matched; a missing header becomes "" and therefore never matches. Compared as bytes:
+    # compare_digest raises TypeError for a str that is not pure ASCII, which the sender
+    # controls here, so a str comparison would turn a garbage header into a 500.
+    return hmac.compare_digest(expected.encode(), (signature or "").encode())
+
+
+def _verify_request(body: bytes, headers) -> bool:
+    """Authenticate a VAPI server request with whichever credential it carries.
+
+    VAPI does not sign bodies by default: a server's shared secret arrives as an
+    `X-Vapi-Secret` header (or `Authorization: Bearer <secret>`), so those are accepted, along
+    with the HMAC `x-vapi-signature` that _verify_signature checks. One valid credential is
+    enough. With no VAPI_WEBHOOK_SECRET configured nothing is verified (development only).
+    """
+    secret = settings.vapi_webhook_secret
+    if not secret:
+        return _verify_signature(body, None)  # warns and returns True
+    if _verify_signature(body, headers.get("x-vapi-signature")):
+        return True
+    authorization = headers.get("authorization") or ""
+    bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    for supplied in (headers.get("x-vapi-secret"), bearer):
+        # Constant-time, on bytes so a non-ASCII header cannot raise.
+        if supplied and hmac.compare_digest(supplied.encode(), secret.encode()):
+            return True
+    return False
 
 
 def _find_user_for_assistant(vapi_assistant_id: str) -> str | None:
@@ -70,10 +120,18 @@ def _find_user_for_assistant(vapi_assistant_id: str) -> str | None:
 
 
 def _extract_assistant_id(payload: dict) -> str | None:
-    """VAPI assistant id from message.call.assistantId, falling back to message.assistantId."""
+    """VAPI assistant id from message.call.assistantId, falling back to message.assistantId and
+    then to the assistant object the event carries (message.assistant.id). The last one matters
+    for calls whose assistant was chosen per call (a number with caller verification on): VAPI
+    can leave call.assistantId empty for those."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
-    return call_obj.get("assistantId") or msg.get("assistantId")
+    assistant = msg.get("assistant")
+    return (
+        call_obj.get("assistantId")
+        or msg.get("assistantId")
+        or (assistant.get("id") if isinstance(assistant, dict) else None)
+    )
 
 
 def _extract_call_id(payload: dict) -> str | None:
@@ -98,7 +156,34 @@ def _extract_phone_number_id(payload: dict) -> str | None:
     widget calls)."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
-    return call_obj.get("phoneNumberId") or msg.get("phoneNumberId")
+    phone = msg.get("phoneNumber")
+    return (
+        call_obj.get("phoneNumberId")
+        or msg.get("phoneNumberId")
+        or (phone.get("id") if isinstance(phone, dict) else None)
+    )
+
+
+def is_routing_refusal(ended_reason: str | None) -> bool:
+    """True when VAPI ended a call at the routing step, before any assistant started: our own
+    refusal of a caller (caller verification) or a failed/invalid routing request. Such a call
+    has no conversation and no charge, and must never be attributed to an account by its number."""
+    return (ended_reason or "").lower().startswith("assistant-request")
+
+
+def _answered_by_us(payload: dict) -> dict | None:
+    """{"user_id", "agent_id"} when THIS server answered this call with a number's agent after
+    checking the caller (caller verification); otherwise None.
+
+    A verified number has no fixed assistant in VAPI (our server picks one per call), and VAPI may
+    leave such a call's assistantId empty, which would leave an ANSWERED call without a
+    conversation, recording or charge. Such a call is attributed by what we decided when it
+    arrived (see caller_verification.answered_calls), not by the number's flag now: refused calls,
+    calls served by the shared "unavailable" assistant and calls still being screened never match."""
+    call_id = _extract_call_id(payload)
+    if not isinstance(call_id, str) or not call_id:
+        return None
+    return answered_calls([call_id]).get(call_id)
 
 
 def _is_byot_call(payload: dict) -> bool:
@@ -305,11 +390,14 @@ def _status_from_reason(ended_reason: str) -> str:
     return "Completed"
 
 
-def import_vapi_call(call: dict, user_id: str) -> str:
+def import_vapi_call(call: dict, user_id: str, agent_id: str | None = None) -> str:
     """Import one VAPI call (from the REST API) into conversations, upserting by
     vapi_call_id. Mirrors recording + transcript + summary, and charges the call's
     cost to the user's wallet exactly once (via record_call_cost, idempotent by the
-    ledger). Does not touch the call-count quota (that's for live outbound gating)."""
+    ledger). Does not touch the call-count quota (that's for live outbound gating).
+
+    `agent_id` links a NEW row to that agent when the call carries no assistant id of its own
+    (a call this server answered after caller verification, see _answered_by_us)."""
     vapi_call_id = call.get("id")
     if not vapi_call_id:
         return "skipped"
@@ -349,7 +437,7 @@ def import_vapi_call(call: dict, user_id: str) -> str:
         supabase.table("conversations").update(row).eq("vapi_call_id", vapi_call_id).execute()
         result = "updated"
     else:
-        base = _new_conversation_base(payload, user_id)
+        base = _new_conversation_base(payload, user_id, agent_id)
         base.update(row)
         base.update({"user_id": user_id, "vapi_call_id": vapi_call_id})
         started = call.get("startedAt") or call.get("createdAt")
@@ -387,11 +475,12 @@ def _conversation_id_for(vapi_call_id: str) -> str | None:
     return r.data[0]["id"] if r.data else None
 
 
-def _new_conversation_base(payload: dict, user_id: str) -> dict:
+def _new_conversation_base(payload: dict, user_id: str, agent_id: str | None = None) -> dict:
     """Base row for a brand-new conversation: direction, phone, and resolved
     agent_id / contact_id / contact_name. Shared by call-start, the status-update
     row-creation path, and the end-of-call insert fallback so every row is linked
-    to its agent and contact regardless of which event created it."""
+    to its agent and contact regardless of which event created it. `agent_id` is the agent
+    to link when the call has no assistant id to resolve one from."""
     msg = payload.get("message", {})
     call_obj = msg.get("call", {})
     assistant_id = _extract_assistant_id(payload)
@@ -413,6 +502,8 @@ def _new_conversation_base(payload: dict, user_id: str) -> dict:
         )
         if agent_row.data:
             row["agent_id"] = agent_row.data[0]["id"]
+    if agent_id and "agent_id" not in row:
+        row["agent_id"] = agent_id
     # Exact phone-string match against this user's own contacts only.
     if phone:
         contact = (
@@ -524,7 +615,18 @@ async def _handle_call_ended(payload: dict):
     )
 
     # The owner is needed to insert a missing row, charge the call and run post-call work.
-    user_id = _find_user_for_assistant(_extract_assistant_id(payload))
+    assistant_id = _extract_assistant_id(payload)
+    user_id = _find_user_for_assistant(assistant_id)
+    agent_hint = None
+    if not user_id and not assistant_id and not is_routing_refusal(ended_reason):
+        # The event names NO assistant at all (VAPI can leave it empty when the assistant was chosen
+        # per call): a call this server answered after screening the caller is attributed by that
+        # decision, so it is still logged and billed. An assistant that is merely not ours (e.g. the
+        # shared "unavailable" one serving an empty wallet) is NOT attributed, exactly as on a normal
+        # number, and a call refused at routing never reaches this branch.
+        ours = _answered_by_us(payload)
+        if ours:
+            user_id, agent_hint = ours["user_id"], ours.get("agent_id")
 
     if existing.data:
         supabase.table("conversations").update(updates).eq("vapi_call_id", vapi_call_id).execute()
@@ -533,7 +635,7 @@ async def _handle_call_ended(payload: dict):
     elif user_id:
         # No row yet (call-started/status-update never arrived) — create a fully
         # linked row here.
-        base = _new_conversation_base(payload, user_id)
+        base = _new_conversation_base(payload, user_id, agent_hint)
         base.update(updates)
         base.update({"user_id": user_id, "vapi_call_id": vapi_call_id})
         insert_result = supabase.table("conversations").insert(base).execute()
@@ -634,25 +736,32 @@ async def _handle_status_update(payload: dict):
             logger.info(f"status-update created live row: {vapi_call_id} ({mapped})")
 
 
-@router.post("/vapi")
-@limiter.limit("120/minute")
-async def vapi_webhook(
-    request: Request,
-    x_vapi_signature: str = Header(None),
-):
-    """Receive VAPI server events. Authenticated by the HMAC signature in the
-    x-vapi-signature header (no user token) and rate limited to 120 requests per minute
-    per client IP. Routes end-of-call-report/call-ended, status-update and call-started
-    events to their handlers, which update conversations and trigger billing and
-    post-call work; other event types are acknowledged and ignored."""
+async def _process_vapi_request(request: Request, *, throttle_failed_auth: bool = False):
+    """Authenticate one VAPI server request and dispatch it by message type.
+
+    Shared by both webhook routes. 401 for a bad or missing credential (when a secret is
+    configured), 400 for a body that is not JSON or whose `message` is not an object. With
+    throttle_failed_auth, requests that fail authentication are also counted per client and
+    answered 429 beyond _INBOUND_UNAUTHENTICATED_LIMIT (authenticated ones never are).
+    """
     body = await request.body()
 
     # Verify against the raw bytes before parsing JSON: the HMAC covers the exact body.
-    if not _verify_signature(body, x_vapi_signature):
+    if not _verify_request(body, request.headers):
+        if throttle_failed_auth and not _inbound_rate_limiter.hit(
+                _INBOUND_UNAUTHENTICATED_LIMIT, "vapi-inbound-unauthenticated", get_remote_address(request)):
+            raise HTTPException(status_code=429, detail="Too many requests")
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    payload = await request.json()
-    msg = payload.get("message", {})
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body must be JSON")
+    # A body with no `message` is still acknowledged (as it always was); only a body that
+    # cannot be an event at all is rejected.
+    msg = payload.get("message", {}) if isinstance(payload, dict) else None
+    if not isinstance(msg, dict):
+        raise HTTPException(status_code=400, detail="Invalid event")
     event_type = msg.get("type", "")
 
     logger.info(f"VAPI webhook: {event_type}")
@@ -666,6 +775,10 @@ async def vapi_webhook(
         await _handle_call_ended(payload)
     elif event_type == "status-update":
         await _handle_status_update(payload)
+    elif event_type == "assistant-request":
+        # The only event whose response matters: VAPI is holding an inbound call until it
+        # gets the assistant to connect it to (or a refusal). Never raises.
+        return await handle_assistant_request(payload)
     # Acknowledged but intentionally not processed here. Final transcripts arrive via
     # the end-of-call-report; agent tool calls are served by the /tools/internal/*
     # callback routes, not this endpoint.
@@ -675,3 +788,24 @@ async def vapi_webhook(
         pass
 
     return {"received": True, "type": event_type}
+
+
+@router.post("/vapi")
+@limiter.limit("120/minute")
+async def vapi_webhook(request: Request):
+    """Receive VAPI server events. Authenticated by the shared secret VAPI sends (see
+    _verify_request; no user token) and rate limited to 120 requests per minute per client
+    IP. Routes end-of-call-report/call-ended, status-update and call-started events to their
+    handlers, which update conversations and trigger billing and post-call work; answers an
+    assistant-request with the agent to connect; other event types are acknowledged and
+    ignored."""
+    return await _process_vapi_request(request)
+
+
+@router.post("/vapi/inbound")
+async def vapi_inbound_webhook(request: Request):
+    """Same as /webhooks/vapi, for numbers with caller verification on (their VAPI server is
+    pointed here). VAPI holds an inbound call open while it waits for this answer, so a 429 here
+    would drop a live call: authenticated requests are never throttled, and only requests that
+    fail authentication are rate limited, in their own bucket (see _INBOUND_UNAUTHENTICATED_LIMIT)."""
+    return await _process_vapi_request(request, throttle_failed_auth=True)

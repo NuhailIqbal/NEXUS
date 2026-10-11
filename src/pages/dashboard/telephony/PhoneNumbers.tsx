@@ -1,13 +1,14 @@
 /**
  * Dashboard page listing every phone number on the account (route: /dashboard/telephony/phone-numbers).
  * Loads numbers, agents and campaigns, with client-side filter/sort/pagination, and offers buy,
- * settings (agent/status), release and "place test call" actions per row.
- * API: getPhoneNumbers, getAgents, getCampaigns, createPhoneNumber, createByotPhoneNumber,
- * confirmPhonePurchase, updatePhoneNumber, deletePhoneNumber, makeCall, getCallStatus.
+ * settings (agent/status/caller verification), release and "place test call" actions per row.
+ * API: getPhoneNumbers, getAgents, getCampaigns, getCallerVerificationStatus, createPhoneNumber,
+ * createByotPhoneNumber, confirmPhonePurchase, updatePhoneNumber, deletePhoneNumber, makeCall,
+ * getCallStatus.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { format, isSameDay } from "date-fns";
-import { Plus, Phone, Clock, Delete, PhoneCall, PhoneOff, Loader2 } from "lucide-react";
+import { Plus, Phone, Clock, Delete, PhoneCall, PhoneOff, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,8 +32,11 @@ import {
   SortableColumnHeader, TableTextFilter, TableSelectFilter, TableDateFilter, TablePagination,
 } from "@/components/dashboard/table/TableControls";
 import { CreatePhoneNumberDialog } from "@/components/telephony/CreatePhoneNumberDialog";
+import { CallerVerificationSwitch } from "@/components/telephony/CallerVerificationSwitch";
+import { CallerVerificationLog } from "@/components/telephony/CallerVerificationLog";
 import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
+import { isCallerVerificationStatus, type CallerVerificationStatus } from "@/lib/callerVerification";
 import { toast } from "sonner";
 
 // User-facing provider labels are kept generic so we don't expose the underlying
@@ -60,6 +64,8 @@ type Num = {
   next_billing_at?: string | null;
   suspended_for_balance?: boolean;
   twilio_credential_id?: string | null;
+  /** Inbound callers are looked up first and only mobile numbers reach the agent. */
+  caller_verification_enabled?: boolean;
 };
 
 // Real recurring-billing renewal date (next_billing_at). NULL for free VAPI numbers.
@@ -130,19 +136,30 @@ const PhoneNumbers = () => {
   const [callStage, setCallStage] = useState<CallStage>("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [settingsTarget, setSettingsTarget] = useState<Num | null>(null);
-  const [settingsForm, setSettingsForm] = useState<{ agent_id: string | null; status: string; provider: string }>({ agent_id: "", status: "", provider: "" });
+  const [settingsForm, setSettingsForm] = useState<{
+    agent_id: string | null; status: string; provider: string; caller_verification_enabled: boolean;
+  }>({ agent_id: "", status: "", provider: "", caller_verification_enabled: false });
+  const [savingSettings, setSavingSettings] = useState(false);
+  // Whether the server can run caller verification at all; null until loaded (the switch is then
+  // left usable and the server answers with a clear error if it can't).
+  const [verifyStatus, setVerifyStatus] = useState<CallerVerificationStatus | null>(null);
 
-  // Loads numbers, agents (id -> name lookup) and campaigns (set of phone_number_ids used
-  // for outbound) in parallel. Each is applied only if its response is valid.
+  // Loads numbers, agents (id -> name lookup), campaigns (set of phone_number_ids used
+  // for outbound) and the caller-verification status in parallel. Each is applied only if its
+  // response is valid, and only by the latest load (an older one finishing last is stale).
+  const fetchSeq = useRef(0);
   const fetchNumbers = async () => {
-    const [numbersRes, agentsRes, campaignsRes] = await Promise.all([
-      api.getPhoneNumbers(), api.getAgents(), api.getCampaigns(),
+    const seq = ++fetchSeq.current;
+    const [numbersRes, agentsRes, campaignsRes, verifyRes] = await Promise.all([
+      api.getPhoneNumbers(), api.getAgents(), api.getCampaigns(), api.getCallerVerificationStatus(),
     ]);
+    if (seq !== fetchSeq.current) return;
     if (numbersRes.data) setNumbers(Array.isArray(numbersRes.data) ? numbersRes.data : []);
     if (Array.isArray(agentsRes.data))
       setAgentsById(new Map(agentsRes.data.map((a: any) => [a.id, a.name])));
     if (Array.isArray(campaignsRes.data))
       setOutboundIds(new Set(campaignsRes.data.map((c: any) => c.phone_number_id).filter(Boolean)));
+    if (isCallerVerificationStatus(verifyRes.data)) setVerifyStatus(verifyRes.data);
     setLoading(false);
   };
 
@@ -348,19 +365,34 @@ const PhoneNumbers = () => {
   // Opens the settings modal, seeding the form from the number's current values.
   const openSettings = (n: Num) => {
     setSettingsTarget(n);
-    setSettingsForm({ agent_id: n.agent_id, status: n.status, provider: n.provider });
+    setSettingsForm({
+      agent_id: n.agent_id, status: n.status, provider: n.provider,
+      caller_verification_enabled: !!n.caller_verification_enabled,
+    });
   };
 
   // Saves agent/status/provider for the selected number (PATCH); the provider field is
-  // read-only in the UI and is sent back unchanged.
+  // read-only in the UI and is sent back unchanged. Caller verification is sent only when it was
+  // actually flipped: the server re-routes the number in the voice service whenever it receives
+  // the field, so an unrelated save must not trigger that.
   const saveSettings = async () => {
-    if (!settingsTarget) return;
-    const { error } = await api.updatePhoneNumber(settingsTarget.id, {
+    if (!settingsTarget || savingSettings) return;
+    const payload: Record<string, unknown> = {
       agent_id: settingsForm.agent_id,
       status: settingsForm.status,
       provider: settingsForm.provider,
-    });
+    };
+    if (settingsForm.caller_verification_enabled !== !!settingsTarget.caller_verification_enabled) {
+      payload.caller_verification_enabled = settingsForm.caller_verification_enabled;
+    }
+    setSavingSettings(true);
+    const { data, error } = await api.updatePhoneNumber(settingsTarget.id, payload);
+    setSavingSettings(false);
     if (error) return toast.error(error);
+    // Show what was saved right away (the server's row when it returns one): the table, and the
+    // dialog if it is reopened, must not show the old values until the reload below lands.
+    const row = data && typeof data === "object" && !Array.isArray(data) ? (data as Partial<Num>) : {};
+    setNumbers((list) => list.map((x) => (x.id === settingsTarget.id ? { ...x, ...payload, ...row } : x)));
     toast.success("Number updated");
     setSettingsTarget(null);
     fetchNumbers();
@@ -435,6 +467,14 @@ const PhoneNumbers = () => {
                         )}
                         {outboundIds.has(n.id) && (
                           <span className="whitespace-nowrap rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">Outbound</span>
+                        )}
+                        {n.agent_id && n.caller_verification_enabled && (
+                          <span
+                            title="Callers are checked before your agent answers; only mobile numbers get through"
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                          >
+                            <ShieldCheck className="h-3 w-3" />Caller check
+                          </span>
                         )}
                         {!n.agent_id && !outboundIds.has(n.id) && (
                           <span className="text-xs text-muted-foreground">—</span>
@@ -538,11 +578,11 @@ const PhoneNumbers = () => {
       />
 
       {/* Settings modal */}
-      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && !savingSettings && setSettingsTarget(null)}>
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Number Settings</DialogTitle>
-            <DialogDescription>Reassign agent or change status.</DialogDescription>
+            <DialogDescription>Reassign agent, change status or check callers before answering.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -550,6 +590,7 @@ const PhoneNumbers = () => {
               <Select
                 value={settingsForm.agent_id || "__none__"}
                 onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v === "__none__" ? null : v }))}
+                disabled={savingSettings}
               >
                 <SelectTrigger><SelectValue placeholder="Select an agent" /></SelectTrigger>
                 <SelectContent>
@@ -567,7 +608,11 @@ const PhoneNumbers = () => {
               </div>
               <div className="space-y-2">
                 <Label>Status</Label>
-                <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
+                <Select
+                  value={settingsForm.status}
+                  onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}
+                  disabled={savingSettings}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Active">Active</SelectItem>
@@ -576,10 +621,23 @@ const PhoneNumbers = () => {
                 </Select>
               </div>
             </div>
+            <CallerVerificationSwitch
+              id="number-caller-verification"
+              checked={settingsForm.caller_verification_enabled}
+              onCheckedChange={(v) => setSettingsForm((f) => ({ ...f, caller_verification_enabled: v }))}
+              savedValue={!!settingsTarget?.caller_verification_enabled}
+              disabled={savingSettings}
+              unavailableReason={verifyStatus && !verifyStatus.available ? verifyStatus.reason : null}
+            />
+            {settingsTarget?.caller_verification_enabled && (
+              <CallerVerificationLog phoneNumberId={settingsTarget.id} />
+            )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>
-            <Button onClick={saveSettings}>Save</Button>
+            <Button variant="outline" onClick={() => setSettingsTarget(null)} disabled={savingSettings}>Cancel</Button>
+            <Button onClick={saveSettings} disabled={savingSettings}>
+              {savingSettings && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

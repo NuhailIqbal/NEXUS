@@ -1,9 +1,10 @@
 /**
  * AI Receptionist page (route /dashboard/telephony/inbound). Lists inbound queues
  * ("receptionists"), each pairing an AI agent with a phone number, and shows summary
- * stats from recent inbound calls. Uses api.getInboundQueues/createInboundQueue/
- * updateInboundQueue/deleteInboundQueue, getAgents, getPhoneNumbers, getConversations
- * and confirmPhonePurchase (Stripe checkout return).
+ * stats from recent inbound calls. Each card can switch caller verification (only mobile
+ * numbers reach the agent) on or off for its number. Uses api.getInboundQueues/createInboundQueue/
+ * updateInboundQueue/deleteInboundQueue, getAgents, getPhoneNumbers, updatePhoneNumber,
+ * getCallerVerificationStatus, getConversations and confirmPhonePurchase (Stripe checkout return).
  */
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
@@ -23,11 +24,16 @@ import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { CallerVerificationSwitch } from "@/components/telephony/CallerVerificationSwitch";
+import { isCallerVerificationStatus, type CallerVerificationStatus } from "@/lib/callerVerification";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
 type Agent = { id: string; name: string; voice?: string; status: string; vapi_assistant_id?: string };
-type PhoneNumber = { id: string; number: string; status: string; agent_id?: string; vapi_phone_id?: string };
+type PhoneNumber = {
+  id: string; number: string; status: string; agent_id?: string; vapi_phone_id?: string;
+  caller_verification_enabled?: boolean;
+};
 type Receptionist = {
   id: string;
   name: string;
@@ -81,6 +87,10 @@ const Inbound = () => {
   const [phones, setPhones] = useState<PhoneNumber[]>([]);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
   const [loading, setLoading] = useState(true);
+  // Whether the server can run caller verification at all (null until loaded), and the number
+  // whose switch is mid-save (its switch is locked so a second click can't overlap the first).
+  const [verifyStatus, setVerifyStatus] = useState<CallerVerificationStatus | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState({ name: "", agent_id: "", phone_number_id: "" });
@@ -95,19 +105,25 @@ const Inbound = () => {
   const agentsMap = new Map(agents.map((a) => [a.id, a]));
   const phonesMap = new Map(phones.map((p) => [p.id, p]));
 
-  // Reloads all four data sets in parallel; each state is only replaced when the
-  // response is an array, so a failed request keeps the previous data.
+  // Reloads all data sets in parallel; each state is only replaced when the
+  // response is valid, so a failed request keeps the previous data. Only the latest reload is
+  // applied: an older one finishing last (e.g. after two quick toggles) would show stale values.
+  const fetchSeq = useRef(0);
   const fetchAll = useCallback(async () => {
-    const [qRes, aRes, pRes, cRes] = await Promise.all([
+    const seq = ++fetchSeq.current;
+    const [qRes, aRes, pRes, cRes, vRes] = await Promise.all([
       api.getInboundQueues(),
       api.getAgents(),
       api.getPhoneNumbers(),
       api.getConversations("direction=inbound&limit=50"),
+      api.getCallerVerificationStatus(),
     ]);
+    if (seq !== fetchSeq.current) return;
     if (Array.isArray(qRes.data)) setReceptionists(qRes.data);
     if (Array.isArray(aRes.data)) setAgents(aRes.data);
     if (Array.isArray(pRes.data)) setPhones(pRes.data);
     if (Array.isArray(cRes.data)) setCallLogs(cRes.data);
+    if (isCallerVerificationStatus(vRes.data)) setVerifyStatus(vRes.data);
     setLoading(false);
   }, []);
 
@@ -207,6 +223,28 @@ const Inbound = () => {
     if (error) return toast.error(error);
     toast.success("Receptionist updated");
     setSettingsTarget(null);
+    fetchAll();
+  };
+
+  /**
+   * Turns caller verification on or off for a receptionist's number (PATCH the number itself, the
+   * same field the Phone Numbers page edits). While the request runs the switch shows the pending
+   * value (locked); if the server refuses, it snaps back and the reason is shown, so what stays on
+   * screen is always what is really in effect.
+   */
+  const toggleVerification = async (phone: PhoneNumber, enabled: boolean) => {
+    if (togglingId) return;
+    setTogglingId(phone.id);
+    const { error } = await api.updatePhoneNumber(phone.id, { caller_verification_enabled: enabled });
+    if (error) {
+      setTogglingId(null);
+      return toast.error(error);
+    }
+    // The server accepted it: record the new value locally BEFORE releasing the lock. Otherwise the
+    // switch would fall back to the old value until the reload below lands (and stay wrong if it fails).
+    setPhones((list) => list.map((p) => (p.id === phone.id ? { ...p, caller_verification_enabled: enabled } : p)));
+    setTogglingId(null);
+    toast.success(enabled ? "Caller verification turned on" : "Caller verification turned off");
     fetchAll();
   };
 
@@ -313,6 +351,19 @@ const Inbound = () => {
                 ) : (
                   <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                     No phone number linked yet
+                  </div>
+                )}
+
+                {/* Caller verification belongs to the number, so it only appears once one is linked. */}
+                {phone && (
+                  <div className="mt-3">
+                    <CallerVerificationSwitch
+                      id={`verify-${r.id}`}
+                      checked={togglingId === phone.id ? !phone.caller_verification_enabled : !!phone.caller_verification_enabled}
+                      onCheckedChange={(v) => toggleVerification(phone, v)}
+                      disabled={togglingId !== null}
+                      unavailableReason={verifyStatus && !verifyStatus.available ? verifyStatus.reason : null}
+                    />
                   </div>
                 )}
 

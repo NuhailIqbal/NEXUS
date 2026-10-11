@@ -693,6 +693,30 @@ def _ensure_columns(conn) -> None:
         # Admin toggle: whether a BYOT call's charge leaves out the estimated Twilio carrier leg,
         # since those users already pay Twilio directly for it. On by default.
         'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS byot_exclude_twilio_leg boolean DEFAULT true',
+        # Inbound caller verification (per number, off by default): when on, VAPI has no fixed
+        # assistant on the number and asks this server per call, which looks the caller up and
+        # refuses numbers that are not mobile lines (services/caller_verification.py).
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS caller_verification_enabled boolean DEFAULT false NOT NULL',
+        # One row per verified inbound call: what we decided and why, so a refused caller can be
+        # explained. phone_number_id goes NULL if the number is later released; rows are removed
+        # with the account.
+        '''CREATE TABLE IF NOT EXISTS public.inbound_call_screenings (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            phone_number_id uuid REFERENCES public.phone_numbers(id) ON DELETE SET NULL,
+            vapi_call_id text,
+            caller_number text,
+            decision text NOT NULL,
+            reason text NOT NULL,
+            line_type text,
+            detail text,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        'CREATE INDEX IF NOT EXISTS inbound_call_screenings_user_created_idx ON public.inbound_call_screenings (user_id, created_at DESC)',
+        # The agent that answered an "answered" call: this row is how such a call is attributed
+        # (logged and billed) when VAPI reports it with no assistant id. Looked up by call id.
+        'ALTER TABLE public.inbound_call_screenings ADD COLUMN IF NOT EXISTS agent_id uuid',
+        'CREATE INDEX IF NOT EXISTS inbound_call_screenings_call_idx ON public.inbound_call_screenings (vapi_call_id)',
     ]
     for stmt in statements:
         try:

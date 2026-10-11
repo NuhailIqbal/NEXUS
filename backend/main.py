@@ -106,6 +106,26 @@ async def _start_callback_scheduler() -> None:
         asyncio.create_task(callback_loop())
 
 
+@app.on_event("startup")
+async def _reconcile_caller_verification() -> None:
+    """Re-point numbers that have caller verification on at this server's CURRENT address and
+    secret. VAPI keeps the URL and secret it was given when verification was switched on, so a
+    changed PUBLIC_API_URL / VAPI_WEBHOOK_SECRET (which only takes effect on a restart) would
+    otherwise leave those numbers sending every call somewhere that no longer works. Runs in
+    the background and does nothing when there are no verified numbers."""
+    import asyncio
+    import logging
+    from services.caller_verification import reconcile_verified_routing
+
+    async def run() -> None:
+        try:
+            await reconcile_verified_routing()
+        except Exception:  # noqa: BLE001 — never let a background task die unnoticed
+            logging.getLogger("uvicorn.error").exception("Caller verification re-sync failed")
+
+    asyncio.create_task(run())
+
+
 # Turn slowapi's RateLimitExceeded into a 429 JSON response with rate-limit headers.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

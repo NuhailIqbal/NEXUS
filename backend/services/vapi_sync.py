@@ -16,7 +16,8 @@ from config import settings
 from database import supabase
 from services import vapi_client
 from services.automation_engine import run_post_call_automations
-from routers.webhooks import import_vapi_call
+from routers.webhooks import import_vapi_call, is_routing_refusal
+from services.caller_verification import answered_calls
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,25 @@ async def run_global_sync() -> dict:
         return {"scanned": 0, "imported": 0, "updated": 0}
 
     assistant_map = await asyncio.to_thread(_assistant_user_map)
+    # Calls that name no assistant at all: VAPI can leave that empty when our server chose the
+    # assistant per call (caller verification). Those are attributed by what we decided then.
+    ours = await asyncio.to_thread(answered_calls, [c.get("id") for c in calls if not c.get("assistantId")])
 
-    # Keep only ended calls that belong to one of our agents.
-    candidates = [
-        c for c in calls
-        if c.get("assistantId") in assistant_map and c.get("id") and _is_ended(c)
-    ]
+    def owner_of(c: dict) -> tuple[str | None, str | None]:
+        """(user_id, agent_id to link) for a call, or (None, None) when it is not ours."""
+        user_id = assistant_map.get(c.get("assistantId"))
+        if user_id:
+            return user_id, None
+        # Only a call that names no assistant and that this server answered with a number's agent;
+        # never a call VAPI ended at the routing step, one served by an assistant that is not ours
+        # (e.g. the shared "unavailable" one), or one we refused.
+        decided = ours.get(c.get("id"))
+        if decided and not c.get("assistantId") and not is_routing_refusal(c.get("endedReason")):
+            return decided["user_id"], decided.get("agent_id")
+        return None, None
+
+    # Keep only ended calls that belong to one of our agents (or that we answered per call).
+    candidates = [c for c in calls if c.get("id") and _is_ended(c) and owner_of(c)[0]]
 
     existing = await asyncio.to_thread(_existing_by_call_id, [c["id"] for c in candidates])
 
@@ -110,9 +124,18 @@ async def run_global_sync() -> dict:
             # Re-fetch each call individually to get its full artifact (messages,
             # recording, transcript), which the list response may not include.
             full = await vapi_client.get_call(c["id"])
-            user_id = assistant_map[c["assistantId"]]
+            user_id, agent_hint = owner_of(c)
+            if user_id is not None and not assistant_map.get(c.get("assistantId")):
+                # Attributed by our decision: the full record may show what the list entry did not.
+                if is_routing_refusal(full.get("endedReason")):
+                    continue
+                if full.get("assistantId"):
+                    # It names an assistant after all: ours -> attribute to it; not ours -> leave it.
+                    user_id, agent_hint = assistant_map.get(full["assistantId"]), None
+                    if user_id is None:
+                        continue
             # import_vapi_call is synchronous (DB writes + billing), so run it off the event loop.
-            res = await asyncio.to_thread(import_vapi_call, full, user_id)
+            res = await asyncio.to_thread(import_vapi_call, full, user_id, agent_hint)
             if res == "imported":
                 imported += 1
                 # The real-time call_ended webhook (which normally fires automations)

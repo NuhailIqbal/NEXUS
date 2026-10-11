@@ -466,15 +466,20 @@ class PhoneNumberCreate(BaseModel):
 
 
 class PhoneNumberUpdate(BaseModel):
-    """Body for PATCH /telephony/phone-numbers/{id}: assign or clear the answering agent, or change status.
+    """Body for PATCH /telephony/phone-numbers/{id}: assign or clear the answering agent, change
+    status, or turn inbound caller verification on or off.
 
     The router also points the number's VAPI assistant at the new agent when VAPI is configured
-    and the number already has a VAPI id.
+    and the number already has a VAPI id. Turning verification on takes the fixed assistant off
+    the number so VAPI asks this server on every call; turning it off puts the agent back.
     """
     # An explicit null or empty value unassigns the agent: the router checks model_fields_set,
     # because exclude_none would otherwise silently drop it.
     agent_id: Optional[str] = None
     status: Optional[str] = None
+    # Omitted = leave as is. False is a real value (not dropped like None), so it turns the
+    # check off.
+    caller_verification_enabled: Optional[bool] = None
 
 
 # ── BYOT (Bring Your Own Twilio) ──

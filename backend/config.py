@@ -96,6 +96,28 @@ class Settings(BaseSettings):
     # How often due callbacks are checked (only accounts that turned on auto-calling are acted on). 0 disables.
     callback_sweep_interval_seconds: int = 60
 
+    # Inbound caller verification: before a number's agent picks up, the caller's number is
+    # looked up with this provider and the call is refused when it is not a real number.
+    # `code` and `api key` are the platform's own credentials for the lookup endpoint; the
+    # feature stays unavailable (and its toggle cannot be turned on) until both are set.
+    caller_lookup_url: str = "https://hooks.whitelistdata.com/api/LineTypeLookup"
+    caller_lookup_code: str = ""
+    caller_lookup_api_key: str = ""
+    # VAPI gives the server only ~7.5 s end-to-end to answer an inbound call's routing
+    # request, so one lookup may use at most this long (a slow lookup lets the call through).
+    # The provider answers in 1.4-3.2 s (measured), so 5 s leaves headroom without risking
+    # VAPI's own deadline.
+    caller_lookup_timeout_seconds: float = 5.0
+    # Switching a number's caller verification ON first checks that a request to PUBLIC_API_URL
+    # really reaches this server (otherwise every call on that number would be dropped). Set this
+    # only where the backend cannot reach its own public address (some NAT setups).
+    caller_verification_skip_reachability_check: bool = False
+
+    @property
+    def caller_lookup_configured(self) -> bool:
+        """True when both lookup credentials are set (caller verification is unavailable otherwise)."""
+        return bool(self.caller_lookup_code and self.caller_lookup_api_key)
+
     # Gemini
     gemini_api_key: str = ""
 

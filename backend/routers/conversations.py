@@ -14,7 +14,9 @@ from dependencies import get_current_user
 from database import supabase
 from typing import Optional
 from services import vapi_client
-from routers.webhooks import import_vapi_call
+from routers.webhooks import import_vapi_call, is_routing_refusal
+from services.caller_verification import answered_calls
+from services.vapi_sync import _is_ended
 from routers.team import resolve_owner_id
 from services.call_events import get_hits
 
@@ -171,7 +173,13 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
         or []
     )
     assistant_ids = {a["vapi_assistant_id"] for a in agents if a.get("vapi_assistant_id")}
-    if not assistant_ids:
+    # Calls answered by this server after caller verification can name no assistant at all (the
+    # assistant is chosen per call); those are matched by what we decided then (see below).
+    answered_any = (
+        supabase.table("inbound_call_screenings").select("id")
+        .eq("user_id", owner_id).eq("decision", "answered").limit(1).execute().data
+    )
+    if not assistant_ids and not answered_any:
         return {"data": {"imported": 0, "updated": 0, "note": "No synced agents found for this account."}, "error": None}
 
     try:
@@ -183,13 +191,36 @@ async def sync_from_vapi(user=Depends(get_current_user), limit: int = Query(100,
 
     # At most 100 of this account's calls are imported per request, whatever `limit`
     # was, which bounds the number of follow-up get_call requests below.
-    mine = [c for c in calls if c.get("assistantId") in assistant_ids][:100]
+    # Ended calls that name no assistant and that this server answered for THIS account with one of
+    # its numbers' agents (never a refused call, one served by an assistant that is not ours, or
+    # one still being screened: those have no "answered" decision, or have not ended).
+    decided = {
+        call_id: d for call_id, d in answered_calls(
+            [c.get("id") for c in calls if not c.get("assistantId") and _is_ended(c)]).items()
+        if d["user_id"] == owner_id
+    }
+
+    def by_decision(c: dict) -> bool:
+        return (not c.get("assistantId") and c.get("id") in decided
+                and not is_routing_refusal(c.get("endedReason")))
+
+    mine = [c for c in calls if c.get("assistantId") in assistant_ids or by_decision(c)][:100]
     imported = updated = failed = 0
     for c in mine:
         try:
             # fetch the full call so the artifact (messages/recording/transcript) is present
             full = await vapi_client.get_call(c["id"])
-            res = import_vapi_call(full, owner_id)
+            agent_hint = None
+            if c.get("assistantId") not in assistant_ids:
+                # Matched by our decision: the full record may show what the list entry did not.
+                if is_routing_refusal(full.get("endedReason")):
+                    continue
+                if full.get("assistantId"):
+                    if full["assistantId"] not in assistant_ids:
+                        continue  # an assistant that is not this account's
+                else:
+                    agent_hint = decided[c["id"]].get("agent_id")
+            res = import_vapi_call(full, owner_id, agent_hint)
             if res == "imported":
                 imported += 1
             elif res == "updated":

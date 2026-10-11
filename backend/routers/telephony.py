@@ -11,6 +11,7 @@ Also exports sync_inbound_routing_for_balance, called from routers/billing.py.
 """
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 import stripe
 from pydantic import BaseModel
@@ -24,7 +25,7 @@ from models.schemas import (
     OutboundCallCreate,
     TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service
+from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service, caller_verification
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -112,7 +113,7 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
         return
     numbers = (
         supabase.table("phone_numbers")
-        .select("id, vapi_phone_id, agent_id, suspended_for_balance")
+        .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
         .eq("user_id", user_id)
         .execute().data or []
     )
@@ -125,39 +126,59 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
 
     # suspended_for_balance marks numbers this routine repointed, so that a restore
     # only touches those and a repeated suspend is a no-op.
-    for n in numbers:
-        vapi_phone_id = n.get("vapi_phone_id")
-        if not vapi_phone_id:
-            continue  # not yet synced to VAPI — nothing to repoint
+    for listed in numbers:
+        # Each number is handled under its routing lock and re-read inside it: the list above can
+        # be seconds old (the fallback assistant may just have been created, and every push below
+        # is a round trip), and a toggle or settings save running at the same moment must not
+        # interleave with this and leave VAPI and the database disagreeing.
+        async with caller_verification.routing_lock(listed["id"]):
+            n = (
+                supabase.table("phone_numbers")
+                .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
+                .eq("id", listed["id"]).maybe_single().execute().data
+            )
+            if not n:
+                continue  # released meanwhile
+            vapi_phone_id = n.get("vapi_phone_id")
+            if not vapi_phone_id:
+                continue  # not yet synced to VAPI — nothing to repoint
 
-        if block:
-            # Already suspended, or no fallback assistant available (VAPI not configured
-            # or its creation failed) — nothing to repoint to.
-            if n.get("suspended_for_balance") or not fallback_id:
+            if n.get("caller_verification_enabled"):
+                # A verified number has no assistant in VAPI to swap: our server picks one per call
+                # and serves the fallback assistant while this flag is set (see
+                # services/caller_verification.py). Only the flag needs to follow the balance.
+                if bool(n.get("suspended_for_balance")) != block:
+                    supabase.table("phone_numbers").update({"suspended_for_balance": block}).eq("id", n["id"]).execute()
                 continue
-            try:
-                await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": fallback_id})
-                supabase.table("phone_numbers").update({"suspended_for_balance": True}).eq("id", n["id"]).execute()
-            except Exception:
-                logger.exception("Failed to suspend inbound routing for phone number %s", n["id"])
-        else:
-            if not n.get("suspended_for_balance"):
-                continue
-            agent_id = n.get("agent_id")
-            real_assistant_id = None
-            if agent_id:
-                agent = (
-                    supabase.table("ai_agents").select("vapi_assistant_id")
-                    .eq("id", agent_id).maybe_single().execute().data
-                )
-                real_assistant_id = agent.get("vapi_assistant_id") if agent else None
-            if not real_assistant_id:
-                continue  # no (synced) agent to restore to — leave suspended for now
-            try:
-                await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": real_assistant_id})
-                supabase.table("phone_numbers").update({"suspended_for_balance": False}).eq("id", n["id"]).execute()
-            except Exception:
-                logger.exception("Failed to restore inbound routing for phone number %s", n["id"])
+
+            if block:
+                # Already suspended, or no fallback assistant available (VAPI not configured
+                # or its creation failed) — nothing to repoint to.
+                if n.get("suspended_for_balance") or not fallback_id:
+                    continue
+                try:
+                    await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": fallback_id})
+                    supabase.table("phone_numbers").update({"suspended_for_balance": True}).eq("id", n["id"]).execute()
+                except Exception:
+                    logger.exception("Failed to suspend inbound routing for phone number %s", n["id"])
+            else:
+                if not n.get("suspended_for_balance"):
+                    continue
+                agent_id = n.get("agent_id")
+                real_assistant_id = None
+                if agent_id:
+                    agent = (
+                        supabase.table("ai_agents").select("vapi_assistant_id")
+                        .eq("id", agent_id).maybe_single().execute().data
+                    )
+                    real_assistant_id = agent.get("vapi_assistant_id") if agent else None
+                if not real_assistant_id:
+                    continue  # no (synced) agent to restore to — leave suspended for now
+                try:
+                    await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": real_assistant_id})
+                    supabase.table("phone_numbers").update({"suspended_for_balance": False}).eq("id", n["id"]).execute()
+                except Exception:
+                    logger.exception("Failed to restore inbound routing for phone number %s", n["id"])
 
 
 # ── Phone Numbers ──
@@ -619,10 +640,25 @@ async def create_byot_phone_number(body: PhoneNumberByotCreate, user=Depends(get
 
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
-    """Update a phone number's agent assignment and/or status. When the agent changes
-    (including unassigning it), the number's VAPI routing is updated first, so inbound
-    calls reach the new agent; a VAPI failure aborts the update with a 502."""
+    """Update a phone number's agent assignment, status and/or inbound caller verification.
+
+    When the agent changes (including unassigning it), the number's VAPI routing is updated
+    first, so inbound calls reach the new agent; a VAPI failure aborts the update with a 502.
+
+    caller_verification_enabled=true takes the fixed assistant off the number so VAPI asks this
+    server on every call (503 if the server is not set up for it, 400 if the number was never
+    connected to VAPI, 404 if it is not this account's); false puts the agent back (or the
+    shared "unavailable" assistant while the account's balance suspends the number). While
+    verification is on, agent changes are database-only: the agent is looked up per call, and
+    while the balance suspends a number they are too (the restore installs the current agent).
+    The whole read-decide-write runs under the number's routing lock (see
+    caller_verification.routing_lock), so a balance sync cannot interleave with it.
+    """
     owner_id = resolve_owner_id(user["user_id"])
+    try:
+        uuid.UUID(number_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Phone number not found")
     # model_fields_set tells an explicit agent_id of null (unassign) apart from the
     # field being omitted; exclude_none below cannot.
     agent_cleared = "agent_id" in body.model_fields_set and not body.agent_id
@@ -636,41 +672,94 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
     if not updates:
         return {"data": None, "error": "No fields to update"}
 
-    # Mirror the agent change onto the VAPI phone number (only if it was ever synced to
-    # VAPI). An agent without a vapi_assistant_id leaves the payload empty: there is no
-    # assistantId to push.
-    if "agent_id" in updates and settings.vapi_api_key:
+    async with caller_verification.routing_lock(number_id):
+        return await _apply_phone_number_update(number_id, owner_id, updates)
+
+
+async def _apply_phone_number_update(number_id: str, owner_id: str, updates: dict) -> dict:
+    """The body of update_phone_number, run under the number's routing lock."""
+    toggling = "caller_verification_enabled" in updates
+    existing = None
+    if toggling or ("agent_id" in updates and settings.vapi_api_key):
         existing = (
             supabase.table("phone_numbers")
-            .select("vapi_phone_id")
+            .select("vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
             .eq("id", number_id)
             .eq("user_id", owner_id)
             .maybe_single()
             .execute()
-        )
-        vapi_phone_id = existing.data.get("vapi_phone_id") if existing.data else None
-        if vapi_phone_id:
-            vapi_update: dict = {}
-            if updates["agent_id"]:
-                agent = (
-                    supabase.table("ai_agents")
-                    .select("vapi_assistant_id")
-                    .eq("id", updates["agent_id"])
-                    .eq("user_id", owner_id)
-                    .maybe_single()
-                    .execute()
-                )
-                if agent.data and agent.data.get("vapi_assistant_id"):
-                    vapi_update["assistantId"] = agent.data["vapi_assistant_id"]
+        ).data
+    if toggling and not existing:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    # Only numbers that were ever synced to VAPI have anything to re-route there.
+    vapi_phone_id = existing.get("vapi_phone_id") if existing else None
+    # Whether verification is on once this request is applied.
+    verify_after = (
+        bool(updates["caller_verification_enabled"]) if toggling
+        else bool(existing and existing.get("caller_verification_enabled"))
+    )
+
+    # What VAPI must be told so the number's routing matches its new state (None = nothing).
+    vapi_update: dict | None = None
+    if toggling and verify_after:
+        available, reason = caller_verification.availability()
+        if not available:
+            # The customer only sees a generic reason; the operator needs to know which setting.
+            logger.warning("Caller verification cannot be switched on for number %s: missing %s",
+                           number_id, ", ".join(caller_verification.missing_settings()))
+            raise HTTPException(status_code=503, detail=reason)
+        if not vapi_phone_id:
+            raise HTTPException(status_code=400, detail="This number isn't connected to the voice service yet.")
+        # Never point a line at a server the voice service cannot reach: it would hang up every
+        # call on the number. (The reason is already in the server log.)
+        reachable, _why = await caller_verification.check_reachable()
+        if not reachable:
+            raise HTTPException(status_code=503, detail=caller_verification.UNAVAILABLE_REASON)
+        if not settings.vapi_webhook_secret:
+            logger.warning(
+                "Caller verification switched on for number %s with no VAPI_WEBHOOK_SECRET set: the routing "
+                "endpoint (/webhooks/vapi/inbound) accepts unauthenticated requests. Set the secret.", number_id)
+        vapi_update = caller_verification.verified_routing_payload()
+    elif toggling:
+        # Turning it off: the number goes back to a fixed assistant. A number the balance has
+        # suspended gets the shared fallback assistant, never its real agent.
+        if vapi_phone_id and settings.vapi_api_key:
+            if existing.get("suspended_for_balance"):
+                assistant_id = await _get_or_create_fallback_assistant_id()
+                if not assistant_id:
+                    raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
             else:
-                # Unassigned: clear the assistant on VAPI so the number stops answering
-                # with the old agent.
-                vapi_update["assistantId"] = None
-            try:
-                await vapi_client.update_phone_number(vapi_phone_id, vapi_update)
-            except Exception as e:
-                logger.error("VAPI sync error: %s", e)
-                raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+                new_agent = updates["agent_id"] if "agent_id" in updates else existing.get("agent_id")
+                assistant_id = await _resolve_assistant_id(owner_id, new_agent)
+            vapi_update = {"assistantId": assistant_id}
+    elif "agent_id" in updates and vapi_phone_id and not verify_after and not existing.get("suspended_for_balance"):
+        # Mirror the agent change onto the VAPI phone number. An agent without a
+        # vapi_assistant_id leaves the payload empty: there is no assistantId to push.
+        # (A balance-suspended number keeps the shared fallback assistant: only the database
+        # changes, and the restore installs whatever agent is assigned then.)
+        vapi_update = {}
+        if updates["agent_id"]:
+            agent = (
+                supabase.table("ai_agents")
+                .select("vapi_assistant_id")
+                .eq("id", updates["agent_id"])
+                .eq("user_id", owner_id)
+                .maybe_single()
+                .execute()
+            )
+            if agent.data and agent.data.get("vapi_assistant_id"):
+                vapi_update["assistantId"] = agent.data["vapi_assistant_id"]
+        else:
+            # Unassigned: clear the assistant on VAPI so the number stops answering
+            # with the old agent.
+            vapi_update["assistantId"] = None
+
+    if vapi_update is not None:
+        try:
+            await vapi_client.update_phone_number(vapi_phone_id, vapi_update)
+        except Exception as e:
+            logger.error("VAPI sync error: %s", e)
+            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
     result = (
         supabase.table("phone_numbers")
@@ -734,6 +823,33 @@ async def release_phone_number(number_id: str, user=Depends(get_current_user)):
                 logger.exception("Failed to release Twilio number %s (sid=%s) on delete", number_id, sid)
     supabase.table("phone_numbers").delete().eq("id", number_id).eq("user_id", owner_id).execute()
     return {"data": None, "error": None}
+
+
+# ── Inbound caller verification ──
+
+@router.get("/caller-verification/status")
+async def caller_verification_status(user=Depends(get_current_user)):
+    """Whether this server can run inbound caller verification at all. When `available` is
+    false the toggle cannot be turned on and `reason` says so in customer-safe words."""
+    available, reason = caller_verification.availability()
+    return {"data": {"available": available, "reason": reason}, "error": None}
+
+
+@router.get("/caller-verification/log")
+async def caller_verification_log(phone_number_id: str | None = None, limit: int = 50, user=Depends(get_current_user)):
+    """Recent caller-verification results for the account, newest first: one row per call on a
+    verified number, with the caller, the decision (answered/refused) and the reason. Optionally
+    narrowed to one number; `limit` is capped at 200."""
+    owner_id = resolve_owner_id(user["user_id"])
+    query = supabase.table("inbound_call_screenings").select("*").eq("user_id", owner_id)
+    if phone_number_id:
+        try:
+            uuid.UUID(phone_number_id)
+        except ValueError:
+            return {"data": [], "error": None}  # not an id: matches nothing (a uuid column would error)
+        query = query.eq("phone_number_id", phone_number_id)
+    rows = query.order("created_at", desc=True).limit(max(1, min(limit, 200))).execute().data or []
+    return {"data": rows, "error": None}
 
 
 # ── Outbound Call (single) ──
@@ -1187,22 +1303,32 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
     phone_number_id = body.phone_number_id
 
     if phone_number_id:
-        phone = (
-            supabase.table("phone_numbers")
-            .select("vapi_phone_id")
-            .eq("id", phone_number_id)
-            .eq("user_id", owner_id)
-            .maybe_single()
-            .execute()
-        )
-        if not phone.data or not phone.data.get("vapi_phone_id"):
-            raise HTTPException(status_code=400, detail="Phone number not found or not provisioned")
         try:
-            await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
-        except Exception as e:
-            logger.error("VAPI error assigning agent: %s", e)
-            raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
-        supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
+            uuid.UUID(str(phone_number_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Phone number not found or not provisioned")
+        async with caller_verification.routing_lock(phone_number_id):
+            phone = (
+                supabase.table("phone_numbers")
+                .select("vapi_phone_id, caller_verification_enabled, suspended_for_balance")
+                .eq("id", phone_number_id)
+                .eq("user_id", owner_id)
+                .maybe_single()
+                .execute()
+            )
+            if not phone.data or not phone.data.get("vapi_phone_id"):
+                raise HTTPException(status_code=400, detail="Phone number not found or not provisioned")
+            # A number with caller verification on has no fixed assistant in VAPI (our server picks
+            # the agent per call from phone_numbers.agent_id), and a balance-suspended number keeps
+            # the shared fallback assistant until the restore installs this agent: in both cases
+            # only the local row is updated.
+            if not phone.data.get("caller_verification_enabled") and not phone.data.get("suspended_for_balance"):
+                try:
+                    await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
+                except Exception as e:
+                    logger.error("VAPI error assigning agent: %s", e)
+                    raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+            supabase.table("phone_numbers").update({"agent_id": body.agent_id}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
     else:
         # A brand-new receptionist number is always a paid Twilio number — matches the
         # platform's outbound convention (Twilio, never a free VAPI-native number).
@@ -1278,19 +1404,25 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
         agent_id = updates.get("agent_id") or (existing.data.get("agent_id") if existing.data else None)
         pn_id = updates.get("phone_number_id") or (existing.data.get("phone_number_id") if existing.data else None)
         if agent_id and pn_id:
-            phone = supabase.table("phone_numbers").select("vapi_phone_id").eq("id", pn_id).eq("user_id", owner_id).maybe_single().execute()
-            agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", owner_id).maybe_single().execute()
-            vapi_phone_id = phone.data.get("vapi_phone_id") if phone.data else None
-            vapi_assistant_id = agent.data.get("vapi_assistant_id") if agent.data else None
-            if vapi_phone_id and vapi_assistant_id:
-                try:
-                    await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": vapi_assistant_id})
-                except Exception as e:
-                    logger.error("VAPI sync error: %s", e)
-                    raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
-            # The local phone_numbers.agent_id is updated even when the VAPI push above
-            # was skipped (number or agent not yet synced to VAPI).
-            supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", owner_id).execute()
+            async with caller_verification.routing_lock(pn_id):
+                phone = supabase.table("phone_numbers").select("vapi_phone_id, caller_verification_enabled, suspended_for_balance").eq("id", pn_id).eq("user_id", owner_id).maybe_single().execute()
+                agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", owner_id).maybe_single().execute()
+                vapi_phone_id = phone.data.get("vapi_phone_id") if phone.data else None
+                vapi_assistant_id = agent.data.get("vapi_assistant_id") if agent.data else None
+                # With caller verification on there is no fixed assistant to push: the agent is
+                # looked up per call from phone_numbers.agent_id, updated just below. A
+                # balance-suspended number keeps the fallback assistant until the restore.
+                verified = bool(phone.data and phone.data.get("caller_verification_enabled"))
+                suspended = bool(phone.data and phone.data.get("suspended_for_balance"))
+                if vapi_phone_id and vapi_assistant_id and not verified and not suspended:
+                    try:
+                        await vapi_client.update_phone_number(vapi_phone_id, {"assistantId": vapi_assistant_id})
+                    except Exception as e:
+                        logger.error("VAPI sync error: %s", e)
+                        raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
+                # The local phone_numbers.agent_id is updated even when the VAPI push above
+                # was skipped (number or agent not yet synced to VAPI).
+                supabase.table("phone_numbers").update({"agent_id": agent_id}).eq("id", pn_id).eq("user_id", owner_id).execute()
 
     result = (
         supabase.table("inbound_queues")
@@ -1321,19 +1453,24 @@ async def delete_inbound_queue(queue_id: str, user=Depends(get_current_user)):
     supabase.table("inbound_queues").delete().eq("id", queue_id).eq("user_id", owner_id).execute()
 
     if phone_number_id:
-        phone = (
-            supabase.table("phone_numbers")
-            .select("vapi_phone_id")
-            .eq("id", phone_number_id)
-            .eq("user_id", owner_id)
-            .maybe_single()
-            .execute()
-        )
-        if phone.data and phone.data.get("vapi_phone_id") and settings.vapi_api_key:
-            try:
-                await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": None})
-            except Exception:
-                logger.exception("Failed to clear VAPI assistant for phone number %s on receptionist delete", phone_number_id)
-        supabase.table("phone_numbers").update({"agent_id": None}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
+        async with caller_verification.routing_lock(phone_number_id):
+            phone = (
+                supabase.table("phone_numbers")
+                .select("vapi_phone_id, caller_verification_enabled, suspended_for_balance")
+                .eq("id", phone_number_id)
+                .eq("user_id", owner_id)
+                .maybe_single()
+                .execute()
+            )
+            # A verified number has no assistant in VAPI to clear, and a balance-suspended one keeps
+            # the fallback assistant (so callers still hear why); dropping agent_id below is enough.
+            if (phone.data and phone.data.get("vapi_phone_id") and settings.vapi_api_key
+                    and not phone.data.get("caller_verification_enabled")
+                    and not phone.data.get("suspended_for_balance")):
+                try:
+                    await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": None})
+                except Exception:
+                    logger.exception("Failed to clear VAPI assistant for phone number %s on receptionist delete", phone_number_id)
+            supabase.table("phone_numbers").update({"agent_id": None}).eq("id", phone_number_id).eq("user_id", owner_id).execute()
 
     return {"data": None, "error": None}

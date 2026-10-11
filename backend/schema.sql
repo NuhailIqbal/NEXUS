@@ -645,7 +645,10 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     stripe_session_id text,
     suspended_for_balance boolean DEFAULT false,
     next_billing_at timestamp with time zone,
-    twilio_credential_id uuid
+    twilio_credential_id uuid,
+    -- Inbound caller verification (off by default): VAPI asks this server per call and calls
+    -- from numbers that are not mobile lines are refused (services/caller_verification.py).
+    caller_verification_enabled boolean DEFAULT false NOT NULL
 );
 
 

@@ -251,6 +251,9 @@ export const api = {
   confirmPhonePurchase: (session_id: string) => post("/telephony/phone-numbers/confirm", { session_id }),
   updatePhoneNumber: (id: string, data: any) => patch(`/telephony/phone-numbers/${id}`, data),
   deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
+  // Inbound caller verification: whether the server can run it, and recent results (query: phone_number_id, limit).
+  getCallerVerificationStatus: () => get("/telephony/caller-verification/status"),
+  getCallerVerificationLog: (query = "") => get(`/telephony/caller-verification/log${query ? `?${query}` : ""}`),
 
   // Telephony - BYOT (Bring Your Own Twilio)
   getTwilioCredentials: () => get("/telephony/twilio-credentials"),

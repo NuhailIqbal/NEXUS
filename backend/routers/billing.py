@@ -207,16 +207,34 @@ def _notify_low_balance(user_id, old_balance, new_balance):
         _insert_notification(user_id, kind, title, body)
 
 
+# The application's event loop, remembered whenever billing work runs on it. A balance change
+# made from a worker thread (the auto-recharge runs the blocking Stripe charge in the thread
+# pool, and its credit is what restores suspended numbers) has no loop of its own, so its
+# routing sync is handed to this one instead of being silently dropped.
+_app_loop = None
+
+
 def _sync_inbound_routing(user_id: str, block: bool) -> None:
     """Fire-and-forget: suspend/restore this user's inbound numbers to/from the
     fallback assistant as their balance crosses to/from $0. Local import avoids a
     circular import (telephony.py already imports from this module)."""
+    global _app_loop
+    import asyncio
     try:
-        import asyncio
         from routers.telephony import sync_inbound_routing_for_balance
-        asyncio.create_task(sync_inbound_routing_for_balance(user_id, block))
-    except RuntimeError:
-        pass  # no running event loop (e.g. called from a script) — skip, non-critical
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            _app_loop = loop
+            loop.create_task(sync_inbound_routing_for_balance(user_id, block))
+        elif _app_loop is not None and _app_loop.is_running() and not _app_loop.is_closed():
+            # Called from a worker thread (e.g. the auto-recharge): run it on the app's loop.
+            asyncio.run_coroutine_threadsafe(sync_inbound_routing_for_balance(user_id, block), _app_loop)
+        else:
+            # No loop at all (a script): skip, non-critical.
+            logger.debug("Inbound routing sync for user %s skipped: no event loop to run it on", user_id)
     except Exception:
         logger.exception("Failed to schedule inbound routing sync for user %s", user_id)
 
@@ -346,7 +364,10 @@ def _maybe_auto_recharge(user_id: str, billing: dict, new_balance: float) -> Non
     # returned future is deliberately not awaited (fire-and-forget).
     try:
         import asyncio
-        asyncio.get_running_loop().run_in_executor(None, _run_auto_recharge, user_id)
+        global _app_loop
+        loop = asyncio.get_running_loop()
+        _app_loop = loop  # the recharge's credit (in the worker thread) schedules its restore here
+        loop.run_in_executor(None, _run_auto_recharge, user_id)
     except RuntimeError:
         _run_auto_recharge(user_id)  # no event loop (script/CLI) — just run it inline
     except Exception:
