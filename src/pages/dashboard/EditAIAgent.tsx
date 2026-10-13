@@ -2,7 +2,7 @@
  * "Edit AI Agent" modal (default export EditAgentModal), opened for one agent from the AI Agents
  * list (AIAgents.tsx). Loads the agent (GET /agents/{id}) and its call events
  * (GET /agents/{id}/events) into the same step components the create wizard uses, then saves with
- * api.updateAgent (PATCH /agents/{id}) plus api.uploadAgentKnowledge for any newly added files.
+ * api.updateAgent (PATCH /agents/{id}).
  */
 import { useEffect, useState } from "react";
 import { Check, Loader2, ArrowLeft, ArrowRight, Settings } from "lucide-react";
@@ -55,7 +55,7 @@ const normalizeLanguage = (lang: string | null): string => {
 const EMPTY_FORM: FormState = {
   agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "",
   industry: "", language: "English", voice: "Elliot",
-  knowledgeText: "", knowledgeFiles: [],
+  knowledgeText: "",
   systemPrompt: "", greeting: "",
   callEvents: [],
   toolKeys: [],
@@ -124,7 +124,6 @@ export default function EditAgentModal({
         transferNumber: a.transfer_number ?? "",
         // Existing knowledge is not loaded: these start empty and only hold what the user adds now.
         knowledgeText: "",
-        knowledgeFiles: [],
         systemPrompt: a.system_prompt ?? "",
         greeting: a.first_message ?? "",
         // The form tracks library event ids only, so events without one are left out.
@@ -161,9 +160,9 @@ export default function EditAgentModal({
     }
     // Knowledge is optional when editing — the agent's existing knowledge is already
     // folded into its system prompt from when it was created; this step is only for
-    // adding more, so (unlike Create) it's fine to leave both fields empty.
+    // adding more, so (unlike Create) it's fine to leave it empty.
     if (currentStep.key === "knowledge" && form.knowledgeText.length > KNOWLEDGE_TEXT_LIMIT) {
-      toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters — upload as a file instead`);
+      toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters, please shorten it`);
       return false;
     }
     if (currentStep.key === "prompt") {
@@ -175,9 +174,8 @@ export default function EditAgentModal({
   };
 
   /**
-   * Saves the edit: PATCH /agents/{id} with the whole form, then uploads each newly added
-   * knowledge file to POST /agents/{id}/knowledge. Returns false (after an error toast) only when
-   * the update itself fails; failed file uploads are toasted but do not change the result.
+   * Saves the edit: PATCH /agents/{id} with the whole form. Returns false (after an error
+   * toast) when the update fails.
    */
   const persistToApi = async () => {
     if (!agentId) return false;
@@ -211,20 +209,6 @@ export default function EditAgentModal({
     if (error) {
       toast.error(error);
       return false;
-    }
-
-    if (form.knowledgeFiles.length > 0) {
-      let failed = 0;
-      for (const file of form.knowledgeFiles) {
-        const res = await api.uploadAgentKnowledge(agentId, file);
-        if (res.error) {
-          failed += 1;
-          toast.error(`Failed to upload ${file.name}: ${res.error}`);
-        }
-      }
-      if (failed === 0) {
-        toast.success(`Uploaded ${form.knowledgeFiles.length} knowledge file(s)`);
-      }
     }
 
     return true;

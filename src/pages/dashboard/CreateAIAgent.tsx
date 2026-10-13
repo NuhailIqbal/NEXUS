@@ -1,8 +1,7 @@
 /**
  * "Create AI Agent" wizard page, routed at /dashboard/ai-agents/create (reached from the
  * AI Agents list). Collects setup, knowledge, prompt, call events and an optional test, then
- * saves on the last step: api.createAgent (POST /agents) followed by one
- * api.uploadAgentKnowledge (POST /agents/{id}/knowledge) request per attached file.
+ * saves on the last step with api.createAgent (POST /agents).
  * It also exports the step components, form types and knowledge limits that EditAIAgent.tsx
  * reuses for its prefilled edit wizard.
  */
@@ -10,7 +9,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles, Briefcase,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, Zap, Maximize2,
+  ArrowLeft, ArrowRight, Info, Loader2, Phone, Zap, Maximize2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,7 +23,6 @@ import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuc
 import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
 import { IndustryCombobox } from "@/components/dashboard/IndustryCombobox";
 import { StepCallEvents } from "@/components/agents/StepCallEvents";
-import { AgentToolsPicker } from "@/components/agents/AgentToolsPicker";
 import { toCallEventsPayload } from "@/components/agents/callEventTypes";
 
 /** Identifier of each wizard step; the order is defined by STEPS. */
@@ -36,7 +34,7 @@ export type StepKey = "setup" | "knowledge" | "prompt" | "events" | "testing";
  */
 export const STEPS: { key: StepKey; title: string; description: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "setup", title: "Complete Setup", description: "Basic agent configuration and tools", icon: Bot },
-  { key: "knowledge", title: "Knowledge Center", description: "Upload knowledge sources", icon: BookOpen },
+  { key: "knowledge", title: "Knowledge Center", description: "Add what the agent should know", icon: BookOpen },
   { key: "prompt", title: "Prompt Studio", description: "Craft the agent's instructions", icon: FileText },
   { key: "events", title: "Call Events", description: "Moments the agent reports during calls", icon: Zap },
   { key: "testing", title: "Testing", description: "Test before going live", icon: PlayCircle },
@@ -45,8 +43,8 @@ export const STEPS: { key: StepKey; title: string; description: string; icon: Re
 /**
  * All values the wizard collects, held in one object. The same shape is used by the create
  * page and the edit modal; fields are mapped to API request fields in each page's persistToApi.
- * `knowledgeText` and `knowledgeFiles` are write-only inputs: they are never read back from
- * an existing agent (the edit modal starts them empty).
+ * `knowledgeText` is a write-only input: it is never read back from an existing agent
+ * (the edit modal starts it empty).
  */
 export type FormState = {
   agentName: string;
@@ -58,7 +56,6 @@ export type FormState = {
   transferEnabled: boolean;
   transferNumber: string;
   knowledgeText: string;
-  knowledgeFiles: File[];
   systemPrompt: string;
   greeting: string;
   callEvents: string[]; // ids of call events chosen from the event library
@@ -67,13 +64,10 @@ export type FormState = {
 };
 
 /**
- * Limits for the Knowledge step: maximum pasted-text length (characters), maximum size per
- * uploaded file (MB) and the accepted file extensions. They are enforced in the browser only
- * (StepKnowledge and the validate functions); the backend knowledge endpoints do not re-check them.
+ * Limit for the Knowledge step: maximum pasted-text length (characters). Enforced in the browser
+ * only (StepKnowledge and the validate functions).
  */
 export const KNOWLEDGE_TEXT_LIMIT = 8000;
-export const KNOWLEDGE_FILE_MAX_MB = 10;
-export const KNOWLEDGE_FILE_TYPES = [".pdf", ".txt", ".md", ".doc", ".docx"];
 
 /**
  * Create-agent wizard page. Owns the step index, per-step completion flags and the form state,
@@ -92,7 +86,6 @@ const CreateAIAgent = () => {
   const [form, setForm] = useState<FormState>({
     agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English", voice: "Elliot",
     knowledgeText: "",
-    knowledgeFiles: [],
     systemPrompt: "", greeting: "",
     callEvents: [],
     toolKeys: [],
@@ -126,14 +119,12 @@ const CreateAIAgent = () => {
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
     if (currentStep.key === "knowledge") {
-      const hasText = form.knowledgeText.trim().length > 0;
-      const hasFiles = form.knowledgeFiles.length > 0;
-      if (!hasText && !hasFiles) {
-        toast.error("Add knowledge text or upload at least one file before continuing");
+      if (!form.knowledgeText.trim()) {
+        toast.error("Add some knowledge text before continuing");
         return false;
       }
       if (form.knowledgeText.length > KNOWLEDGE_TEXT_LIMIT) {
-        toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters upload as a file instead`);
+        toast.error(`Knowledge text exceeds ${KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters, please shorten it`);
         return false;
       }
     }
@@ -174,23 +165,6 @@ const CreateAIAgent = () => {
     if (error || !data?.id) {
       toast.error(error || "Failed to create agent");
       return false;
-    }
-
-    // Files can only be uploaded now: the upload endpoint needs the new agent's id. They are
-    // sent one at a time. A failed file does not roll back the agent (it already exists), so
-    // it is only reported through a toast.
-    if (form.knowledgeFiles.length > 0) {
-      let failed = 0;
-      for (const file of form.knowledgeFiles) {
-        const res = await api.uploadAgentKnowledge(data.id, file);
-        if (res.error) {
-          failed += 1;
-          toast.error(`Failed to upload ${file.name}: ${res.error}`);
-        }
-      }
-      if (failed === 0) {
-        toast.success(`Uploaded ${form.knowledgeFiles.length} knowledge file(s)`);
-      }
     }
 
     return true;
@@ -476,13 +450,6 @@ export function StepSetup({
             </Field>
           )}
         </div>
-        <div className="mt-6">
-          <SectionTitle icon={<Zap className="h-4 w-4 text-primary" />}>Agent tools</SectionTitle>
-          <p className="mb-3 mt-1 text-xs text-muted-foreground">
-            What the agent can do during a call, besides talking. Optional.
-          </p>
-          <AgentToolsPicker selectedKeys={form.toolKeys} onChange={(k) => update("toolKeys", k)} />
-        </div>
         {onStatusChange && (
           <Field label="Status" className="mt-4">
             <Select value={statusValue ?? "Active"} onValueChange={onStatusChange}>
@@ -540,45 +507,15 @@ export function StepSetup({
 }
 
 /**
- * Knowledge step: a quick-text box (capped at KNOWLEDGE_TEXT_LIMIT characters) plus a file picker
- * for larger documents. Nothing is sent from here; the text and the File objects are kept in the
- * form and submitted by the page's persistToApi. `compact` hides the intro block (edit modal).
+ * Knowledge step: a quick-text box capped at KNOWLEDGE_TEXT_LIMIT characters. Nothing is sent
+ * from here; the text is kept in the form and submitted by the page's persistToApi.
+ * `compact` hides the intro block (edit modal).
  */
 export function StepKnowledge({
   form, update, compact,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
   const textLen = form.knowledgeText.length;
   const textOver = textLen > KNOWLEDGE_TEXT_LIMIT;
-
-  /**
-   * Adds the chosen files to the form after a client-side check of size and extension. Rejected
-   * files are reported with a toast and skipped; accepted ones are appended to those already added.
-   * The file input clears its own value right after calling this, so choosing the same file again
-   * still triggers onChange.
-   */
-  const handleFiles = (files: FileList | null) => {
-    if (!files) return;
-    const accepted: File[] = [];
-    Array.from(files).forEach((f) => {
-      const sizeMb = f.size / (1024 * 1024);
-      const ext = "." + (f.name.split(".").pop() || "").toLowerCase();
-      if (sizeMb > KNOWLEDGE_FILE_MAX_MB) {
-        toast.error(`${f.name} exceeds ${KNOWLEDGE_FILE_MAX_MB}MB limit`);
-        return;
-      }
-      if (!KNOWLEDGE_FILE_TYPES.includes(ext)) {
-        toast.error(`${f.name}: unsupported file type (${KNOWLEDGE_FILE_TYPES.join(", ")})`);
-        return;
-      }
-      accepted.push(f);
-    });
-    update("knowledgeFiles", [...form.knowledgeFiles, ...accepted]);
-  };
-
-  /** Removes the file at index `i` from the pending upload list. */
-  const removeFile = (i: number) => {
-    update("knowledgeFiles", form.knowledgeFiles.filter((_, idx) => idx !== i));
-  };
 
   return (
     <div className="space-y-6">
@@ -598,19 +535,17 @@ export function StepKnowledge({
         <div className="flex items-start gap-2.5">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <div className="space-y-2 text-sm">
-            <p className="font-semibold text-foreground">When to use what</p>
-            <ul className="space-y-1 text-muted-foreground">
-              <li><span className="font-medium text-foreground">Paste text</span> short FAQs, key policies, scripts (under {KNOWLEDGE_TEXT_LIMIT.toLocaleString()} characters). Goes straight into the agent's instructions, available instantly on every call.</li>
-              <li><span className="font-medium text-foreground">Upload files</span> product catalogs, full manuals, large documents. The agent retrieves relevant sections during the call.</li>
-            </ul>
-            <p className="text-xs text-muted-foreground">You can use one or both. At least one is required.</p>
+            <p className="font-semibold text-foreground">What to include</p>
+            <p className="text-muted-foreground">
+              Add the information your agent should rely on when speaking with customers: FAQs, pricing, policies, service details and call scripts. This content becomes part of the agent's instructions and is applied on every call.
+            </p>
           </div>
         </div>
       </div>
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-          <span className="text-sm font-medium">Quick Text <span className="text-xs font-normal text-muted-foreground">  short content</span></span>
+          <span className="text-sm font-medium">Business Knowledge</span>
           <span className={cn("text-xs", textOver ? "text-destructive font-semibold" : "text-muted-foreground")}>
             {textLen.toLocaleString()} / {KNOWLEDGE_TEXT_LIMIT.toLocaleString()}
           </span>
@@ -627,60 +562,8 @@ export function StepKnowledge({
         />
         {textOver && (
           <p className="text-xs text-destructive">
-            This is too long for quick text. Save it as a .txt or .pdf file and upload it below instead.
+            This is too long. Shorten it to the key points that matter on a call.
           </p>
-        )}
-      </div>
-
-      <div className="space-y-3">
-        <span className="block text-sm font-medium">Knowledge Files <span className="text-xs font-normal text-muted-foreground">  large content</span></span>
-        <label
-          htmlFor="knowledge-file-input"
-          className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-input bg-muted/30 px-4 py-8 text-center transition hover:border-primary/40 hover:bg-muted/50"
-        >
-          <Upload className="h-6 w-6 text-muted-foreground" />
-          <div className="text-sm font-medium">Click to upload or drag files here</div>
-          <div className="text-xs text-muted-foreground">
-            {KNOWLEDGE_FILE_TYPES.join(", ")} up to {KNOWLEDGE_FILE_MAX_MB}MB each
-          </div>
-          <input
-            id="knowledge-file-input"
-            type="file"
-            multiple
-            accept={KNOWLEDGE_FILE_TYPES.join(",")}
-            className="hidden"
-            onChange={(e) => {
-              handleFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-        </label>
-
-        {form.knowledgeFiles.length > 0 && (
-          <ul className="space-y-2">
-            {form.knowledgeFiles.map((f, i) => (
-              <li
-                key={`${f.name}-${i}`}
-                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2"
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <FileText className="h-4 w-4 shrink-0 text-primary" />
-                  <span className="truncate text-sm font-medium">{f.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {(f.size / 1024).toFixed(1)} KB
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeFile(i)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label={`Remove ${f.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
         )}
       </div>
     </div>
