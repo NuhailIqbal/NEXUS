@@ -10,10 +10,11 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   X, Check, Bot, BookOpen, FileText, PlayCircle, Sparkles, Briefcase,
-  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, Zap,
+  ArrowLeft, ArrowRight, Upload, Trash2, Info, Loader2, Phone, Zap, Maximize2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, isE164 } from "@/lib/utils";
@@ -693,6 +694,7 @@ export function StepKnowledge({
 export function StepPrompt({
   form, update, compact,
 }: { form: FormState; update: <K extends keyof FormState>(k: K, v: FormState[K]) => void; compact?: boolean }) {
+  const [promptExpanded, setPromptExpanded] = useState(false);
   return (
     <div className="space-y-6">
       {!compact && (
@@ -706,15 +708,47 @@ export function StepPrompt({
           </p>
         </div>
       )}
-      <Field label="System Prompt" required>
+      <div>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <label htmlFor="system-prompt" className="text-sm font-medium">
+            System Prompt <span className="text-destructive">*</span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setPromptExpanded(true)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="Expand editor"
+            aria-label="Expand editor"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+        </div>
         <textarea
+          id="system-prompt"
           value={form.systemPrompt}
           onChange={(e) => update("systemPrompt", e.target.value)}
           rows={compact ? 14 : 6}
           placeholder="You are a friendly assistant who helps users with…"
           className="w-full rounded-md border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
         />
-      </Field>
+      </div>
+      <Dialog open={promptExpanded} onOpenChange={setPromptExpanded}>
+        <DialogContent className="flex h-[90vh] max-h-[90vh] max-w-5xl flex-col overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>System Prompt</DialogTitle>
+            <DialogDescription>Edit the full script here. Changes are saved to the form as you type.</DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={form.systemPrompt}
+            onChange={(e) => update("systemPrompt", e.target.value)}
+            placeholder="You are a friendly assistant who helps users with…"
+            className="min-h-0 w-full flex-1 resize-none rounded-md border border-input bg-background p-4 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => setPromptExpanded(false)}>Done</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Field label="Greeting Message" required>
         <input
           value={form.greeting}
