@@ -628,6 +628,13 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     call_hours_start text DEFAULT '09:00'::text NOT NULL,
     call_hours_end text DEFAULT '17:00'::text NOT NULL,
     dial_cursor uuid,
+    -- Set when a run was stopped by the calling hours: the campaign then continues by itself the next
+    -- time they open (services/campaign_scheduler.py). Cleared by anything a person does to it.
+    stopped_by_hours_at timestamp with time zone,
+    -- The lease of the run that is dialing the campaign right now (NULL = none). Only its holder may
+    -- save the place or change the campaign at the end; a lease not refreshed for ten minutes is stale.
+    run_token uuid,
+    run_heartbeat_at timestamp with time zone,
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 

@@ -107,6 +107,15 @@ async def _start_callback_scheduler() -> None:
 
 
 @app.on_event("startup")
+async def _start_campaign_scheduler() -> None:
+    """Continue campaigns the calling hours stopped, by themselves, when the hours open again."""
+    import asyncio
+    if settings.campaign_sweep_interval_seconds > 0:
+        from services.campaign_scheduler import campaign_loop
+        asyncio.create_task(campaign_loop())
+
+
+@app.on_event("startup")
 async def _reconcile_caller_verification() -> None:
     """Re-point numbers that have caller verification on at this server's CURRENT address and
     secret. VAPI keeps the URL and secret it was given when verification was switched on, so a

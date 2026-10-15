@@ -439,13 +439,14 @@ class CampaignStoppedByHoursTests(CampaignBase):
     """The hours close while the run is in progress, then reopen."""
 
     def closing_after(self, allowed_checks):
-        """is_open answers True for that many checks, then False (the run's own checks are: once
-        before dialing and once before each batch)."""
+        """is_open answers True for that many checks, then False. The checks counted are the run's
+        "before dialing" check and one before each batch; the extra check made right after the run
+        takes its lease (the row is read again then) is not counted."""
         calls = {"n": 0}
 
         def fake(row, prefix, now=None, *, if_unreadable=True):
             calls["n"] += 1
-            return calls["n"] <= allowed_checks
+            return calls["n"] <= allowed_checks + 1
         return patch.object(call_hours, "is_open", side_effect=fake)
 
     def test_a_run_that_outlasts_the_hours_stops_and_remembers_where(self):

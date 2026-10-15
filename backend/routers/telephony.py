@@ -12,7 +12,7 @@ Also exports sync_inbound_routing_for_balance, called from routers/billing.py.
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import stripe
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
@@ -1046,7 +1046,13 @@ def _attach_hours_state(campaigns: list[dict]) -> None:
     the safe side for a dialer."""
     now = datetime.now(timezone.utc)
     for camp in campaigns:
-        camp["call_hours_state"] = call_hours.state(camp, call_hours.CAMPAIGN, now, if_unreadable=False)
+        st = call_hours.state(camp, call_hours.CAMPAIGN, now, if_unreadable=False)
+        camp["call_hours_state"] = st
+        # A run the hours stopped continues by itself when they open: `next_at` is when (None = within
+        # the next minute, the hours are open already), shown on the card with a way to stop it.
+        waiting = bool(camp.get("stopped_by_hours_at") and camp.get("dial_cursor") and call_hours.enabled(camp, call_hours.CAMPAIGN)
+                       and camp.get("status") == "Paused")
+        camp["auto_resume"] = {"pending": waiting, "next_at": st["next_open_at"] if waiting else None}
 
 
 @router.get("/campaigns")
@@ -1122,7 +1128,7 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         return {"data": None, "error": "No fields to update"}
     owner_id = resolve_owner_id(user["user_id"])
     hours_touched = call_hours.touched(call_hours.CAMPAIGN, updates)
-    if hours_touched or "list_id" in updates:
+    if hours_touched or "list_id" in updates or "status" in updates:
         existing = (
             supabase.table("outbound_campaigns").select("*")
             .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
@@ -1140,6 +1146,16 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         # same list; with another list the next start begins at the top.
         if "list_id" in updates and updates["list_id"] != existing.get("list_id"):
             updates["dial_cursor"] = None
+        # Anything a person does to the campaign takes it out of the automatic continuing: a different
+        # status (they Paused/Activated/Inactivated it on purpose), a different list, or hours switched
+        # off. Saving the settings with the same status and hours keeps it waiting.
+        took_over = (
+            ("status" in updates and updates["status"] != existing.get("status"))
+            or ("list_id" in updates and updates["list_id"] != existing.get("list_id"))
+            or (hours_touched and not call_hours.enabled({**existing, **updates}, call_hours.CAMPAIGN))
+        )
+        if took_over:
+            updates["stopped_by_hours_at"] = None
     result = (
         supabase.table("outbound_campaigns")
         .update(updates)
@@ -1157,71 +1173,21 @@ async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
     return {"data": None, "error": None}
 
 
-@router.post("/campaigns/{campaign_id}/start")
-async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
-    """Start a campaign by placing a VAPI call to every contact with a phone number in
-    its list, using the campaign's agent and phone number.
+# How long a run's lease is honoured without a sign of life (every batch refreshes it). A run that
+# crashed or was killed leaves its lease behind; after this long a new Start may take it over.
+RUN_LEASE_STALE_SECONDS = 600
+_HOURS_COLUMNS = ("call_hours_enabled", "call_hours_timezone", "call_hours_days", "call_hours_start", "call_hours_end")
+_RUN_COLUMNS = "status, list_id, run_token, " + ", ".join(_HOURS_COLUMNS)
 
-    Fails with 4xx if the campaign is missing, its agent/list/phone number isn't set up,
-    the account is blocked, the balance is empty or the list has no dialable contacts.
-    Contacts are dialed in concurrent batches within this single request; a failed dial
-    or a DNC-suppressed number is recorded and skipped, never aborting the run.
 
-    Calling hours: a campaign with them switched on refuses to start while closed (400, saying
-    when it opens) and stops dialing between batches if they close mid-run. A stopped run leaves
-    the campaign Paused with `dial_cursor` set to the last contact handled; starting or resuming it
-    again carries on with the contacts after that one, so nobody is called twice.
+def _iso_now(offset_seconds: int = 0) -> str:
+    """Now (plus `offset_seconds`) as a UTC timestamp string, the form written to the lease columns."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    Side effects: sets the campaign to Active (and refreshes contacts_count), and sends
-    one DNC-suppression notification if any numbers were skipped. Returns dialed/error/
-    suppressed counts plus up to 5 sample errors and suppressed numbers, and, when the hours
-    stopped the run, `stopped_by_hours`, how many contacts are `remaining` and `next_open_at`.
-    """
-    owner_id = resolve_owner_id(user["user_id"])
-    campaign = (
-        supabase.table("outbound_campaigns")
-        .select("*")
-        .eq("id", campaign_id)
-        .eq("user_id", owner_id)
-        .maybe_single()
-        .execute()
-    )
-    if not campaign.data:
-        raise HTTPException(status_code=404, detail="Campaign not found")
 
-    camp = campaign.data
-    vapi_assistant_id = None
-    if camp.get("agent_id"):
-        agent_res = (
-            supabase.table("ai_agents")
-            .select("vapi_assistant_id")
-            .eq("id", camp["agent_id"])
-            .maybe_single()
-            .execute()
-        )
-        if agent_res.data:
-            vapi_assistant_id = agent_res.data.get("vapi_assistant_id")
-
-    if not vapi_assistant_id:
-        raise HTTPException(status_code=400, detail="Campaign agent is not set up for calls")
-
-    billing = get_or_create_billing(owner_id)
-    block_reason = outbound_call_block_reason(billing)
-    if block_reason:
-        raise HTTPException(status_code=403, detail=block_reason)
-    # The balance is checked once here, before any dialing; it is not re-checked
-    # per call while the batches run.
-    if not check_call_quota(owner_id, "outbound"):
-        raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
-
-    if not camp.get("list_id"):
-        raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")
-
-    if not camp.get("phone_number_id"):
-        raise HTTPException(status_code=400, detail="Campaign has no phone number assigned. Edit the campaign and select a phone number to call from.")
-
-    # Calling hours: nothing is dialed while they are closed. An unreadable setting counts as
-    # closed (the safe side for a dialer).
+def _raise_if_closed(camp: dict) -> None:
+    """400 saying when it opens if the campaign's calling hours are closed right now. An unreadable
+    setting counts as closed (the safe side for a dialer)."""
     if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
         nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN)
         when = f" It opens again {call_hours.describe_moment(nxt, camp, call_hours.CAMPAIGN)}." if nxt else ""
@@ -1230,6 +1196,51 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             detail=f"This campaign only places calls {call_hours.describe(camp, call_hours.CAMPAIGN)}, "
                    f"and it is closed right now.{when}",
         )
+
+
+def _claim_run(campaign_id: str) -> str:
+    """Take the campaign's run lease and return its token, or raise 409 when another run holds it.
+
+    A run holds it from here until it gives it back, refreshing it before every batch, and only the
+    holder may save the place or change the campaign at the end. So two Starts at once (a double
+    click, the Start button racing the automatic continuing, two workers) can never both dial, and a
+    Pause followed by an immediate Start waits for the first run to finish its current batch instead
+    of calling the same people twice. Each of the two steps below is one atomic update: the first
+    takes a free lease, the second takes over one whose holder has not been heard from for
+    RUN_LEASE_STALE_SECONDS (a crashed run)."""
+    token = str(uuid.uuid4())
+    fields = {"run_token": token, "run_heartbeat_at": _iso_now(), "status": "Active", "stopped_by_hours_at": None}
+    table = supabase.table("outbound_campaigns")
+    won = table.update(fields).eq("id", campaign_id).is_("run_token", "null").execute().data
+    if not won:
+        won = (supabase.table("outbound_campaigns").update(fields).eq("id", campaign_id)
+               .lt("run_heartbeat_at", _iso_now(-RUN_LEASE_STALE_SECONDS)).execute().data)
+    if not won:
+        raise HTTPException(
+            status_code=409,
+            detail="This campaign is already running (or still finishing its current batch). Try again in a moment.",
+        )
+    return token
+
+
+def _release_run(campaign_id: str, token: str) -> None:
+    """Give the lease back. Does nothing if it is no longer this run's (already given back, or taken over)."""
+    supabase.table("outbound_campaigns").update({"run_token": None, "run_heartbeat_at": None}) \
+        .eq("id", campaign_id).eq("run_token", token).execute()
+
+
+async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str, token: str,
+                        original_status: str | None, original_marker: str | None) -> dict:
+    """The dialing part of start_campaign, run while holding the lease `token`: load the contacts
+    after the saved place, dial them in batches, and leave the campaign in the right state. See
+    start_campaign for the rules."""
+    # The row as it is NOW, after this run took the lease: a run that finished a moment ago left its
+    # place in it, and a person may have changed things since the row was first read. That, not the
+    # earlier read, is what counts for where to start and for the hours.
+    camp = supabase.table("outbound_campaigns").select("*").eq("id", campaign_id).maybe_single().execute().data
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    _raise_if_closed(camp)
 
     # A stable order (by id) is what lets a run that was stopped by the calling hours carry on after
     # the last contact it handled (dial_cursor) instead of starting over.
@@ -1249,7 +1260,9 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         if cursor:
             # The earlier run had stopped part-way and nothing is left after it. Forget the place,
             # so the next start dials the whole list again, and say why nothing happened now.
-            supabase.table("outbound_campaigns").update({"dial_cursor": None, "status": "Inactive"}).eq("id", campaign_id).execute()
+            supabase.table("outbound_campaigns").update(
+                {"dial_cursor": None, "status": "Inactive", "stopped_by_hours_at": None, "run_token": None, "run_heartbeat_at": None}
+            ).eq("id", campaign_id).eq("run_token", token).execute()
             raise HTTPException(status_code=400, detail="Every contact in this list has already been dialed. Start the campaign again to dial the list from the beginning.")
         raise HTTPException(status_code=400, detail="No contacts with phone numbers in the list")
 
@@ -1321,15 +1334,37 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     suppressed = []
     errors = []
     all_contacts = contacts.data
-    stopped_at = None           # index of the first contact NOT handled when the hours closed
+    stopped_at = None           # index of the first contact NOT handled when the run stopped early
+    stopped_by = None           # why: "hours" (the calling hours closed) or "person" (paused/changed by hand)
     last_handled = cursor       # id of the last contact handled so far (where a stopped run resumes)
     for i in range(0, len(all_contacts), CAMPAIGN_BATCH_SIZE):
+        # Before EVERY batch the campaign is read again. A person who paused or otherwise changed it
+        # (another status, another list), deleted it, or whose newer run took over this one's lease, is
+        # obeyed from this batch on: calls already placed are not interrupted. Their latest calling
+        # hours count too (narrowed -> stops at once; switched off -> no limit any more).
+        now_row = supabase.table("outbound_campaigns").select(_RUN_COLUMNS).eq("id", campaign_id).maybe_single().execute().data
+        if (not now_row or now_row.get("run_token") != token or now_row.get("status") != "Active"
+                or now_row.get("list_id") != camp.get("list_id")):
+            stopped_at, stopped_by = i, "person"
+            break
+        camp.update({k: now_row[k] for k in _HOURS_COLUMNS})
         # Checked before every batch, so a run that outlasts the hours stops at the next boundary
         # instead of calling people after closing time.
         if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
-            stopped_at = i
+            stopped_at, stopped_by = i, "hours"
             break
         batch = all_contacts[i:i + CAMPAIGN_BATCH_SIZE]
+        # The place is saved BEFORE the batch is dialed (and the lease refreshed in the same step), so
+        # a crash or restart mid-batch can never make the next run call these people again: at worst
+        # that one batch is skipped. The step only succeeds while this run still holds the lease and
+        # the campaign still has the same list; otherwise the run ends here.
+        saved = supabase.table("outbound_campaigns").update(
+            {"dial_cursor": batch[-1]["id"], "run_heartbeat_at": _iso_now()}
+        ).eq("id", campaign_id).eq("run_token", token).eq("list_id", camp.get("list_id")).execute().data
+        if not saved:
+            stopped_at, stopped_by = i, "person"
+            break
+        last_handled = batch[-1]["id"]
         # One cache read for the whole batch, so only unscreened numbers reach the provider.
         # Skipped entirely when this campaign has opted out of DNC screening.
         if campaign_dnc_enabled:
@@ -1351,24 +1386,37 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
                 suppressed.append({"phone": r["phone"], "reason": r.get("error", "Suppressed")})
             else:
                 errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
-        last_handled = batch[-1]["id"]
 
-    if stopped_at is not None and last_handled:
+    # Whatever stopped the run, a person may have paused/changed the campaign since the last check:
+    # their choice always wins, so the status and the "continue automatically" marker are left alone.
+    final_row = supabase.table("outbound_campaigns").select("status, list_id").eq("id", campaign_id).maybe_single().execute().data
+    list_changed = final_row is None or final_row.get("list_id") != camp.get("list_id")
+    person_took_over = stopped_by == "person" or list_changed or final_row.get("status") != "Active"
+    if person_took_over:
+        # Only the place is kept (or forgotten, when the list was finished anyway); with another list
+        # nothing of this run's place means anything any more.
+        campaign_update = {} if list_changed else {"dial_cursor": last_handled if stopped_at is not None else None}
+        if stopped_by is None:
+            stopped_by = "person"       # for the answer below (it ended, but not by itself)
+    elif stopped_at is not None and last_handled:
         # The hours closed part-way (and something was dialed, now or in an earlier run): remember
-        # where, and park the campaign as Paused so Start/Resume carries on from there.
-        campaign_update = {"status": "Paused", "dial_cursor": last_handled}
+        # where, and park the campaign as Paused, marked to continue by itself the next time the hours
+        # open (services/campaign_scheduler.py); Start/Resume by hand carries on from the same place.
+        campaign_update = {"status": "Paused", "dial_cursor": last_handled,
+                           "stopped_by_hours_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     elif stopped_at is not None:
-        # Closed before a single call was placed: nothing to remember, the status stays as it was.
-        campaign_update = {}
+        # Closed before a single call was placed: nothing to remember, it is as it was.
+        campaign_update = {"status": original_status, "stopped_by_hours_at": original_marker}
     else:
         # Ran to the end of the list. contacts_count is reset to the number of dialable contacts
         # (those with a phone), which can be lower than the list size stored when the campaign
         # was created; after a resume it is left alone, as only the remainder was loaded.
-        campaign_update = {"status": "Active", "dial_cursor": None}
+        campaign_update = {"status": "Active", "dial_cursor": None, "stopped_by_hours_at": None}
         if not cursor:
             campaign_update["contacts_count"] = len(contacts.data)
-    if campaign_update:
-        supabase.table("outbound_campaigns").update(campaign_update).eq("id", campaign_id).execute()
+    # Every write of the end of the run needs this run to still hold the lease, and gives it back.
+    campaign_update.update({"run_token": None, "run_heartbeat_at": None})
+    supabase.table("outbound_campaigns").update(campaign_update).eq("id", campaign_id).eq("run_token", token).execute()
 
     if suppressed:
         _notify_suppressed(owner_id, campaign_id, camp.get("name") or "Campaign", len(suppressed))
@@ -1380,21 +1428,116 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         "suppressed": len(suppressed),
         "suppressed_details": suppressed[:5],
     }
-    if stopped_at is not None:
+    if stopped_at is not None and stopped_by == "hours" and not person_took_over:
         nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN)
         result_data.update({
             "stopped_by_hours": True,
             "remaining": len(all_contacts) - stopped_at,
             "next_open_at": nxt.strftime("%Y-%m-%dT%H:%M:%SZ") if nxt else None,
         })
+    elif person_took_over and stopped_at is not None:
+        result_data.update({"stopped_by_person": True, "remaining": len(all_contacts) - stopped_at})
     return {"data": result_data, "error": None}
+
+
+@router.post("/campaigns/{campaign_id}/start")
+async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
+    """Start a campaign by placing a VAPI call to every contact with a phone number in
+    its list, using the campaign's agent and phone number.
+
+    Fails with 4xx if the campaign is missing, its agent/list/phone number isn't set up,
+    the account is blocked, the balance is empty or the list has no dialable contacts.
+    Contacts are dialed in concurrent batches within this single request; a failed dial
+    or a DNC-suppressed number is recorded and skipped, never aborting the run.
+
+    Calling hours: a campaign with them switched on refuses to start while closed (400, saying
+    when it opens) and stops dialing between batches if they close mid-run. A stopped run leaves
+    the campaign Paused with `dial_cursor` set to the last contact handled; starting or resuming it
+    again carries on with the contacts after that one, so nobody is called twice.
+
+    Side effects: sets the campaign to Active (and refreshes contacts_count), and sends
+    one DNC-suppression notification if any numbers were skipped. Returns dialed/error/
+    suppressed counts plus up to 5 sample errors and suppressed numbers, and, when the hours
+    stopped the run, `stopped_by_hours`, how many contacts are `remaining` and `next_open_at`.
+    """
+    owner_id = resolve_owner_id(user["user_id"])
+    campaign = (
+        supabase.table("outbound_campaigns")
+        .select("*")
+        .eq("id", campaign_id)
+        .eq("user_id", owner_id)
+        .maybe_single()
+        .execute()
+    )
+    if not campaign.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    camp = campaign.data
+    vapi_assistant_id = None
+    if camp.get("agent_id"):
+        agent_res = (
+            supabase.table("ai_agents")
+            .select("vapi_assistant_id")
+            .eq("id", camp["agent_id"])
+            .maybe_single()
+            .execute()
+        )
+        if agent_res.data:
+            vapi_assistant_id = agent_res.data.get("vapi_assistant_id")
+
+    if not vapi_assistant_id:
+        raise HTTPException(status_code=400, detail="Campaign agent is not set up for calls")
+
+    billing = get_or_create_billing(owner_id)
+    block_reason = outbound_call_block_reason(billing)
+    if block_reason:
+        raise HTTPException(status_code=403, detail=block_reason)
+    # The balance is checked once here, before any dialing; it is not re-checked
+    # per call while the batches run.
+    if not check_call_quota(owner_id, "outbound"):
+        raise HTTPException(status_code=402, detail="Your balance is empty. Add funds to keep making calls.")
+
+    if not camp.get("list_id"):
+        raise HTTPException(status_code=400, detail="Campaign has no contact list assigned. Edit the campaign and select a list.")
+
+    if not camp.get("phone_number_id"):
+        raise HTTPException(status_code=400, detail="Campaign has no phone number assigned. Edit the campaign and select a phone number to call from.")
+
+    # Calling hours: nothing is dialed while they are closed.
+    _raise_if_closed(camp)
+
+    # Taking the lease is what makes this the one run of the campaign (see _claim_run); everything after
+    # it happens inside try/finally so the lease is always given back, whatever happens.
+    original_status = camp.get("status")
+    original_marker = camp.get("stopped_by_hours_at")
+    token = _claim_run(campaign_id)
+    try:
+        return await _run_campaign(campaign_id, owner_id, vapi_assistant_id, token, original_status, original_marker)
+    except HTTPException:
+        # Refused before dialing anything (nothing left, number not active, ...): it is as it was.
+        supabase.table("outbound_campaigns").update(
+            {"status": original_status, "stopped_by_hours_at": original_marker, "run_token": None, "run_heartbeat_at": None}
+        ).eq("id", campaign_id).eq("run_token", token).execute()
+        raise
+    except BaseException:
+        # Something broke mid-run (a crash, a cancelled request, an error from a service): park the
+        # campaign as Paused instead of leaving it looking like it is still running. Its place was saved
+        # before the batch that was in flight, so Start carries on without calling anyone twice.
+        supabase.table("outbound_campaigns").update(
+            {"status": "Paused", "run_token": None, "run_heartbeat_at": None}
+        ).eq("id", campaign_id).eq("run_token", token).execute()
+        raise
+    finally:
+        _release_run(campaign_id, token)
 
 
 @router.post("/campaigns/{campaign_id}/pause")
 async def pause_campaign(campaign_id: str, user=Depends(get_current_user)):
     """Mark the campaign Paused. Only updates the stored status; calls already placed
-    by /start are not interrupted. Succeeds even if the campaign isn't found."""
-    supabase.table("outbound_campaigns").update({"status": "Paused"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
+    by /start are not interrupted. Also stops a run the calling hours stopped from continuing by
+    itself (see services/campaign_scheduler.py). Succeeds even if the campaign isn't found."""
+    # A person pausing it also cancels the automatic continuing (the place is kept: Start/Resume carries on from it).
+    supabase.table("outbound_campaigns").update({"status": "Paused", "stopped_by_hours_at": None}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
     return {"data": {"status": "Paused"}, "error": None}
 
 

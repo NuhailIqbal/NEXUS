@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     phone_billing_sweep_interval_seconds: int = 3600
     # How often due callbacks are checked (only accounts that turned on auto-calling are acted on). 0 disables.
     callback_sweep_interval_seconds: int = 60
+    # How often campaigns that the calling hours stopped are checked for continuing automatically
+    # when the hours open again. 0 disables automatic continuing (a person then presses Start).
+    campaign_sweep_interval_seconds: int = 60
 
     # Inbound caller verification: before a number's agent picks up, the caller's number is
     # looked up with this provider and the call is refused when it is not a real number.

@@ -49,6 +49,9 @@ type Campaign = {
   call_hours_timezone?: string;
   call_hours_state?: HoursState;
   dial_cursor?: string | null;
+  // True while the calling hours have stopped a run and the campaign will carry on by itself the next
+  // time they open (next_at, UTC; null = they are open now, so within the next minute).
+  auto_resume?: { pending: boolean; next_at: string | null };
 };
 
 /** One row of the pre-launch checklist dialog. */
@@ -231,6 +234,14 @@ const Outbound = () => {
     const errors: number = (data as any)?.errors ?? 0;
     const suppressed: number = (data as any)?.suppressed ?? 0;
     const details: { phone: string; error: string }[] = (data as any)?.error_details ?? [];
+    // A person paused (or changed) the campaign while it was running: it stopped at the next batch.
+    const byPerson = data as { stopped_by_person?: boolean; remaining?: number } | null;
+    if (byPerson?.stopped_by_person) {
+      const left = byPerson.remaining ?? 0;
+      toast.info(`Stopped: ${dialed} called, ${left} contact${left !== 1 ? "s" : ""} left. Start carries on from the next contact.`);
+      fetchCampaigns();
+      return;
+    }
     // The calling hours closed part-way: say how far it got and when the rest can be dialed.
     const stop = data as { stopped_by_hours?: boolean; remaining?: number; next_open_at?: string | null } | null;
     if (stop?.stopped_by_hours) {
@@ -241,7 +252,7 @@ const Outbound = () => {
       );
       toast.warning(
         `Calling hours ended: ${dialed} called, ${remaining} contact${remaining !== 1 ? "s" : ""} left.` +
-        (next ? ` Start the campaign again from ${next} to carry on where it stopped.` : "")
+        (next ? ` It will continue automatically from the next contact when the hours open (${next}).` : " It will continue automatically when the hours open.")
       );
       fetchCampaigns();
       return;
@@ -253,6 +264,17 @@ const Outbound = () => {
     else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed${skipped}`);
     else if (suppressed > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
     else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);
+    fetchCampaigns();
+  };
+
+  /**
+   * Cancels the automatic continuing of a campaign the hours stopped (it stays Paused and keeps its
+   * place: Start carries on from the next contact whenever the user wants).
+   */
+  const stopAutoResume = async (c: Campaign) => {
+    const { error } = await api.pauseCampaign(c.id);
+    if (error) return toast.error(error);
+    toast.success("Automatic continuing stopped. Press Start whenever you want it to carry on.");
     fetchCampaigns();
   };
 
@@ -379,7 +401,20 @@ const Outbound = () => {
                     </span>
                   </div>
                 )}
-                {c.dial_cursor && !isCompleted && (
+                {c.auto_resume?.pending && !isCompleted ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <span>
+                      Stopped partway through its list. It continues automatically with the contacts that are left
+                      {c.auto_resume.next_at
+                        ? ` when the hours open (${describeNextOpen({ enabled: true, open: false, next_open_at: c.auto_resume.next_at, summary: null }, c.call_hours_timezone)}).`
+                        : " within a minute (the hours are open now)."}
+                    </span>
+                    <button type="button" onClick={() => stopAutoResume(c)}
+                      className="font-medium text-primary underline-offset-2 hover:underline">
+                      Stop auto-resume
+                    </button>
+                  </div>
+                ) : c.dial_cursor && !isCompleted && c.status !== "Active" && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Stopped partway through its list. Start continues with the contacts that are left.
                   </p>
@@ -520,7 +555,7 @@ const Outbound = () => {
               value={settingsHours}
               onChange={setSettingsHours}
               switchLabel="Only call during set hours"
-              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times, and a run that is still going when they end stops."
+              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. A run that is still going when they end stops, and carries on by itself from the next contact the next time they open."
               startLabel="Calls start"
               endLabel="Calls stop"
             />

@@ -758,6 +758,13 @@ def _ensure_columns(conn) -> None:
         # Which NEXUS number a call used, and which campaign placed it: they pick the time zone the
         # call's times are shown in (the campaign's, or the receptionist number's).
         'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS phone_number_id uuid',
+        # A run stopped by the calling hours continues by itself when they next open: this marks the
+        # campaigns waiting to do that (NULL = a person has taken over, or nothing is waiting).
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS stopped_by_hours_at timestamptz',
+        # The lease of the run dialing the campaign right now: one run at a time, and a crashed run's
+        # lease goes stale after ten minutes (see routers/telephony._claim_run).
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS run_token uuid',
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS run_heartbeat_at timestamptz',
         '''CREATE TABLE IF NOT EXISTS public.campaign_calls (
             vapi_call_id text PRIMARY KEY,
             campaign_id uuid NOT NULL REFERENCES public.outbound_campaigns(id) ON DELETE CASCADE,

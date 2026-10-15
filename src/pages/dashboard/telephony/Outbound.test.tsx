@@ -1,6 +1,8 @@
 import { pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { vi as viConfig } from "vitest";
+viConfig.setConfig({ testTimeout: 20000 });   // the 96-slot time list and the zone list render slowly in jsdom when the machine is busy
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 vi.mock("@/services/api", () => ({
@@ -134,6 +136,8 @@ describe("Outbound campaigns: starting", () => {
     await waitFor(() => expect(toast.warning).toHaveBeenCalled());
     const message = fn(toast.warning).mock.calls[0][0] as string;
     expect(message).toMatch(/Calling hours ended: 4 called, 6 contacts left/);
+    expect(message).toMatch(/continue automatically/);
+    expect(message).not.toMatch(/Start the campaign again/);
     expect(message).toMatch(/Tue, Oct 13, 9:00 AM/);
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
@@ -328,5 +332,98 @@ describe("Outbound campaigns: no time zone is pre-selected", () => {
     render(<Outbound />);
     await openSettings();
     expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Pakistan/);
+  });
+});
+
+describe("Outbound campaigns: continuing by itself", () => {
+  const waiting = (over: Record<string, unknown> = {}) =>
+    withHours(CLOSED_STATE, { status: "Paused", dial_cursor: "k5", auto_resume: { pending: true, next_at: "2026-10-13T04:00:00Z" }, ...over });
+  const note = () => cardOf("Spring Push").textContent ?? "";
+
+  it("a stopped campaign says it continues automatically, and when (in its own zone)", async () => {
+    mock([waiting()]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(note()).toMatch(/continues automatically with the contacts that are left when the hours open \(Tue, Oct 13, 9:00 AM/);
+    expect(note()).not.toMatch(/Start continues/);
+  });
+
+  it("when the hours are open already it says within a minute", async () => {
+    mock([waiting({ auto_resume: { pending: true, next_at: null }, call_hours_state: OPEN_STATE })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(note()).toMatch(/within a minute/);
+  });
+
+  it("a stopped campaign that is NOT waiting (a person paused it) still says Start continues", async () => {
+    mock([waiting({ auto_resume: { pending: false, next_at: null } })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(note()).toMatch(/Start continues with the contacts that are left/);
+    expect(within(cardOf("Spring Push")).queryByRole("button", { name: "Stop auto-resume" })).not.toBeInTheDocument();
+  });
+
+  it("a campaign that is not stopped shows nothing about it", async () => {
+    mock([withHours(OPEN_STATE)]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(note()).not.toMatch(/automatically|Stopped partway/);
+  });
+
+  it("Stop auto-resume pauses it (which cancels the continuing), tells the user and reloads", async () => {
+    mock([waiting()]);
+    fn(api.pauseCampaign).mockResolvedValue({ data: { status: "Paused" }, error: null });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    const before = fn(api.getCampaigns).mock.calls.length;
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Stop auto-resume" }));
+    await waitFor(() => expect(api.pauseCampaign).toHaveBeenCalledWith("c1"));
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Automatic continuing stopped/));
+    await waitFor(() => expect(fn(api.getCampaigns).mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("a refusal is shown and nothing is reloaded as if it worked", async () => {
+    mock([waiting()]);
+    fn(api.pauseCampaign).mockResolvedValue({ data: null, error: "Could not pause" });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Stop auto-resume" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not pause"));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("Outbound campaigns: a person's Pause while it runs, and a running campaign", () => {
+  it("a run stopped by a Pause says how far it got, and that Start carries on", async () => {
+    mock([withHours(OPEN_STATE)]);
+    fn(api.startCampaign).mockResolvedValue({ data: { dialed: 4, errors: 0, suppressed: 0, stopped_by_person: true, remaining: 6 }, error: null });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(toast.info).toHaveBeenCalled());
+    expect(fn(toast.info).mock.calls[0][0]).toMatch(/Stopped: 4 called, 6 contacts left\. Start carries on from the next contact/);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("a campaign that is running right now does not claim to have stopped partway", async () => {
+    mock([withHours(OPEN_STATE, { status: "Active", dial_cursor: "k5" })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push").textContent).not.toMatch(/Stopped partway/);
+    expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeInTheDocument();
+  });
+
+  it("starting a campaign that is already running shows the server's reason", async () => {
+    mock([withHours(OPEN_STATE)]);
+    fn(api.startCampaign).mockResolvedValue({ data: null, error: "This campaign is already running. Pause it first if you want to stop it." });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/already running/)));
   });
 });

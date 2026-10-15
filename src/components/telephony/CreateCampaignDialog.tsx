@@ -301,7 +301,7 @@ function StepHours({
           value={data.hours}
           onChange={(h) => update("hours", h)}
           switchLabel="Only call during set hours"
-          description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. Outside them it will not start, and a run that is still going when they end stops until you start it again."
+          description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. Outside them it will not start. A run that is still going when they end stops, and carries on by itself from the next contact the next time they open (no need to press Start again)."
           startLabel="Calls start"
           endLabel="Calls stop"
         />

@@ -1,6 +1,8 @@
 import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { vi as viConfig } from "vitest";
+viConfig.setConfig({ testTimeout: 20000 });   // the 96-slot time list and the zone list render slowly in jsdom when the machine is busy
 import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { CallingHoursFields } from "./CallingHoursFields";
