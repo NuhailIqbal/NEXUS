@@ -436,16 +436,24 @@ const Outbound = () => {
 
                 {/* Actions */}
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                  <Button
-                    size="sm"
-                    variant={isActive ? "outline" : "default"}
-                    onClick={() => togglePlay(c)}
-                    className={isActive ? "" : "bg-primary text-primary-foreground"}
-                  >
-                    {isActive
-                      ? <><PauseIcon className="mr-1.5 h-3.5 w-3.5" /> Pause</>
-                      : <><Play className="mr-1.5 h-3.5 w-3.5" /> Start</>}
-                  </Button>
+                  {isCompleted ? (
+                    // Nothing is left to dial, so neither Pause nor Start would do anything useful.
+                    // Adding contacts to the list takes the campaign out of "Completed" again.
+                    <Button size="sm" variant="outline" disabled title="Add contacts to the list to run this campaign again">
+                      <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> All contacts reached
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant={isActive ? "outline" : "default"}
+                      onClick={() => togglePlay(c)}
+                      className={isActive ? "" : "bg-primary text-primary-foreground"}
+                    >
+                      {isActive
+                        ? <><PauseIcon className="mr-1.5 h-3.5 w-3.5" /> Pause</>
+                        : <><Play className="mr-1.5 h-3.5 w-3.5" /> Start</>}
+                    </Button>
+                  )}
                   <RowActions onSettings={() => openSettings(c)} onDelete={() => handleDelete(c)} />
                 </div>
               </div>

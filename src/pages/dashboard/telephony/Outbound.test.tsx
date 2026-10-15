@@ -87,6 +87,53 @@ describe("Outbound campaigns: calling hours on the card", () => {
   });
 });
 
+describe("Outbound campaigns: a completed campaign", () => {
+  const COMPLETED = { contacts_count: 10, completed_count: 10 };
+
+  it.each(["Active", "Paused", "Inactive"])("has no Pause or Start button (underlying status %s)", async (status) => {
+    mock([campaign({ ...COMPLETED, status })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    const card = cardOf("Spring Push");
+    expect(within(card).queryByRole("button", { name: /Pause/ })).not.toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /Start/ })).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /All contacts reached/ })).toBeDisabled();
+  });
+
+  it("Pause and Start stay available until every contact has a completed call", async () => {
+    mock([
+      campaign({ id: "c1", name: "Running", status: "Active", contacts_count: 10, completed_count: 9 }),
+      campaign({ id: "c2", name: "Waiting", status: "Paused", contacts_count: 10, completed_count: 9 }),
+      campaign({ id: "c3", name: "Fresh", status: "Inactive", contacts_count: 10, completed_count: 0 }),
+    ]);
+    render(<Outbound />);
+    await screen.findByText("Running");
+    expect(within(cardOf("Running")).getByRole("button", { name: /Pause/ })).toBeEnabled();
+    expect(within(cardOf("Waiting")).getByRole("button", { name: /Start/ })).toBeEnabled();
+    expect(within(cardOf("Fresh")).getByRole("button", { name: /Start/ })).toBeEnabled();
+    expect(screen.queryByText(/All contacts reached/)).not.toBeInTheDocument();
+  });
+
+  it("an empty list is not 'completed'", async () => {
+    mock([campaign({ status: "Inactive", contacts_count: 0, completed_count: 0 })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(within(cardOf("Spring Push")).getByRole("button", { name: /Start/ })).toBeEnabled();
+  });
+
+  it("goes back to Pause/Start once new contacts are added to the list", async () => {
+    mock([campaign({ ...COMPLETED, status: "Active" })]);
+    const { unmount } = render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(screen.getByText(/All contacts reached/)).toBeInTheDocument();
+    unmount();
+    mock([campaign({ contacts_count: 15, completed_count: 10, status: "Active" })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeEnabled();
+  });
+});
+
 describe("Outbound campaigns: starting", () => {
   it("while closed the pre-launch check fails with when it opens, and Launch stays disabled", async () => {
     mock([withHours(CLOSED_STATE)]);
