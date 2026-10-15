@@ -466,6 +466,9 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     transcript_messages jsonb DEFAULT '[]'::jsonb,
     vapi_cost numeric(8,4) DEFAULT 0,
     provider_cost numeric(8,4) DEFAULT 0,
+    -- The NEXUS number the call used (phone_numbers.id); with campaign_id it decides which time
+    -- zone the call's times are shown in (see routers/conversations.py).
+    phone_number_id uuid,
     CONSTRAINT conversations_direction_check CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))
 );
 
@@ -616,6 +619,15 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     vapi_campaign_id text,
     phone_number_id uuid,
     dnc_screening_enabled boolean DEFAULT true NOT NULL,
+    -- Calling hours (services/call_hours.py): off = no limit. The time zone is NULL until the user
+    -- chooses one (required once the hours are on; there is deliberately no default). dial_cursor =
+    -- last contact dialed when the hours closed mid-run, so the next start continues after it.
+    call_hours_enabled boolean DEFAULT false NOT NULL,
+    call_hours_timezone text,
+    call_hours_days integer[] DEFAULT '{0,1,2,3,4}'::integer[] NOT NULL,
+    call_hours_start text DEFAULT '09:00'::text NOT NULL,
+    call_hours_end text DEFAULT '17:00'::text NOT NULL,
+    dial_cursor uuid,
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 
@@ -648,7 +660,14 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     twilio_credential_id uuid,
     -- Inbound caller verification (off by default): VAPI asks this server per call and calls
     -- from numbers that are not mobile lines are refused (services/caller_verification.py).
-    caller_verification_enabled boolean DEFAULT false NOT NULL
+    caller_verification_enabled boolean DEFAULT false NOT NULL,
+    -- Answering hours (services/call_hours.py): the AI receptionist only answers inside them (off =
+    -- always). Switching them on routes the number through this server per call, like verification.
+    answer_hours_enabled boolean DEFAULT false NOT NULL,
+    answer_hours_timezone text,
+    answer_hours_days integer[] DEFAULT '{0,1,2,3,4}'::integer[] NOT NULL,
+    answer_hours_start text DEFAULT '09:00'::text NOT NULL,
+    answer_hours_end text DEFAULT '17:00'::text NOT NULL
 );
 
 

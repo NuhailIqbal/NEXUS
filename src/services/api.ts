@@ -253,6 +253,7 @@ export const api = {
   deletePhoneNumber: (id: string) => del(`/telephony/phone-numbers/${id}`),
   // Inbound caller verification: whether the server can run it, and recent results (query: phone_number_id, limit).
   getCallerVerificationStatus: () => get("/telephony/caller-verification/status"),
+  getAnswerHoursStatus: () => get("/telephony/answer-hours/status"),
   getCallerVerificationLog: (query = "") => get(`/telephony/caller-verification/log${query ? `?${query}` : ""}`),
 
   // Telephony - BYOT (Bring Your Own Twilio)

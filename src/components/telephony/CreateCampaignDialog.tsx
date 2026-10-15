@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   X, Rocket, Mic, Phone, Clipboard, BookOpen, Check, ChevronsUpDown,
-  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert,
+  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -20,6 +20,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
+import { CallingHoursFields } from "@/components/hours/CallingHoursFields";
+import {
+  defaultHours, describeHours, validateHours, type CallingHours,
+} from "@/components/hours/callingHours";
+import { DAY_LABELS } from "@/components/integrations/calendarTypes";
 
 /** open/onOpenChange control the dialog; onCreate receives the final form data on launch. */
 type Props = {
@@ -36,16 +41,19 @@ type CampaignData = {
   listId: string;
   phoneNumberId: string;
   dncScreeningEnabled: boolean;
+  /** When on, the campaign only places calls on these days between these times. */
+  hours: CallingHours;
 };
 
 type Agent       = { id: string; name: string };
 type ListRow     = { id: string; name: string; contact_count?: number };
 type PhoneNumber = { id: string; number: string };
 
-/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 review). */
+/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 hours, 3 review). */
 const STEPS = [
   { title: "Campaign Basics", subtitle: "Name, agent, phone number" },
   { title: "Contact List",    subtitle: "Pick the list to dial" },
+  { title: "Calling Hours",   subtitle: "Days and times the campaign may call" },
   { title: "Review & Launch", subtitle: "Confirm and launch" },
 ];
 
@@ -53,6 +61,7 @@ const STEPS = [
 const emptyData = (): CampaignData => ({
   name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
   dncScreeningEnabled: true,
+  hours: defaultHours(),
 });
 
 /**
@@ -105,6 +114,10 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
       if (!data.phoneNumberId) return toast.error("Select a phone number");
     }
     if (step === 1 && !data.listId) return toast.error("Select a contact list");
+    if (step === 2) {
+      const hoursProblem = data.hours.enabled ? validateHours(data.hours) : null;
+      if (hoursProblem) return toast.error(hoursProblem);
+    }
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
 
@@ -121,7 +134,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
       <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:rounded-xl [&>button]:hidden">
         <VisuallyHidden>
           <DialogTitle>Create Outbound Campaign</DialogTitle>
-          <DialogDescription>Configure and launch an outbound dialing campaign in 3 steps.</DialogDescription>
+          <DialogDescription>Configure and launch an outbound dialing campaign in 4 steps.</DialogDescription>
         </VisuallyHidden>
 
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
@@ -158,7 +171,8 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
           )}
           {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} />}
           {!loading && step === 1 && <Step3 data={data} update={update} lists={lists} />}
-          {!loading && step === 2 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
+          {!loading && step === 2 && <StepHours data={data} update={update} />}
+          {!loading && step === 3 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
         </div>
 
         <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -275,6 +289,27 @@ function Step1({
   );
 }
 
+/** Step 3 of the wizard: the days and times the campaign may place calls (off = any time). */
+function StepHours({
+  data, update,
+}: { data: CampaignData; update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void }) {
+  return (
+    <div className="space-y-6">
+      <Section icon={Clock} title="Calling Hours">
+        <CallingHoursFields
+          idPrefix="campaign-hours"
+          value={data.hours}
+          onChange={(h) => update("hours", h)}
+          switchLabel="Only call during set hours"
+          description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. Outside them it will not start, and a run that is still going when they end stops until you start it again."
+          startLabel="Calls start"
+          endLabel="Calls stop"
+        />
+      </Section>
+    </div>
+  );
+}
+
 /** Step 2 of the wizard (named Step3): contact list picker. */
 function Step3({
   data, update, lists,
@@ -309,7 +344,7 @@ function Step3({
   );
 }
 
-/** Step 3 of the wizard (named Step4): read-only review of the chosen options. */
+/** Step 4 of the wizard (named Step4): read-only review of the chosen options. */
 function Step4({
   data, agents, lists, phoneNumbers, dncEnabled,
 }: {
@@ -331,6 +366,7 @@ function Step4({
           <ReviewItem label="AI Agent"         value={agentName} />
           <ReviewItem label="Contact List"     value={listName} />
           <ReviewItem label="From Number"      value={numberLabel} />
+          <ReviewItem label="Calling Hours"     value={data.hours.enabled ? describeHours(data.hours, DAY_LABELS) : "Any time"} />
         </div>
 
         {/* Combines the account-wide WhitelistData status with this campaign's own

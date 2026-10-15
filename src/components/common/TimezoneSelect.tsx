@@ -11,8 +11,8 @@ const KEYWORDS: Record<string, string> = {
 
 /** Searchable timezone dropdown: common zones first (type EST, PST…), every other region below. */
 export function TimezoneSelect({
-  id, value, onChange, zones, disabled,
-}: { id: string; value: string; onChange: (tz: string) => void; zones: string[]; disabled?: boolean }) {
+  id, value, onChange, zones, disabled, placeholder = "Select timezone",
+}: { id: string; value: string; onChange: (tz: string) => void; zones: string[]; disabled?: boolean; placeholder?: string }) {
   const options = useMemo<SearchOption[]>(() => {
     const common = new Set(COMMON_TIMEZONES.map((z) => z.value));
     return [
@@ -22,6 +22,6 @@ export function TimezoneSelect({
   }, [zones, value]);
   return (
     <SearchSelect id={id} ariaLabel="Timezone" value={value} onChange={onChange} options={options} disabled={disabled}
-      placeholder="Select timezone" searchPlaceholder="Type EST, PST, Karachi…" />
+      placeholder={placeholder} searchPlaceholder="Type EST, PST, Karachi…" />
   );
 }

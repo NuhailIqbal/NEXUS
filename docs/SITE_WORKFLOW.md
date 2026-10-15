@@ -123,15 +123,35 @@ Per number, switchable from **Phone Numbers → Edit** and from each **AI Recept
 - Stats: Total Campaigns, Active Now, Total Contacts, Calls Dialed.
 - **+ New Campaign** — name, **agent**, **contact list**, optional phone number.
 - Each card: status, agent, number, progress bar (X/Y contacts, %).
-- **Start/Resume** → runs **pre-flight checks** (agent synced to VAPI · number active · contacts dialable). All pass → **Launch Campaign** begins dialing; any fail → shows what to fix.
+- **Start/Resume** → runs **pre-flight checks** (agent synced to VAPI · number active · contacts dialable · inside calling hours). All pass → **Launch Campaign** begins dialing; any fail → shows what to fix.
 - **Pause**, **Edit**, **Delete**.
+- **Calling hours** (wizard step 3 of 4, and **Settings** on the card; off by default = calls at any time). Pick a timezone, days and start/end times with the same pickers as the Callbacks settings. With them on:
+  - The campaign **will not start while closed** (the pre-flight check fails and says when it opens; the API answers 400 with the same text).
+  - A run that is still going when the hours end **stops between batches of 20 contacts**; calls already placed are not interrupted. The campaign is parked as **Paused** with `outbound_campaigns.dial_cursor` set to the last contact handled (contacts are dialed in id order), and the card says it stopped partway.
+  - **Start/Resume** during open hours carries on with the contacts **after** that one, so nobody is called twice; the place is forgotten when the list is finished or the campaign's list is changed. The page toast reports how many were called and how many are left.
+  - There is **no automatic restart** when the hours reopen: someone presses Start. A window cannot cross midnight (end must be after start; an end of 12:00 AM means the end of the day). An unreadable stored setting counts as closed.
+  - **Time zone:** the user chooses it; there is **no default** anywhere (empty "Select time zone" field, with an optional "Use my time zone (…)" link that only fills it on click). It is required once the hours are on (400 "Select a time zone." otherwise) and stored as NULL until chosen. Any zone the picker offers works (418 in the browser list; the server accepts every IANA name Python knows): the window, the weekday, the "opens again …" text and the next-opening time are all worked out in THAT zone, including half-hour/45-minute offsets and daylight-saving changes.
+  - API: `call_hours_enabled`, `call_hours_timezone`, `call_hours_days` (Monday = 0), `call_hours_start`, `call_hours_end` on `POST`/`PATCH /telephony/campaigns`; each campaign in the list carries `call_hours_state` (`enabled`, `open`, `next_open_at`, `summary`). Logic: `backend/services/call_hours.py`.
 
 ### Inbound — AI Receptionist (`/dashboard/telephony/inbound`)
 - Stats: Active Receptionists, Total/Completed Inbound Calls, Avg Duration.
 - **+ New Receptionist** — name, **VAPI-synced agent**, optional area code → backend provisions an inbound number and links it to the agent.
 - Card shows the inbound number (with **copy** button) + status. Edit/delete.
 - Each card has a **Verify callers before answering** switch (the same per-number setting as Phone Numbers → Edit): on = only mobile callers reach the agent.
+- **Answering hours** (card **Settings**, off by default = answers around the clock; stored on the receptionist's number as `phone_numbers.answer_hours_*`). Same pickers as above. Outside them the caller hears *"Sorry, we are closed right now. Please call back during our opening hours. Goodbye."* and the call ends (the agent never starts, and the call is never logged or billed to the customer); the card shows **Open now** / **Closed — opens …**.
+  - How it works: like caller verification, a number with hours on has **no fixed assistant in VAPI**; VAPI asks `POST /webhooks/vapi/inbound` per call and the server answers with the agent or the closed message, so it is exact to the second. The hours check comes **first** (before balance suspension and caller verification); inside the hours, verification (if on) still applies. Calls answered inside the hours are recorded in `inbound_call_screenings` (`within_hours`) so they are logged and billed even when VAPI omits the assistant id; refusals are recorded as `outside_hours`.
+  - Needs only `VAPI_API_KEY` and a public `PUBLIC_API_URL` (not the caller-lookup credentials); without them the switch is locked off with an explanation (`GET /telephony/answer-hours/status`). The deployment notes under *Inbound caller verification* apply in full (nginx route for `/webhooks/vapi/inbound`, `VAPI_WEBHOOK_SECRET`, reachability check on switch-on, startup re-sync, changing `PUBLIC_API_URL` is not seamless).
+  - Every code path that writes a number's assistant treats "hours on" like "verification on" (`caller_verification.server_routed`): agent changes, receptionist create/update/delete and balance suspend/restore are database-only for such a number. If the stored hours cannot be read, the line stays **open** (never drop a real caller), including on the error path.
+  - API: `answer_hours_enabled`, `answer_hours_timezone`, `answer_hours_days`, `answer_hours_start`, `answer_hours_end` on `PATCH /telephony/phone-numbers/{id}`; each number in the list carries `answer_hours_state`.
 - Recent inbound calls table below (caller, agent, status, duration, AI summary).
+
+### Time zones in the call logs (Inbound Logs, Outbound Logs, All Conversations)
+Every time shown for a call (the Time column, the details dialog, the events inside a call) is in the time zone the user chose for **what handled that call**, and always carries the zone's name ("Oct 14, 2026, 9:45 AM GMT+5:45"):
+- **Inbound call** → the answering-hours time zone of the NEXUS number it came in on (`conversations.phone_number_id`, found from VAPI's phone id when the call is logged).
+- **Outbound call** → the calling-hours time zone of the campaign that dialed it (`conversations.campaign_id`, from `campaign_calls`, written when the campaign places the call); a call placed by the callback scheduler uses the zone that callback was scheduled in.
+- The server resolves this per row (`display_timezone` on `GET /conversations` and `/conversations/{id}`) from the zone chosen **now**, so changing a campaign's or number's zone re-renders its calls in the new zone. The stored moment is never changed (still one UTC instant).
+- Calls with no chosen zone (logged before this existed, or from a number/campaign that never had one chosen) are shown in the viewer's own zone, named, never in a made-up default.
+- Not covered: the "Date" filter on All Conversations (`call_date`) still reads the calendar day in the database session's zone, and billing/admin screens show times in the viewer's zone.
 
 ---
 

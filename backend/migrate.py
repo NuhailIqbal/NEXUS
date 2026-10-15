@@ -717,6 +717,53 @@ def _ensure_columns(conn) -> None:
         # (logged and billed) when VAPI reports it with no assistant id. Looked up by call id.
         'ALTER TABLE public.inbound_call_screenings ADD COLUMN IF NOT EXISTS agent_id uuid',
         'CREATE INDEX IF NOT EXISTS inbound_call_screenings_call_idx ON public.inbound_call_screenings (vapi_call_id)',
+        # Calling hours (services/call_hours.py). A campaign only places calls inside its hours
+        # (off by default = no limit); dial_cursor is the last contact dialed when the hours closed
+        # mid-run, so the next start carries on after it instead of calling people twice.
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_enabled boolean DEFAULT false NOT NULL',
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_timezone text DEFAULT 'UTC' NOT NULL",
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_days integer[] DEFAULT '{0,1,2,3,4}' NOT NULL",
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_start text DEFAULT '09:00' NOT NULL",
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_end text DEFAULT '17:00' NOT NULL",
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS dial_cursor uuid',
+        # A number's AI receptionist only answers inside its hours (off by default = answers always).
+        # Turning them on routes the number through this server like caller verification does.
+        'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS answer_hours_enabled boolean DEFAULT false NOT NULL',
+        "ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS answer_hours_timezone text DEFAULT 'UTC' NOT NULL",
+        "ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS answer_hours_days integer[] DEFAULT '{0,1,2,3,4}' NOT NULL",
+        "ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS answer_hours_start text DEFAULT '09:00' NOT NULL",
+        "ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS answer_hours_end text DEFAULT '17:00' NOT NULL",
+        # The hours' time zone has NO default: it is NULL until the user chooses one. Databases that
+        # still have the first version (NOT NULL DEFAULT 'UTC') are converted once, and hours that
+        # were never switched on lose the untouched "UTC" nobody picked. (Guarded by the column still
+        # being NOT NULL, so a later "UTC" chosen on purpose is never reset.)
+        '''DO $$ BEGIN
+            IF (SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public'
+                AND table_name = 'outbound_campaigns' AND column_name = 'call_hours_timezone') = 'NO' THEN
+                ALTER TABLE public.outbound_campaigns ALTER COLUMN call_hours_timezone DROP NOT NULL;
+                ALTER TABLE public.outbound_campaigns ALTER COLUMN call_hours_timezone DROP DEFAULT;
+                UPDATE public.outbound_campaigns SET call_hours_timezone = NULL
+                    WHERE call_hours_enabled = false AND call_hours_timezone = 'UTC';
+            END IF;
+        END $$''',
+        '''DO $$ BEGIN
+            IF (SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public'
+                AND table_name = 'phone_numbers' AND column_name = 'answer_hours_timezone') = 'NO' THEN
+                ALTER TABLE public.phone_numbers ALTER COLUMN answer_hours_timezone DROP NOT NULL;
+                ALTER TABLE public.phone_numbers ALTER COLUMN answer_hours_timezone DROP DEFAULT;
+                UPDATE public.phone_numbers SET answer_hours_timezone = NULL
+                    WHERE answer_hours_enabled = false AND answer_hours_timezone = 'UTC';
+            END IF;
+        END $$''',
+        # Which NEXUS number a call used, and which campaign placed it: they pick the time zone the
+        # call's times are shown in (the campaign's, or the receptionist number's).
+        'ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS phone_number_id uuid',
+        '''CREATE TABLE IF NOT EXISTS public.campaign_calls (
+            vapi_call_id text PRIMARY KEY,
+            campaign_id uuid NOT NULL REFERENCES public.outbound_campaigns(id) ON DELETE CASCADE,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
     ]
     for stmt in statements:
         try:

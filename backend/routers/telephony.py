@@ -25,7 +25,7 @@ from models.schemas import (
     OutboundCallCreate,
     TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service, caller_verification
+from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service, caller_verification, call_hours
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -113,7 +113,7 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
         return
     numbers = (
         supabase.table("phone_numbers")
-        .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
+        .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled, answer_hours_enabled")
         .eq("user_id", user_id)
         .execute().data or []
     )
@@ -134,7 +134,7 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
         async with caller_verification.routing_lock(listed["id"]):
             n = (
                 supabase.table("phone_numbers")
-                .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
+                .select("id, vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled, answer_hours_enabled")
                 .eq("id", listed["id"]).maybe_single().execute().data
             )
             if not n:
@@ -143,10 +143,11 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
             if not vapi_phone_id:
                 continue  # not yet synced to VAPI — nothing to repoint
 
-            if n.get("caller_verification_enabled"):
-                # A verified number has no assistant in VAPI to swap: our server picks one per call
-                # and serves the fallback assistant while this flag is set (see
-                # services/caller_verification.py). Only the flag needs to follow the balance.
+            if caller_verification.server_routed(n):
+                # A server-routed number (caller verification or answering hours on) has no assistant
+                # in VAPI to swap: our server picks one per call and serves the fallback assistant
+                # while this flag is set (see services/caller_verification.py). Only the flag needs
+                # to follow the balance.
                 if bool(n.get("suspended_for_balance")) != block:
                     supabase.table("phone_numbers").update({"suspended_for_balance": block}).eq("id", n["id"]).execute()
                 continue
@@ -185,7 +186,9 @@ async def sync_inbound_routing_for_balance(user_id: str, block: bool) -> None:
 
 @router.get("/phone-numbers")
 async def list_phone_numbers(user=Depends(get_current_user)):
-    """List the account's phone numbers, newest first."""
+    """List the account's phone numbers, newest first. Each row also carries `answer_hours_state`
+    (see services/call_hours.state): whether its answering hours are on, open right now, and when
+    they next open."""
     result = (
         supabase.table("phone_numbers")
         .select("*")
@@ -193,7 +196,11 @@ async def list_phone_numbers(user=Depends(get_current_user)):
         .order("created_at", desc=True)
         .execute()
     )
-    return {"data": result.data, "error": None}
+    rows = result.data or []
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        row["answer_hours_state"] = call_hours.state(row, call_hours.NUMBER, now, if_unreadable=True)
+    return {"data": rows, "error": None}
 
 
 async def _resolve_assistant_id(user_id: str, agent_id: str | None) -> str | None:
@@ -640,7 +647,8 @@ async def create_byot_phone_number(body: PhoneNumberByotCreate, user=Depends(get
 
 @router.patch("/phone-numbers/{number_id}")
 async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depends(get_current_user)):
-    """Update a phone number's agent assignment, status and/or inbound caller verification.
+    """Update a phone number's agent assignment, status, inbound caller verification and/or
+    answering hours.
 
     When the agent changes (including unassigning it), the number's VAPI routing is updated
     first, so inbound calls reach the new agent; a VAPI failure aborts the update with a 502.
@@ -653,6 +661,12 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
     while the balance suspends a number they are too (the restore installs the current agent).
     The whole read-decide-write runs under the number's routing lock (see
     caller_verification.routing_lock), so a balance sync cannot interleave with it.
+
+    answer_hours_* (services/call_hours.py) limit when the receptionist answers. Switching
+    answer_hours_enabled on routes the number through this server exactly like verification does
+    (same 503/400 refusals, needs only the voice service key and a public URL); the other hours
+    fields are validated as merged over the stored ones (400 with a message) and, on their own,
+    change nothing in the voice service. A number stays server-routed while either setting is on.
     """
     owner_id = resolve_owner_id(user["user_id"])
     try:
@@ -676,50 +690,75 @@ async def update_phone_number(number_id: str, body: PhoneNumberUpdate, user=Depe
         return await _apply_phone_number_update(number_id, owner_id, updates)
 
 
+def reason_if_unreachable(verification: bool) -> str:
+    """The customer-facing reason when the voice service could not reach this server."""
+    return caller_verification.UNAVAILABLE_REASON if verification else caller_verification.HOURS_UNAVAILABLE_REASON
+
+
 async def _apply_phone_number_update(number_id: str, owner_id: str, updates: dict) -> dict:
     """The body of update_phone_number, run under the number's routing lock."""
-    toggling = "caller_verification_enabled" in updates
+    # Two settings make a number server-routed (VAPI asks this server on every call): caller
+    # verification and answering hours. A flag key in the request is a "toggle" of that routing.
+    hours_touched = call_hours.touched(call_hours.NUMBER, updates)
+    toggling = "caller_verification_enabled" in updates or "answer_hours_enabled" in updates
+    # What the REQUEST asked for (validation below merges the stored hours into `updates`, which
+    # would make a settings-only change look like a switch-on for a number that already has hours on).
+    verify_turning_on = bool(updates.get("caller_verification_enabled"))
+    hours_turning_on = bool(updates.get("answer_hours_enabled"))
     existing = None
-    if toggling or ("agent_id" in updates and settings.vapi_api_key):
+    if toggling or hours_touched or ("agent_id" in updates and settings.vapi_api_key):
         existing = (
             supabase.table("phone_numbers")
-            .select("vapi_phone_id, agent_id, suspended_for_balance, caller_verification_enabled")
+            .select("*")
             .eq("id", number_id)
             .eq("user_id", owner_id)
             .maybe_single()
             .execute()
         ).data
-    if toggling and not existing:
+    if (toggling or hours_touched) and not existing:
         raise HTTPException(status_code=404, detail="Phone number not found")
+    if hours_touched:
+        # Validate the hours as they will be once stored (the request merged over what is stored)
+        # and store them normalised.
+        try:
+            updates.update(call_hours.validate(call_hours.NUMBER, existing, updates))
+        except call_hours.HoursError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     # Only numbers that were ever synced to VAPI have anything to re-route there.
     vapi_phone_id = existing.get("vapi_phone_id") if existing else None
-    # Whether verification is on once this request is applied.
-    verify_after = (
-        bool(updates["caller_verification_enabled"]) if toggling
-        else bool(existing and existing.get("caller_verification_enabled"))
-    )
+    # Whether the number is server-routed once this request is applied, and whether it was before.
+    route_after = caller_verification.server_routed({**(existing or {}), **updates})
+    route_before = caller_verification.server_routed(existing)
 
     # What VAPI must be told so the number's routing matches its new state (None = nothing).
     vapi_update: dict | None = None
-    if toggling and verify_after:
-        available, reason = caller_verification.availability()
-        if not available:
-            # The customer only sees a generic reason; the operator needs to know which setting.
-            logger.warning("Caller verification cannot be switched on for number %s: missing %s",
-                           number_id, ", ".join(caller_verification.missing_settings()))
-            raise HTTPException(status_code=503, detail=reason)
-        if not vapi_phone_id:
-            raise HTTPException(status_code=400, detail="This number isn't connected to the voice service yet.")
-        # Never point a line at a server the voice service cannot reach: it would hang up every
-        # call on the number. (The reason is already in the server log.)
-        reachable, _why = await caller_verification.check_reachable()
-        if not reachable:
-            raise HTTPException(status_code=503, detail=caller_verification.UNAVAILABLE_REASON)
-        if not settings.vapi_webhook_secret:
-            logger.warning(
-                "Caller verification switched on for number %s with no VAPI_WEBHOOK_SECRET set: the routing "
-                "endpoint (/webhooks/vapi/inbound) accepts unauthenticated requests. Set the secret.", number_id)
-        vapi_update = caller_verification.verified_routing_payload()
+    if toggling and route_after:
+        # Switching a setting off while the other still routes the number needs nothing in VAPI;
+        # only a number that starts (or is explicitly re-)routed is pushed.
+        if verify_turning_on or hours_turning_on or not route_before:
+            if verify_turning_on:
+                available, reason = caller_verification.availability()
+                missing = caller_verification.missing_settings()
+            else:
+                available, reason = caller_verification.routing_availability()
+                missing = []
+            if not available:
+                # The customer only sees a generic reason; the operator needs to know which setting.
+                logger.warning("Server routing cannot be switched on for number %s: missing %s",
+                               number_id, ", ".join(missing) or "VAPI_API_KEY / PUBLIC_API_URL")
+                raise HTTPException(status_code=503, detail=reason)
+            if not vapi_phone_id:
+                raise HTTPException(status_code=400, detail="This number isn't connected to the voice service yet.")
+            # Never point a line at a server the voice service cannot reach: it would hang up every
+            # call on the number. (The reason is already in the server log.)
+            reachable, _why = await caller_verification.check_reachable()
+            if not reachable:
+                raise HTTPException(status_code=503, detail=reason_if_unreachable(verify_turning_on))
+            if not settings.vapi_webhook_secret:
+                logger.warning(
+                    "Server routing switched on for number %s with no VAPI_WEBHOOK_SECRET set: the routing "
+                    "endpoint (/webhooks/vapi/inbound) accepts unauthenticated requests. Set the secret.", number_id)
+            vapi_update = caller_verification.verified_routing_payload()
     elif toggling:
         # Turning it off: the number goes back to a fixed assistant. A number the balance has
         # suspended gets the shared fallback assistant, never its real agent.
@@ -732,7 +771,7 @@ async def _apply_phone_number_update(number_id: str, owner_id: str, updates: dic
                 new_agent = updates["agent_id"] if "agent_id" in updates else existing.get("agent_id")
                 assistant_id = await _resolve_assistant_id(owner_id, new_agent)
             vapi_update = {"assistantId": assistant_id}
-    elif "agent_id" in updates and vapi_phone_id and not verify_after and not existing.get("suspended_for_balance"):
+    elif "agent_id" in updates and vapi_phone_id and not route_after and not existing.get("suspended_for_balance"):
         # Mirror the agent change onto the VAPI phone number. An agent without a
         # vapi_assistant_id leaves the payload empty: there is no assistantId to push.
         # (A balance-suspended number keeps the shared fallback assistant: only the database
@@ -832,6 +871,16 @@ async def caller_verification_status(user=Depends(get_current_user)):
     """Whether this server can run inbound caller verification at all. When `available` is
     false the toggle cannot be turned on and `reason` says so in customer-safe words."""
     available, reason = caller_verification.availability()
+    return {"data": {"available": available, "reason": reason}, "error": None}
+
+
+@router.get("/answer-hours/status")
+async def answer_hours_status(user=Depends(get_current_user)):
+    """Whether this server can run answering hours at all (they route the number's calls through
+    this server, which needs the voice service key and a public URL; the caller-lookup credentials
+    are not needed). When `available` is false the setting cannot be switched on and `reason` says
+    so in customer-safe words."""
+    available, reason = caller_verification.routing_availability()
     return {"data": {"available": available, "reason": reason}, "error": None}
 
 
@@ -991,6 +1040,15 @@ def _enrich_campaign_progress(user_id: str, campaigns: list[dict]) -> None:
         )
 
 
+def _attach_hours_state(campaigns: list[dict]) -> None:
+    """Give each campaign a `call_hours_state` (see services/call_hours.state): whether its calling
+    hours are on, open right now, and when they next open. An unreadable setting counts as closed,
+    the safe side for a dialer."""
+    now = datetime.now(timezone.utc)
+    for camp in campaigns:
+        camp["call_hours_state"] = call_hours.state(camp, call_hours.CAMPAIGN, now, if_unreadable=False)
+
+
 @router.get("/campaigns")
 async def list_campaigns(user=Depends(get_current_user)):
     """List the account's outbound campaigns, newest first, each with live
@@ -1005,6 +1063,7 @@ async def list_campaigns(user=Depends(get_current_user)):
     )
     campaigns = result.data or []
     _enrich_campaign_progress(owner_id, campaigns)
+    _attach_hours_state(campaigns)
     return {"data": campaigns, "error": None}
 
 
@@ -1015,6 +1074,10 @@ async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
     owner_id = resolve_owner_id(user["user_id"])
     row = body.model_dump()
     row["user_id"] = owner_id
+    try:
+        row.update(call_hours.validate(call_hours.CAMPAIGN, None, row))
+    except call_hours.HoursError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if body.list_id:
         contacts = (
@@ -1046,6 +1109,7 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Campaign not found")
     camp = result.data
     _enrich_campaign_progress(owner_id, [camp])
+    _attach_hours_state([camp])
     return {"data": camp, "error": None}
 
 
@@ -1056,11 +1120,31 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
     updates = body.model_dump(exclude_none=True)
     if not updates:
         return {"data": None, "error": "No fields to update"}
+    owner_id = resolve_owner_id(user["user_id"])
+    hours_touched = call_hours.touched(call_hours.CAMPAIGN, updates)
+    if hours_touched or "list_id" in updates:
+        existing = (
+            supabase.table("outbound_campaigns").select("*")
+            .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
+        ).data
+        if not existing:
+            return {"data": None, "error": None}
+        if hours_touched:
+            # Validate the hours as they will be once stored (the request merged over what is
+            # stored) and store them normalised.
+            try:
+                updates.update(call_hours.validate(call_hours.CAMPAIGN, existing, updates))
+            except call_hours.HoursError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        # dial_cursor (where a run stopped when the hours closed) only means something for the
+        # same list; with another list the next start begins at the top.
+        if "list_id" in updates and updates["list_id"] != existing.get("list_id"):
+            updates["dial_cursor"] = None
     result = (
         supabase.table("outbound_campaigns")
         .update(updates)
         .eq("id", campaign_id)
-        .eq("user_id", resolve_owner_id(user["user_id"]))
+        .eq("user_id", owner_id)
         .execute()
     )
     return {"data": result.data[0] if result.data else None, "error": None}
@@ -1083,9 +1167,15 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     Contacts are dialed in concurrent batches within this single request; a failed dial
     or a DNC-suppressed number is recorded and skipped, never aborting the run.
 
+    Calling hours: a campaign with them switched on refuses to start while closed (400, saying
+    when it opens) and stops dialing between batches if they close mid-run. A stopped run leaves
+    the campaign Paused with `dial_cursor` set to the last contact handled; starting or resuming it
+    again carries on with the contacts after that one, so nobody is called twice.
+
     Side effects: sets the campaign to Active (and refreshes contacts_count), and sends
     one DNC-suppression notification if any numbers were skipped. Returns dialed/error/
-    suppressed counts plus up to 5 sample errors and suppressed numbers.
+    suppressed counts plus up to 5 sample errors and suppressed numbers, and, when the hours
+    stopped the run, `stopped_by_hours`, how many contacts are `remaining` and `next_open_at`.
     """
     owner_id = resolve_owner_id(user["user_id"])
     campaign = (
@@ -1130,16 +1220,37 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
     if not camp.get("phone_number_id"):
         raise HTTPException(status_code=400, detail="Campaign has no phone number assigned. Edit the campaign and select a phone number to call from.")
 
-    contacts = (
+    # Calling hours: nothing is dialed while they are closed. An unreadable setting counts as
+    # closed (the safe side for a dialer).
+    if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
+        nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN)
+        when = f" It opens again {call_hours.describe_moment(nxt, camp, call_hours.CAMPAIGN)}." if nxt else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"This campaign only places calls {call_hours.describe(camp, call_hours.CAMPAIGN)}, "
+                   f"and it is closed right now.{when}",
+        )
+
+    # A stable order (by id) is what lets a run that was stopped by the calling hours carry on after
+    # the last contact it handled (dial_cursor) instead of starting over.
+    cursor = camp.get("dial_cursor")
+    contact_query = (
         supabase.table("contacts")
-        .select("name, phone")
+        .select("id, name, phone")
         .eq("user_id", owner_id)
         .eq("list_id", camp["list_id"])
         .not_.is_("phone", "null")
-        .execute()
     )
+    if cursor:
+        contact_query = contact_query.gt("id", cursor)
+    contacts = contact_query.order("id").execute()
 
     if not contacts.data:
+        if cursor:
+            # The earlier run had stopped part-way and nothing is left after it. Forget the place,
+            # so the next start dials the whole list again, and say why nothing happened now.
+            supabase.table("outbound_campaigns").update({"dial_cursor": None, "status": "Inactive"}).eq("id", campaign_id).execute()
+            raise HTTPException(status_code=400, detail="Every contact in this list has already been dialed. Start the campaign again to dial the list from the beginning.")
         raise HTTPException(status_code=400, detail="No contacts with phone numbers in the list")
 
     pn = (
@@ -1189,16 +1300,35 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
         if phone_number_id:
             call_payload["phoneNumberId"] = phone_number_id
         try:
-            await vapi_client.create_call(call_payload)
-            return {"success": True, "phone": contact["phone"]}
+            placed = await vapi_client.create_call(call_payload)
         except Exception as e:
             return {"success": False, "phone": contact["phone"], "error": str(e)}
+        # Remember which campaign placed the call: it decides the time zone the call's times are shown
+        # in once the call is logged (conversations.campaign_id). Best-effort: it must never turn a
+        # placed call into a failure.
+        call_id = placed.get("id") if isinstance(placed, dict) else None
+        if call_id:
+            try:
+                supabase.table("campaign_calls").upsert(
+                    {"vapi_call_id": str(call_id), "campaign_id": campaign_id, "user_id": owner_id},
+                    on_conflict="vapi_call_id",
+                ).execute()
+            except Exception:  # noqa: BLE001
+                logger.warning("could not record the campaign of call %s", call_id, exc_info=True)
+        return {"success": True, "phone": contact["phone"]}
 
     dialed = 0
     suppressed = []
     errors = []
     all_contacts = contacts.data
+    stopped_at = None           # index of the first contact NOT handled when the hours closed
+    last_handled = cursor       # id of the last contact handled so far (where a stopped run resumes)
     for i in range(0, len(all_contacts), CAMPAIGN_BATCH_SIZE):
+        # Checked before every batch, so a run that outlasts the hours stops at the next boundary
+        # instead of calling people after closing time.
+        if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
+            stopped_at = i
+            break
         batch = all_contacts[i:i + CAMPAIGN_BATCH_SIZE]
         # One cache read for the whole batch, so only unscreened numbers reach the provider.
         # Skipped entirely when this campaign has opted out of DNC screening.
@@ -1221,27 +1351,43 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
                 suppressed.append({"phone": r["phone"], "reason": r.get("error", "Suppressed")})
             else:
                 errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
+        last_handled = batch[-1]["id"]
 
-    # contacts_count is reset to the number of dialable contacts (those with a phone),
-    # which can be lower than the list size stored when the campaign was created.
-    supabase.table("outbound_campaigns").update({
-        "status": "Active",
-        "contacts_count": len(contacts.data),
-    }).eq("id", campaign_id).execute()
+    if stopped_at is not None and last_handled:
+        # The hours closed part-way (and something was dialed, now or in an earlier run): remember
+        # where, and park the campaign as Paused so Start/Resume carries on from there.
+        campaign_update = {"status": "Paused", "dial_cursor": last_handled}
+    elif stopped_at is not None:
+        # Closed before a single call was placed: nothing to remember, the status stays as it was.
+        campaign_update = {}
+    else:
+        # Ran to the end of the list. contacts_count is reset to the number of dialable contacts
+        # (those with a phone), which can be lower than the list size stored when the campaign
+        # was created; after a resume it is left alone, as only the remainder was loaded.
+        campaign_update = {"status": "Active", "dial_cursor": None}
+        if not cursor:
+            campaign_update["contacts_count"] = len(contacts.data)
+    if campaign_update:
+        supabase.table("outbound_campaigns").update(campaign_update).eq("id", campaign_id).execute()
 
     if suppressed:
         _notify_suppressed(owner_id, campaign_id, camp.get("name") or "Campaign", len(suppressed))
 
-    return {
-        "data": {
-            "dialed": dialed,
-            "errors": len(errors),
-            "error_details": errors[:5],
-            "suppressed": len(suppressed),
-            "suppressed_details": suppressed[:5],
-        },
-        "error": None,
+    result_data = {
+        "dialed": dialed,
+        "errors": len(errors),
+        "error_details": errors[:5],
+        "suppressed": len(suppressed),
+        "suppressed_details": suppressed[:5],
     }
+    if stopped_at is not None:
+        nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN)
+        result_data.update({
+            "stopped_by_hours": True,
+            "remaining": len(all_contacts) - stopped_at,
+            "next_open_at": nxt.strftime("%Y-%m-%dT%H:%M:%SZ") if nxt else None,
+        })
+    return {"data": result_data, "error": None}
 
 
 @router.post("/campaigns/{campaign_id}/pause")
@@ -1255,8 +1401,17 @@ async def pause_campaign(campaign_id: str, user=Depends(get_current_user)):
 @router.post("/campaigns/{campaign_id}/resume")
 async def resume_campaign(campaign_id: str, user=Depends(get_current_user)):
     """Mark the campaign Active again. Only updates the stored status; it does not
-    place any calls (use /start for that). Succeeds even if the campaign isn't found."""
-    supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", resolve_owner_id(user["user_id"])).execute()
+    place any calls (use /start for that), except for a campaign whose run was stopped by its
+    calling hours (it has a `dial_cursor`): that carries on with the contacts left, exactly like
+    /start. Succeeds even if the campaign isn't found."""
+    owner_id = resolve_owner_id(user["user_id"])
+    parked = (
+        supabase.table("outbound_campaigns").select("dial_cursor")
+        .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
+    ).data
+    if parked and parked.get("dial_cursor"):
+        return await start_campaign(campaign_id, user)
+    supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", owner_id).execute()
     return {"data": {"status": "Active"}, "error": None}
 
 
@@ -1310,7 +1465,7 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
         async with caller_verification.routing_lock(phone_number_id):
             phone = (
                 supabase.table("phone_numbers")
-                .select("vapi_phone_id, caller_verification_enabled, suspended_for_balance")
+                .select("vapi_phone_id, caller_verification_enabled, answer_hours_enabled, suspended_for_balance")
                 .eq("id", phone_number_id)
                 .eq("user_id", owner_id)
                 .maybe_single()
@@ -1318,11 +1473,11 @@ async def create_inbound_queue(body: InboundQueueCreate, user=Depends(get_curren
             )
             if not phone.data or not phone.data.get("vapi_phone_id"):
                 raise HTTPException(status_code=400, detail="Phone number not found or not provisioned")
-            # A number with caller verification on has no fixed assistant in VAPI (our server picks
-            # the agent per call from phone_numbers.agent_id), and a balance-suspended number keeps
-            # the shared fallback assistant until the restore installs this agent: in both cases
-            # only the local row is updated.
-            if not phone.data.get("caller_verification_enabled") and not phone.data.get("suspended_for_balance"):
+            # A server-routed number (caller verification or answering hours on) has no fixed
+            # assistant in VAPI (our server picks the agent per call from phone_numbers.agent_id),
+            # and a balance-suspended number keeps the shared fallback assistant until the restore
+            # installs this agent: in both cases only the local row is updated.
+            if not caller_verification.server_routed(phone.data) and not phone.data.get("suspended_for_balance"):
                 try:
                     await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": vapi_assistant_id})
                 except Exception as e:
@@ -1405,14 +1560,14 @@ async def update_inbound_queue(queue_id: str, body: InboundQueueUpdate, user=Dep
         pn_id = updates.get("phone_number_id") or (existing.data.get("phone_number_id") if existing.data else None)
         if agent_id and pn_id:
             async with caller_verification.routing_lock(pn_id):
-                phone = supabase.table("phone_numbers").select("vapi_phone_id, caller_verification_enabled, suspended_for_balance").eq("id", pn_id).eq("user_id", owner_id).maybe_single().execute()
+                phone = supabase.table("phone_numbers").select("vapi_phone_id, caller_verification_enabled, answer_hours_enabled, suspended_for_balance").eq("id", pn_id).eq("user_id", owner_id).maybe_single().execute()
                 agent = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", agent_id).eq("user_id", owner_id).maybe_single().execute()
                 vapi_phone_id = phone.data.get("vapi_phone_id") if phone.data else None
                 vapi_assistant_id = agent.data.get("vapi_assistant_id") if agent.data else None
-                # With caller verification on there is no fixed assistant to push: the agent is
-                # looked up per call from phone_numbers.agent_id, updated just below. A
-                # balance-suspended number keeps the fallback assistant until the restore.
-                verified = bool(phone.data and phone.data.get("caller_verification_enabled"))
+                # With caller verification or answering hours on there is no fixed assistant to
+                # push: the agent is looked up per call from phone_numbers.agent_id, updated just
+                # below. A balance-suspended number keeps the fallback assistant until the restore.
+                verified = caller_verification.server_routed(phone.data)
                 suspended = bool(phone.data and phone.data.get("suspended_for_balance"))
                 if vapi_phone_id and vapi_assistant_id and not verified and not suspended:
                     try:
@@ -1456,16 +1611,17 @@ async def delete_inbound_queue(queue_id: str, user=Depends(get_current_user)):
         async with caller_verification.routing_lock(phone_number_id):
             phone = (
                 supabase.table("phone_numbers")
-                .select("vapi_phone_id, caller_verification_enabled, suspended_for_balance")
+                .select("vapi_phone_id, caller_verification_enabled, answer_hours_enabled, suspended_for_balance")
                 .eq("id", phone_number_id)
                 .eq("user_id", owner_id)
                 .maybe_single()
                 .execute()
             )
-            # A verified number has no assistant in VAPI to clear, and a balance-suspended one keeps
-            # the fallback assistant (so callers still hear why); dropping agent_id below is enough.
+            # A server-routed number has no assistant in VAPI to clear, and a balance-suspended one
+            # keeps the fallback assistant (so callers still hear why); dropping agent_id below is
+            # enough.
             if (phone.data and phone.data.get("vapi_phone_id") and settings.vapi_api_key
-                    and not phone.data.get("caller_verification_enabled")
+                    and not caller_verification.server_routed(phone.data)
                     and not phone.data.get("suspended_for_balance")):
                 try:
                     await vapi_client.update_phone_number(phone.data["vapi_phone_id"], {"assistantId": None})

@@ -164,6 +164,37 @@ def _extract_phone_number_id(payload: dict) -> str | None:
     )
 
 
+def _call_attribution(payload: dict, user_id: str | None) -> dict:
+    """What ties a call to the settings that decide its time zone: `phone_number_id` (the NEXUS number
+    it used, found by VAPI's phone id) and `campaign_id` (the campaign that dialed it, recorded in
+    campaign_calls when the call was placed). Only the keys that are found are returned, so merging
+    this into a row never blanks anything. Best-effort: a lookup problem must never stop a call from
+    being logged."""
+    out: dict = {}
+    if not user_id:
+        return out
+    try:
+        vapi_phone_id = _extract_phone_number_id(payload)
+        if vapi_phone_id:
+            rows = (
+                supabase.table("phone_numbers").select("id")
+                .eq("vapi_phone_id", vapi_phone_id).eq("user_id", user_id).limit(1).execute().data
+            )
+            if rows:
+                out["phone_number_id"] = rows[0]["id"]
+        call_id = _extract_call_id(payload)
+        if call_id:
+            rows = (
+                supabase.table("campaign_calls").select("campaign_id")
+                .eq("vapi_call_id", call_id).eq("user_id", user_id).limit(1).execute().data
+            )
+            if rows:
+                out["campaign_id"] = rows[0]["campaign_id"]
+    except Exception:  # noqa: BLE001
+        logger.warning("could not attribute call %s to a number/campaign", _extract_call_id(payload), exc_info=True)
+    return out
+
+
 def is_routing_refusal(ended_reason: str | None) -> bool:
     """True when VAPI ended a call at the routing step, before any assistant started: our own
     refusal of a caller (caller verification) or a failed/invalid routing request. Such a call
@@ -430,6 +461,8 @@ def import_vapi_call(call: dict, user_id: str, agent_id: str | None = None) -> s
         dest = _extract_transfer_destination(payload)
         if dest:
             row["transferred_to"] = dest
+    # Which number/campaign the call belongs to (decides the time zone its times are shown in).
+    row.update(_call_attribution(payload, user_id))
 
     # Upsert keyed on vapi_call_id: update the row if a webhook or an earlier sync
     # already created it, otherwise insert a fully linked new one.
@@ -504,6 +537,7 @@ def _new_conversation_base(payload: dict, user_id: str, agent_id: str | None = N
             row["agent_id"] = agent_row.data[0]["id"]
     if agent_id and "agent_id" not in row:
         row["agent_id"] = agent_id
+    row.update(_call_attribution(payload, user_id))
     # Exact phone-string match against this user's own contacts only.
     if phone:
         contact = (
@@ -629,6 +663,8 @@ async def _handle_call_ended(payload: dict):
             user_id, agent_hint = ours["user_id"], ours.get("agent_id")
 
     if existing.data:
+        # A row made before the call was attributed (or before this existed) gets it now.
+        updates.update(_call_attribution(payload, user_id))
         supabase.table("conversations").update(updates).eq("vapi_call_id", vapi_call_id).execute()
         logger.info(f"call-ended updated: {vapi_call_id}")
         conv_id = existing.data[0]["id"]

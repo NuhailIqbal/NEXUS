@@ -20,6 +20,7 @@ import {
 import { api } from "@/services/api";
 import CallAudioPlayer, { CallAudioPlayerHandle } from "@/components/conversations/CallAudioPlayer";
 import CallTranscript, { TranscriptMessage } from "@/components/conversations/CallTranscript";
+import { formatInZone } from "@/lib/timeZone";
 
 type CallLog = {
   id: string;
@@ -27,6 +28,9 @@ type CallLog = {
   duration?: string;
   duration_seconds?: number;
   call_time?: string;
+  // The time zone the user chose for what handled this call (the campaign's / the receptionist number's
+  // hours): every time shown for the call is in it. Null when none was chosen (the viewer's zone is used).
+  display_timezone?: string | null;
   phone?: string;
   contact_name?: string;
   agent_name?: string;
@@ -279,7 +283,7 @@ const InboundLogs = () => {
                       {c.duration || (c.duration_seconds ? `${c.duration_seconds}s` : "—")}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-center text-muted-foreground">
-                      {c.call_time ? new Date(c.call_time).toLocaleString() : "—"}
+                      {formatInZone(c.call_time, c.display_timezone)}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <button
@@ -315,7 +319,7 @@ const InboundLogs = () => {
               Call Details
             </DialogTitle>
             <DialogDescription>
-              {detail?.contact_name || detail?.phone || "Unknown caller"} &bull; {detail?.call_time ? new Date(detail.call_time).toLocaleString() : ""}
+              {detail?.contact_name || detail?.phone || "Unknown caller"} &bull; {detail?.call_time ? formatInZone(detail.call_time, detail.display_timezone) : ""}
             </DialogDescription>
           </DialogHeader>
 

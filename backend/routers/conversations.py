@@ -13,7 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_current_user
 from database import supabase
 from typing import Optional
-from services import vapi_client
+from services import call_hours, vapi_client
+from services.calendar_service import valid_timezone
 from routers.webhooks import import_vapi_call, is_routing_refusal
 from services.caller_verification import answered_calls
 from services.vapi_sync import _is_ended
@@ -22,6 +23,46 @@ from services.call_events import get_hits
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
+
+
+def attach_display_timezones(owner_id: str, rows: list[dict]) -> None:
+    """Give each conversation a `display_timezone`: the time zone its times must be shown in, which is
+    the one the USER chose for what handled the call, or None when they chose none (the page then falls
+    back to the viewer's own zone and says which).
+
+      inbound call   -> the answering-hours time zone of the NEXUS number it came in on
+      outbound call  -> the calling-hours time zone of the campaign that dialed it, else that of the
+                        callback that placed it (callback settings)
+
+    Calls logged before the number/campaign was recorded have neither and get None."""
+    campaign_ids = {r["campaign_id"] for r in rows if r.get("direction") == "outbound" and r.get("campaign_id")}
+    number_ids = {r["phone_number_id"] for r in rows if r.get("direction") == "inbound" and r.get("phone_number_id")}
+    callback_call_ids = {r["vapi_call_id"] for r in rows
+                         if r.get("direction") == "outbound" and not r.get("campaign_id") and r.get("vapi_call_id")}
+
+    campaign_zone: dict = {}
+    if campaign_ids:
+        found = (supabase.table("outbound_campaigns").select("id, call_hours_timezone")
+                 .eq("user_id", owner_id).in_("id", list(campaign_ids)).execute().data or [])
+        campaign_zone = {c["id"]: call_hours.chosen_timezone(c, call_hours.CAMPAIGN) for c in found}
+    number_zone: dict = {}
+    if number_ids:
+        found = (supabase.table("phone_numbers").select("id, answer_hours_timezone")
+                 .eq("user_id", owner_id).in_("id", list(number_ids)).execute().data or [])
+        number_zone = {n["id"]: call_hours.chosen_timezone(n, call_hours.NUMBER) for n in found}
+    callback_zone: dict = {}
+    if callback_call_ids:
+        found = (supabase.table("callbacks").select("placed_call_id, timezone")
+                 .eq("user_id", owner_id).in_("placed_call_id", list(callback_call_ids)).execute().data or [])
+        callback_zone = {c["placed_call_id"]: c["timezone"] for c in found if c.get("timezone") and valid_timezone(c["timezone"])}
+
+    for r in rows:
+        zone = None
+        if r.get("direction") == "inbound":
+            zone = number_zone.get(r.get("phone_number_id"))
+        elif r.get("direction") == "outbound":
+            zone = campaign_zone.get(r.get("campaign_id")) if r.get("campaign_id") else callback_zone.get(r.get("vapi_call_id"))
+        r["display_timezone"] = zone
 
 
 @router.get("")
@@ -113,6 +154,7 @@ async def list_conversations(
         agent_names = {a["id"]: a["name"] for a in (agents.data or [])}
     for r in rows:
         r["agent_name"] = agent_names.get(r.get("agent_id"), "")
+    attach_display_timezones(owner_id, rows)
 
     return {"data": rows, "error": None, "meta": {"count": result.count}}
 
@@ -250,6 +292,7 @@ async def get_conversation(conversation_id: str, user=Depends(get_current_user))
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    attach_display_timezones(resolve_owner_id(user["user_id"]), [result.data])
     return {"data": result.data, "error": None}
 
 

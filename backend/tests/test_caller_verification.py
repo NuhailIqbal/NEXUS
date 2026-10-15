@@ -1366,7 +1366,12 @@ class SchemaTests(unittest.TestCase):
         row = supabase.table("phone_numbers").insert({"user_id": user, "number": "+15550004321"}).execute().data[0]
         try:
             H.sql("DROP TABLE IF EXISTS public.inbound_call_screenings")
-            H.sql("ALTER TABLE public.phone_numbers DROP COLUMN caller_verification_enabled")
+            # The answering-hours columns come after the flag in the table; dropping them too keeps the
+            # column order what a fresh database has once the migration has re-added everything
+            # (a changed order would invalidate other connections' cached INSERT ... RETURNING * plans).
+            H.sql("ALTER TABLE public.phone_numbers DROP COLUMN caller_verification_enabled, "
+                  "DROP COLUMN answer_hours_enabled, DROP COLUMN answer_hours_timezone, "
+                  "DROP COLUMN answer_hours_days, DROP COLUMN answer_hours_start, DROP COLUMN answer_hours_end")
             self.assertEqual(self.column(), [])
             migrate.bootstrap_schema()
             migrate.bootstrap_schema()  # twice: must be harmless

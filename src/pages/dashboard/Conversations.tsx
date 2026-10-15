@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, ArrowDown, ArrowUpDown, CalendarIcon, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Eye, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { format } from "date-fns";
 import { api } from "@/services/api";
+import { formatInZone, formatTimeInZone } from "@/lib/timeZone";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -44,6 +45,9 @@ type Conversation = {
   qualified: boolean;
   transferred_to: string | null;
   call_time: string;
+  // The time zone the user chose for what handled this call (campaign / receptionist number hours);
+  // null when none was chosen, and then times are shown in the viewer's own zone.
+  display_timezone?: string | null;
   transcript: string | null;
   transcript_messages: TranscriptMessage[] | null;
   recording_url: string | null;
@@ -81,12 +85,12 @@ function textFor(c: Conversation, key: ColumnKey): string {
   return (c[key] as string) || "";
 }
 
-/** Formats an ISO timestamp for display; empty gives a dash and unparseable values are returned unchanged. */
-function formatCallTime(value: string): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return value;
-  return format(d, "MMM d, yyyy, h:mm a");
+/**
+ * Formats an ISO timestamp for display in the time zone chosen for the call (see display_timezone),
+ * with the zone's name; empty gives a dash and unparseable values are returned unchanged.
+ */
+function formatCallTime(value: string, timezone?: string | null): string {
+  return formatInZone(value, timezone);
 }
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -451,7 +455,7 @@ const Conversations = () => {
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-center text-muted-foreground">{formatCallTime(c.call_time)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-center text-muted-foreground">{formatCallTime(c.call_time, c.display_timezone)}</td>
                   <td className="px-4 py-3 text-center">
                     <button
                       onClick={() => openDetail(c)}
@@ -509,7 +513,7 @@ const Conversations = () => {
         <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Conversation · {viewing?.contact_name}</DialogTitle>
-            <DialogDescription>{viewing?.channel} · {viewing ? formatCallTime(viewing.call_time) : ""}</DialogDescription>
+            <DialogDescription>{viewing?.channel} · {viewing ? formatCallTime(viewing.call_time, viewing.display_timezone) : ""}</DialogDescription>
           </DialogHeader>
           {viewing && (
             <div className="space-y-4">
@@ -547,7 +551,7 @@ const Conversations = () => {
                       <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
                         <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">{e.label || e.event_key}</span>
                         {e.note && <span className="text-muted-foreground">{e.note}</span>}
-                        <span className="ml-auto text-muted-foreground">{format(new Date(e.created_at), "h:mm:ss a")}</span>
+                        <span className="ml-auto text-muted-foreground">{formatTimeInZone(e.created_at, viewing?.display_timezone)}</span>
                       </li>
                     ))}
                   </ul>

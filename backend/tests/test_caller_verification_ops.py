@@ -298,7 +298,7 @@ class ReconcileTests(Base):
     def setUp(self):
         super().setUp()
         # Other tests' leftovers would be re-pointed too: this sweeps every account.
-        H.sql("UPDATE public.phone_numbers SET caller_verification_enabled = false")
+        H.sql("UPDATE public.phone_numbers SET caller_verification_enabled = false, answer_hours_enabled = false")
         self.agent = make_agent(self.user)
         self.a = make_number(self.user, agent=self.agent, verify=True)
         self.b = make_number(self.user, agent=self.agent, verify=True)
@@ -339,7 +339,7 @@ class ReconcileTests(Base):
         self.assertEqual(self.pushed(), first)
 
     def test_nothing_happens_when_there_are_no_verified_numbers_and_it_does_not_even_wait(self):
-        H.sql("UPDATE public.phone_numbers SET caller_verification_enabled = false")
+        H.sql("UPDATE public.phone_numbers SET caller_verification_enabled = false, answer_hours_enabled = false")
         with patch.object(asyncio, "sleep", AsyncMock()) as sleep:
             result = run(cv.reconcile_verified_routing(retry_delays=(30, 30)))
         self.assertEqual(result, {"skipped": "no verified numbers"})

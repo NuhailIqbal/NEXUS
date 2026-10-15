@@ -394,6 +394,15 @@ class CampaignCreate(BaseModel):
     # Per-campaign opt-out of do-not-call screening; the account-wide WhitelistData
     # integration still decides whether screening is possible at all.
     dnc_screening_enabled: bool = True
+    # Calling hours: when on, the campaign only places calls on these days between these times
+    # (24-hour "HH:MM", in `call_hours_timezone`). The router validates and normalises them
+    # (services/call_hours.py); the defaults match the column defaults.
+    call_hours_enabled: StrictBool = False
+    # No default time zone: required (by the router) once the hours are on, otherwise left unset.
+    call_hours_timezone: Optional[str] = None
+    call_hours_days: list[int] = [0, 1, 2, 3, 4]    # Monday = 0
+    call_hours_start: str = "09:00"
+    call_hours_end: str = "17:00"
 
 
 class CampaignUpdate(BaseModel):
@@ -405,6 +414,12 @@ class CampaignUpdate(BaseModel):
     # Free-text state; the pause and resume endpoints set "Paused" and "Active".
     status: Optional[str] = None
     dnc_screening_enabled: Optional[bool] = None
+    # Calling hours (see CampaignCreate); any subset may be sent, the rest keep their stored value.
+    call_hours_enabled: Optional[StrictBool] = None
+    call_hours_timezone: Optional[str] = None
+    call_hours_days: Optional[list[int]] = None
+    call_hours_start: Optional[str] = None
+    call_hours_end: Optional[str] = None
 
 
 # ── Inbound Queues ──
@@ -467,7 +482,7 @@ class PhoneNumberCreate(BaseModel):
 
 class PhoneNumberUpdate(BaseModel):
     """Body for PATCH /telephony/phone-numbers/{id}: assign or clear the answering agent, change
-    status, or turn inbound caller verification on or off.
+    status, turn inbound caller verification on or off, or set the number's answering hours.
 
     The router also points the number's VAPI assistant at the new agent when VAPI is configured
     and the number already has a VAPI id. Turning verification on takes the fixed assistant off
@@ -480,6 +495,14 @@ class PhoneNumberUpdate(BaseModel):
     # Omitted = leave as is. False is a real value (not dropped like None), so it turns the
     # check off.
     caller_verification_enabled: Optional[bool] = None
+    # Answering hours: when on, the number's AI receptionist only answers on these days between
+    # these times (24-hour "HH:MM", in `answer_hours_timezone`); calls outside them hear a short
+    # "we are closed" message. Any subset may be sent; the router validates the merged result.
+    answer_hours_enabled: Optional[StrictBool] = None
+    answer_hours_timezone: Optional[str] = None
+    answer_hours_days: Optional[list[int]] = None
+    answer_hours_start: Optional[str] = None
+    answer_hours_end: Optional[str] = None
 
 
 # ── BYOT (Bring Your Own Twilio) ──

@@ -2,15 +2,17 @@
  * AI Receptionist page (route /dashboard/telephony/inbound). Lists inbound queues
  * ("receptionists"), each pairing an AI agent with a phone number, and shows summary
  * stats from recent inbound calls. Each card can switch caller verification (only mobile
- * numbers reach the agent) on or off for its number. Uses api.getInboundQueues/createInboundQueue/
- * updateInboundQueue/deleteInboundQueue, getAgents, getPhoneNumbers, updatePhoneNumber,
- * getCallerVerificationStatus, getConversations and confirmPhonePurchase (Stripe checkout return).
+ * numbers reach the agent) on or off for its number, and, in its settings, the hours the receptionist
+ * answers (callers outside them are told the line is closed). Uses api.getInboundQueues/
+ * createInboundQueue/updateInboundQueue/deleteInboundQueue, getAgents, getPhoneNumbers,
+ * updatePhoneNumber, getCallerVerificationStatus, getAnswerHoursStatus, getConversations and
+ * confirmPhonePurchase (Stripe checkout return).
  */
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   PhoneIncoming, Plus, Phone, Bot, Loader2, Trash2,
   CheckCircle2, Settings as SettingsIcon,
-  Copy, Headphones, TrendingUp, Activity,
+  Copy, Headphones, TrendingUp, Activity, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +28,12 @@ import {
 } from "@/components/ui/select";
 import { CallerVerificationSwitch } from "@/components/telephony/CallerVerificationSwitch";
 import { isCallerVerificationStatus, type CallerVerificationStatus } from "@/lib/callerVerification";
+import { CallingHoursFields } from "@/components/hours/CallingHoursFields";
+import { CreateReceptionistDialog, type NewReceptionist } from "@/components/telephony/CreateReceptionistDialog";
+import {
+  NUMBER_PREFIX, defaultHours, describeNextOpen, hoursFromRow, hoursToPayload, sameHours, validateHours,
+  type CallingHours, type HoursState,
+} from "@/components/hours/callingHours";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
@@ -33,6 +41,10 @@ type Agent = { id: string; name: string; voice?: string; status: string; vapi_as
 type PhoneNumber = {
   id: string; number: string; status: string; agent_id?: string; vapi_phone_id?: string;
   caller_verification_enabled?: boolean;
+  // Answering hours (answer_hours_*) as stored, and the server's view of them right now.
+  answer_hours_enabled?: boolean;
+  answer_hours_timezone?: string;
+  answer_hours_state?: HoursState;
 };
 type Receptionist = {
   id: string;
@@ -53,6 +65,9 @@ type CallLog = {
   ai_summary?: string;
   direction?: string;
 };
+
+/** sessionStorage key holding the answering hours chosen in the create dialog across the Stripe checkout redirect. */
+const PENDING_HOURS_KEY = "nexus_pending_receptionist_hours";
 
 /** Small tile showing an icon, a headline value and a label in the stats bar. */
 function StatCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: string | number; color: string }) {
@@ -90,10 +105,11 @@ const Inbound = () => {
   // Whether the server can run caller verification at all (null until loaded), and the number
   // whose switch is mid-save (its switch is locked so a second click can't overlap the first).
   const [verifyStatus, setVerifyStatus] = useState<CallerVerificationStatus | null>(null);
+  // Whether the server can run answering hours at all (null until loaded; a failed load means "unknown", allowed).
+  const [hoursStatus, setHoursStatus] = useState<CallerVerificationStatus | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: "", agent_id: "", phone_number_id: "" });
   const [creating, setCreating] = useState(false);
 
   // Numbers not already answering inbound calls — reusable instead of buying a new one.
@@ -101,6 +117,10 @@ const Inbound = () => {
 
   const [settingsTarget, setSettingsTarget] = useState<Receptionist | null>(null);
   const [settingsForm, setSettingsForm] = useState({ name: "", agent_id: "", status: "" });
+  // The receptionist's answering hours as the dialog edits them, and as they were when it opened.
+  const [settingsHours, setSettingsHours] = useState<CallingHours>(defaultHours());
+  const [savedHours, setSavedHours] = useState<CallingHours>(defaultHours());
+  const [savingSettings, setSavingSettings] = useState(false);
 
   const agentsMap = new Map(agents.map((a) => [a.id, a]));
   const phonesMap = new Map(phones.map((p) => [p.id, p]));
@@ -111,12 +131,13 @@ const Inbound = () => {
   const fetchSeq = useRef(0);
   const fetchAll = useCallback(async () => {
     const seq = ++fetchSeq.current;
-    const [qRes, aRes, pRes, cRes, vRes] = await Promise.all([
+    const [qRes, aRes, pRes, cRes, vRes, hRes] = await Promise.all([
       api.getInboundQueues(),
       api.getAgents(),
       api.getPhoneNumbers(),
       api.getConversations("direction=inbound&limit=50"),
       api.getCallerVerificationStatus(),
+      api.getAnswerHoursStatus(),
     ]);
     if (seq !== fetchSeq.current) return;
     if (Array.isArray(qRes.data)) setReceptionists(qRes.data);
@@ -124,6 +145,7 @@ const Inbound = () => {
     if (Array.isArray(pRes.data)) setPhones(pRes.data);
     if (Array.isArray(cRes.data)) setCallLogs(cRes.data);
     if (isCallerVerificationStatus(vRes.data)) setVerifyStatus(vRes.data);
+    if (isCallerVerificationStatus(hRes.data)) setHoursStatus(hRes.data);
     setLoading(false);
   }, []);
 
@@ -153,7 +175,17 @@ const Inbound = () => {
         if (error || !data) toast.error(error || "Could not finish setting up the receptionist after payment.");
         else toast.success(`Number ${data.number || ""} purchased and receptionist created.`);
         cleanUrl();
-        fetchAll();
+        // Hours chosen before the card payment were kept for this return: put them on the new number.
+        let pending: string | null = null;
+        try { pending = sessionStorage.getItem(PENDING_HOURS_KEY); sessionStorage.removeItem(PENDING_HOURS_KEY); } catch { /* none */ }
+        if (pending && data?.id && !error) {
+          api.updatePhoneNumber(data.id, JSON.parse(pending)).then(({ error: hoursError }) => {
+            if (hoursError) toast.error(`The receptionist was created, but its answering hours were not saved: ${hoursError} You can set them in its Settings.`);
+            fetchAll();
+          });
+        } else {
+          fetchAll();
+        }
       });
     }
   }, []);
@@ -168,13 +200,15 @@ const Inbound = () => {
   const activeReceptionists = receptionists.filter((r) => r.status === "Active").length;
 
   /**
-   * Validates the create form and calls api.createInboundQueue. If the backend returns a
-   * Stripe checkout_url (low wallet balance) the browser is redirected there; otherwise
-   * the dialog is closed, the form reset and the data reloaded.
+   * Creates the receptionist the wizard (CreateReceptionistDialog) describes via
+   * api.createInboundQueue; then, when answering hours were switched on, saves them on the
+   * receptionist's number (they live on the number). If the backend returns a Stripe checkout_url
+   * (low wallet balance) the hours are kept in sessionStorage for the return from checkout (see
+   * PENDING_HOURS_KEY) and the browser is redirected there; otherwise the dialog is closed and the
+   * data reloaded.
    */
-  const handleCreate = async () => {
-    if (!createForm.name.trim()) return toast.error("Name is required");
-    if (!createForm.agent_id) return toast.error("Select an AI agent");
+  const handleCreate = async (createForm: NewReceptionist) => {
+    const createHours = createForm.hours;
     setCreating(true);
     // Reusing an existing unassigned number just reassigns it (no purchase). Otherwise
     // a new Twilio number is bought — from the wallet if it covers it, or Stripe checkout
@@ -189,6 +223,9 @@ const Inbound = () => {
     setCreating(false);
     if (error) return toast.error(error);
     if (data?.checkout_url) {
+      if (createHours.enabled) {
+        try { sessionStorage.setItem(PENDING_HOURS_KEY, JSON.stringify(hoursToPayload(createHours, NUMBER_PREFIX))); } catch { /* hours can be set in Settings later */ }
+      }
       window.location.href = data.checkout_url;
       return;
     }
@@ -197,8 +234,13 @@ const Inbound = () => {
         ? "AI Receptionist created. Existing number reassigned!"
         : "AI Receptionist created. Phone number provisioned!"
     );
+    // The receptionist exists now; the hours go on its number. If that is refused (for instance
+    // the server cannot route calls yet) the receptionist is kept and the user is told where to retry.
+    if (createHours.enabled && data?.phone_number_id) {
+      const { error: hoursError } = await api.updatePhoneNumber(data.phone_number_id, hoursToPayload(createHours, NUMBER_PREFIX));
+      if (hoursError) toast.error(`The receptionist was created, but its answering hours were not saved: ${hoursError} You can set them in its Settings.`);
+    }
     setCreateOpen(false);
-    setCreateForm({ name: "", agent_id: "", phone_number_id: "" });
     fetchAll();
   };
 
@@ -214,13 +256,34 @@ const Inbound = () => {
   const openSettings = (r: Receptionist) => {
     setSettingsTarget(r);
     setSettingsForm({ name: r.name, agent_id: r.agent_id, status: r.status });
+    const phone = r.phone_number_id ? phonesMap.get(r.phone_number_id) : undefined;
+    const hours = hoursFromRow(phone as unknown as Record<string, unknown> | undefined, NUMBER_PREFIX);
+    setSettingsHours(hours);
+    setSavedHours(hours);
   };
 
-  /** Saves name, agent and status via api.updateInboundQueue, then closes the dialog and reloads. */
+  /**
+   * Saves name, agent and status via api.updateInboundQueue, and the answering hours (stored on the
+   * receptionist's number) via api.updatePhoneNumber when they were changed, then closes the dialog
+   * and reloads. The hours go first: they are the part the server can refuse (for instance when it
+   * cannot route calls), and a refusal then leaves everything as it was.
+   */
   const saveSettings = async () => {
     if (!settingsTarget) return;
+    const phone = settingsTarget.phone_number_id ? phonesMap.get(settingsTarget.phone_number_id) : undefined;
+    const hoursChanged = !!phone && !sameHours(settingsHours, savedHours);
+    if (hoursChanged) {
+      const problem = validateHours(settingsHours);
+      if (problem) return toast.error(problem);
+    }
+    setSavingSettings(true);
+    if (hoursChanged && phone) {
+      const { error } = await api.updatePhoneNumber(phone.id, hoursToPayload(settingsHours, NUMBER_PREFIX));
+      if (error) { setSavingSettings(false); return toast.error(error); }
+    }
     const { error } = await api.updateInboundQueue(settingsTarget.id, settingsForm);
-    if (error) return toast.error(error);
+    setSavingSettings(false);
+    if (error) { fetchAll(); return toast.error(error); }
     toast.success("Receptionist updated");
     setSettingsTarget(null);
     fetchAll();
@@ -269,7 +332,7 @@ const Inbound = () => {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Receptionist</h1>
           <p className="text-sm text-muted-foreground">
-            AI agents that answer every inbound call 24/7, no hold times, instant response.
+            AI agents that answer inbound calls instantly, with no hold times: around the clock, or only during the hours you set.
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
@@ -367,6 +430,22 @@ const Inbound = () => {
                   </div>
                 )}
 
+                {/* Answering hours: shown only while they are on. */}
+                {phone?.answer_hours_state?.enabled && (
+                  <div className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span className="min-w-0">
+                      Answers {phone.answer_hours_state.summary}
+                      {" · "}
+                      {phone.answer_hours_state.open
+                        ? <span className="font-medium text-success">Open now</span>
+                        : <span className="font-medium text-warning">
+                            Closed{describeNextOpen(phone.answer_hours_state, phone.answer_hours_timezone) ? ` — opens ${describeNextOpen(phone.answer_hours_state, phone.answer_hours_timezone)}` : ""}
+                          </span>}
+                    </span>
+                  </div>
+                )}
+
                 {/* Actions */}
                 <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3">
                   <button
@@ -390,85 +469,26 @@ const Inbound = () => {
         </div>
       )}
 
-      {/* Create Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader className="text-left">
-            <DialogTitle className="flex items-center gap-2 pr-6">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                <PhoneIncoming className="h-4 w-4 text-primary" />
-              </div>
-              New AI Receptionist
-            </DialogTitle>
-            <DialogDescription>
-              Pick an AI agent and a phone number for it. Incoming calls to that number go straight to your agent.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input
-                placeholder="e.g. Front Desk, Sales Line"
-                value={createForm.name}
-                onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>AI Agent</Label>
-              <Select value={createForm.agent_id} onValueChange={(v) => setCreateForm((f) => ({ ...f, agent_id: v }))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an agent…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.filter((a) => a.vapi_assistant_id).map((a) => (
-                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Phone Number</Label>
-              <Select
-                value={createForm.phone_number_id || "__new__"}
-                onValueChange={(v) => setCreateForm((f) => ({ ...f, phone_number_id: v === "__new__" ? "" : v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__new__">Buy a new number ($3/month)</SelectItem>
-                  {availableNumbers.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.number} (existing, unused)</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {createForm.phone_number_id
-                  ? "This existing number will be reassigned to the agent above. No new purchase."
-                  : "A new number is deducted from your wallet, or paid by card if your balance is low."}
-              </p>
-            </div>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={creating}>
-              {creating
-                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Provisioning Number…</>
-                : "Create Receptionist"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Create wizard */}
+      <CreateReceptionistDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        agents={agents.filter((a) => a.vapi_assistant_id)}
+        availableNumbers={availableNumbers}
+        creating={creating}
+        hoursUnavailableReason={hoursStatus && !hoursStatus.available ? hoursStatus.reason : null}
+        onCreate={handleCreate}
+      />
 
       {/* Settings Dialog */}
-      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && !savingSettings && setSettingsTarget(null)}>
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
           <DialogHeader className="text-left">
             <DialogTitle className="flex items-center gap-2 pr-6">
               <SettingsIcon className="h-5 w-5 shrink-0 text-primary" />
               Receptionist Settings
             </DialogTitle>
-            <DialogDescription>Update name, agent, and status.</DialogDescription>
+            <DialogDescription>Update name, agent, status, and when it answers.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -496,10 +516,27 @@ const Inbound = () => {
                 </SelectContent>
               </Select>
             </div>
+            {settingsTarget?.phone_number_id ? (
+              <CallingHoursFields
+                idPrefix="receptionist-hours"
+                value={settingsHours}
+                onChange={setSettingsHours}
+                disabled={savingSettings}
+                switchLabel="Only answer during set hours"
+                description="Off: the receptionist answers every call, at any time. On: it answers only on these days, between these times. Callers outside them hear that you are closed and the call ends."
+                startLabel="Answers from"
+                endLabel="Answers until"
+                unavailableReason={hoursStatus && !hoursStatus.available ? hoursStatus.reason : null}
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">Answering hours can be set once this receptionist has a phone number.</p>
+            )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>
-            <Button onClick={saveSettings}>Save Changes</Button>
+            <Button variant="outline" onClick={() => setSettingsTarget(null)} disabled={savingSettings}>Cancel</Button>
+            <Button onClick={saveSettings} disabled={savingSettings}>
+              {savingSettings && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Changes
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

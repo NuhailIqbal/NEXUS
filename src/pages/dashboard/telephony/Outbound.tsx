@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import {
   Plus, PhoneOutgoing, Play, Pause as PauseIcon,
   CheckCircle2, XCircle, Loader2, AlertTriangle,
-  Users, TrendingUp, Radio, BarChart2, Bot, Phone,
+  Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,11 @@ import {
 } from "@/components/ui/select";
 import { CreateCampaignDialog } from "@/components/telephony/CreateCampaignDialog";
 import { RowActions } from "@/components/dashboard/RowActions";
+import { CallingHoursFields } from "@/components/hours/CallingHoursFields";
+import {
+  CAMPAIGN_PREFIX, defaultHours, describeNextOpen, hoursFromRow, hoursToPayload, validateHours,
+  type CallingHours, type HoursState,
+} from "@/components/hours/callingHours";
 import { api } from "@/services/api";
 import { toast } from "sonner";
 
@@ -38,6 +43,12 @@ type Campaign = {
   phone_number_id: string | null;
   contacts_count: number;
   completed_count: number;
+  // Calling hours (call_hours_*) as stored, the server's view of them right now, and where a run
+  // that the hours stopped will carry on (set while the campaign waits for the next opening).
+  call_hours_enabled?: boolean;
+  call_hours_timezone?: string;
+  call_hours_state?: HoursState;
+  dial_cursor?: string | null;
 };
 
 /** One row of the pre-launch checklist dialog. */
@@ -62,6 +73,20 @@ function StatCard({ icon: Icon, label, value, color }: { icon: any; label: strin
   );
 }
 
+/**
+ * The pre-launch row for the calling hours: fails (and so blocks Launch) while a campaign with
+ * hours switched on is closed, passes otherwise. Based on the state the server sent with the list;
+ * the server checks again when the campaign starts.
+ */
+function hoursCheck(c: Campaign): CheckItem {
+  const label = "Inside calling hours";
+  const st = c.call_hours_state;
+  if (!st?.enabled) return { label, status: "pass", detail: "No calling-hours limit" };
+  if (st.open) return { label, status: "pass", detail: `${st.summary} ✓` };
+  const next = describeNextOpen(st, c.call_hours_timezone);
+  return { label, status: "fail", detail: `Closed right now${next ? `, opens ${next}` : ""}` };
+}
+
 /** Badge classes per displayed status; unknown statuses fall back to Inactive. */
 const STATUS_COLOR: Record<string, string> = {
   Active: "bg-green-500/15 text-green-600 border-green-500/20",
@@ -84,6 +109,7 @@ const Outbound = () => {
 
   const [settingsTarget, setSettingsTarget] = useState<Campaign | null>(null);
   const [settingsForm, setSettingsForm] = useState<{ name: string; agent_id: string; status: string }>({ name: "", agent_id: "", status: "" });
+  const [settingsHours, setSettingsHours] = useState<CallingHours>(defaultHours());
 
   const [preflightTarget, setPreflightTarget] = useState<Campaign | null>(null);
   const [checks, setChecks] = useState<CheckItem[]>([]);
@@ -151,6 +177,7 @@ const Outbound = () => {
       { label: "Agent assigned & synced", status: "loading" },
       { label: "Phone number assigned & active", status: "loading" },
       { label: "Contact list has dialable contacts", status: "loading" },
+      hoursCheck(c),
     ];
     setChecks(init);
     const results: CheckItem[] = [...init];
@@ -204,6 +231,21 @@ const Outbound = () => {
     const errors: number = (data as any)?.errors ?? 0;
     const suppressed: number = (data as any)?.suppressed ?? 0;
     const details: { phone: string; error: string }[] = (data as any)?.error_details ?? [];
+    // The calling hours closed part-way: say how far it got and when the rest can be dialed.
+    const stop = data as { stopped_by_hours?: boolean; remaining?: number; next_open_at?: string | null } | null;
+    if (stop?.stopped_by_hours) {
+      const remaining = stop.remaining ?? 0;
+      const next = describeNextOpen(
+        { enabled: true, open: false, next_open_at: stop.next_open_at ?? null, summary: null },
+        preflightTarget.call_hours_timezone,
+      );
+      toast.warning(
+        `Calling hours ended: ${dialed} called, ${remaining} contact${remaining !== 1 ? "s" : ""} left.` +
+        (next ? ` Start the campaign again from ${next} to carry on where it stopped.` : "")
+      );
+      fetchCampaigns();
+      return;
+    }
     // Suppressed numbers aren't failures — they were deliberately skipped by DNC screening,
     // so they're reported separately from VAPI errors.
     const skipped = suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "";
@@ -218,12 +260,18 @@ const Outbound = () => {
   const openSettings = (c: Campaign) => {
     setSettingsTarget(c);
     setSettingsForm({ name: c.name, agent_id: c.agent_id, status: c.status });
+    setSettingsHours(hoursFromRow(c as unknown as Record<string, unknown>, CAMPAIGN_PREFIX));
   };
 
   /** PATCHes name, agent and status of the campaign being edited. */
   const saveSettings = async () => {
     if (!settingsTarget) return;
-    const { error } = await api.updateCampaign(settingsTarget.id, settingsForm);
+    const problem = validateHours(settingsHours);
+    if (problem) return toast.error(problem);
+    const { error } = await api.updateCampaign(settingsTarget.id, {
+      ...settingsForm,
+      ...hoursToPayload(settingsHours, CAMPAIGN_PREFIX),
+    });
     if (error) return toast.error(error);
     toast.success("Campaign updated");
     setSettingsTarget(null);
@@ -316,6 +364,27 @@ const Outbound = () => {
                   </div>
                 )}
 
+                {/* Calling hours */}
+                {c.call_hours_state?.enabled && (
+                  <div className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span className="min-w-0">
+                      {c.call_hours_state.summary}
+                      {" · "}
+                      {c.call_hours_state.open
+                        ? <span className="font-medium text-success">Open now</span>
+                        : <span className="font-medium text-warning">
+                            Closed{describeNextOpen(c.call_hours_state, c.call_hours_timezone) ? ` — opens ${describeNextOpen(c.call_hours_state, c.call_hours_timezone)}` : ""}
+                          </span>}
+                    </span>
+                  </div>
+                )}
+                {c.dial_cursor && !isCompleted && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Stopped partway through its list. Start continues with the contacts that are left.
+                  </p>
+                )}
+
                 {/* Progress */}
                 <div className="mt-4">
                   <div className="flex items-center justify-between text-xs mb-1">
@@ -360,6 +429,7 @@ const Outbound = () => {
             list_id: d.listId,
             phone_number_id: d.phoneNumberId || null,
             dnc_screening_enabled: d.dncScreeningEnabled,
+            ...hoursToPayload(d.hours, CAMPAIGN_PREFIX),
           });
           if (error) return toast.error(error);
           toast.success(`Campaign "${d.name}" created`);
@@ -411,7 +481,7 @@ const Outbound = () => {
 
       {/* Settings Dialog */}
       <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Campaign Settings</DialogTitle>
             <DialogDescription>Update campaign details.</DialogDescription>
@@ -445,6 +515,15 @@ const Outbound = () => {
                 </SelectContent>
               </Select>
             </div>
+            <CallingHoursFields
+              idPrefix="campaign-settings-hours"
+              value={settingsHours}
+              onChange={setSettingsHours}
+              switchLabel="Only call during set hours"
+              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times, and a run that is still going when they end stops."
+              startLabel="Calls start"
+              endLabel="Calls stop"
+            />
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>

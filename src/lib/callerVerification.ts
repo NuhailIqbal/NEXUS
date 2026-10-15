@@ -48,6 +48,10 @@ export function describeScreening(row: Pick<CallerVerificationLogRow, "decision"
       return { label: "Number can't be checked", refused };
     case "lookup_unavailable":
       return { label: "Check unavailable", refused };
+    case "outside_hours":
+      return { label: "Outside answering hours", refused };
+    case "within_hours":
+      return { label: "Within answering hours", refused };
     default:
       return { label: row.reason.replace(/_/g, " "), refused };
   }

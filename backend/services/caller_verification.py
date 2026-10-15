@@ -8,10 +8,16 @@ caller_verification_enabled) the number has NO assistant in VAPI; instead VAPI s
     {"assistantId": "<agent>"}   the call is answered by the number's agent
     {"error": "<sentence>"}      the agent never starts; VAPI speaks the sentence and ends the call
 
-The decision, in order: the account's balance suspension (same rule as static numbers: the shared
-"unavailable" assistant answers), an agent must be assigned, then the caller is looked up
-(services/caller_lookup.py) and refused unless the number is a mobile line. VAPI cannot leave a
-call literally unanswered; the sentence above is the shortest way it offers to turn one away.
+The decision, in order: the number's answering hours (outside them the caller is told we are closed),
+the account's balance suspension (same rule as static numbers: the shared "unavailable" assistant
+answers), an agent must be assigned, then the caller is looked up (services/caller_lookup.py) and
+refused unless the number is a mobile line. VAPI cannot leave a call literally unanswered; the
+sentence above is the shortest way it offers to turn one away.
+
+Answering hours (phone_numbers.answer_hours_*, services/call_hours.py) use the same per-call routing:
+a number with hours switched on is routed through this server even when caller verification is off
+(`server_routed`), and then only the hours rule applies. So everything below that is said about "a
+verified number" holds for any server-routed number.
 
 Fail-open rules, because refusing a real customer is worse than letting a bad call through:
 a lookup that gives no verdict (provider down, timeout, bad key), a caller id that cannot be
@@ -33,17 +39,21 @@ import httpx
 
 from config import settings
 from database import supabase
-from services import caller_lookup, vapi_client
+from services import call_hours, caller_lookup, vapi_client
 
 logger = logging.getLogger(__name__)
 
 # Spoken to a refused caller. Kept to one short sentence: the call is already connected while it
 # plays, and every extra second is time the line is held open for a number we are turning away.
 REFUSAL_MESSAGE = "Sorry, we are unable to take your call. Goodbye."
+# Spoken to a caller who rings outside the number's answering hours.
+CLOSED_MESSAGE = "Sorry, we are closed right now. Please call back during our opening hours. Goodbye."
 # Spoken when the number cannot be served at all (unknown number, no agent assigned).
 UNAVAILABLE_MESSAGE = "Sorry, this number is not taking calls right now. Goodbye."
 # Shown to customers when the server is not set up for verification (details go to the log).
 UNAVAILABLE_REASON = "Caller verification isn't available yet. Please contact support."
+# Same, for answering hours.
+HOURS_UNAVAILABLE_REASON = "Answering hours aren't available yet. Please contact support."
 
 # Path (under PUBLIC_API_URL) VAPI is told to send a verified number's requests to.
 INBOUND_WEBHOOK_PATH = "/webhooks/vapi/inbound"
@@ -51,6 +61,9 @@ INBOUND_WEBHOOK_PATH = "/webhooks/vapi/inbound"
 # `decision` values stored in inbound_call_screenings.
 ANSWERED = "answered"
 REFUSED = "refused"
+# `reason` values the answering-hours rule writes there (the verification rule has its own).
+OUTSIDE_HOURS = "outside_hours"
+WITHIN_HOURS = "within_hours"
 
 
 def _public_url_usable() -> bool:
@@ -90,6 +103,24 @@ def routing_configured() -> bool:
     lookup credentials are NOT needed for that (calls are then answered unchecked, but a verified
     number still sends every call to this server), so the startup re-sync only checks these."""
     return bool(settings.vapi_api_key) and _public_url_usable()
+
+
+def routing_availability() -> tuple[bool, str | None]:
+    """Whether this server can route a number's calls through itself, which answering hours need
+    (the lookup credentials caller verification also needs are NOT required). A customer-safe
+    reason when not. Quiet, like availability(): the dashboard polls it; the switch-on path logs
+    which setting is missing."""
+    if routing_configured():
+        return True, None
+    return False, HOURS_UNAVAILABLE_REASON
+
+
+def server_routed(phone: dict | None) -> bool:
+    """Whether VAPI asks this server on every call to this number instead of using a fixed
+    assistant: caller verification OR answering hours is switched on. Every place that writes a
+    number's assistant in VAPI must leave a server-routed number alone."""
+    phone = phone or {}
+    return bool(phone.get("caller_verification_enabled") or phone.get("answer_hours_enabled"))
 
 
 # Every write of one number's routing (toggle, balance suspend/restore, receptionist changes, the
@@ -181,14 +212,13 @@ async def reconcile_verified_routing(*, retry_delays=RESYNC_RETRY_DELAYS) -> dic
 
     Returns a summary: {"skipped": why} or {"repointed": n, "failed": m, "unchanged": k}.
     """
-    rows = (
-        supabase.table("phone_numbers")
-        .select("id")
-        .eq("caller_verification_enabled", True)
-        .execute()
-        .data
-        or []
-    )
+    # Every server-routed number: verification on, or answering hours on (two queries, one per
+    # reason, merged by id).
+    rows_by_id: dict = {}
+    for column in ("caller_verification_enabled", "answer_hours_enabled"):
+        for r in supabase.table("phone_numbers").select("id").eq(column, True).execute().data or []:
+            rows_by_id[r["id"]] = r
+    rows = list(rows_by_id.values())
     if not rows:
         return {"skipped": "no verified numbers"}
     if not routing_configured():
@@ -212,10 +242,10 @@ async def reconcile_verified_routing(*, retry_delays=RESYNC_RETRY_DELAYS) -> dic
     for r in rows:
         async with routing_lock(r["id"]):
             now = (
-                supabase.table("phone_numbers").select("vapi_phone_id, caller_verification_enabled")
+                supabase.table("phone_numbers").select("vapi_phone_id, caller_verification_enabled, answer_hours_enabled")
                 .eq("id", r["id"]).maybe_single().execute().data
             )
-            if not now or not now.get("caller_verification_enabled") or not now.get("vapi_phone_id"):
+            if not now or not server_routed(now) or not now.get("vapi_phone_id"):
                 unchanged += 1  # switched off (or released) while this waited: leave it alone
                 continue
             try:
@@ -284,7 +314,8 @@ def _find_phone(vapi_phone_id: str | None) -> dict | None:
         return None
     rows = (
         supabase.table("phone_numbers")
-        .select("id, user_id, number, agent_id, caller_verification_enabled, suspended_for_balance")
+        .select("id, user_id, number, agent_id, caller_verification_enabled, suspended_for_balance, "
+                "answer_hours_enabled, answer_hours_timezone, answer_hours_days, answer_hours_start, answer_hours_end")
         .eq("vapi_phone_id", vapi_phone_id)
         .limit(1)
         .execute()
@@ -432,6 +463,16 @@ async def _decide(payload: dict) -> dict:
         logger.warning("assistant-request for a number we do not know (call %s)", call.get("id"))
         return {"error": UNAVAILABLE_MESSAGE}
 
+    caller = _caller_number(msg, call)
+
+    # Answering hours come first: a closed number tells the caller so, whatever else is true of the
+    # account. A hours setting that cannot be read leaves the call open (never drop a real customer).
+    hours_on = call_hours.enabled(phone, call_hours.NUMBER)
+    if hours_on and not call_hours.is_open(phone, call_hours.NUMBER, if_unreadable=True):
+        _record(phone, call, caller, False, OUTSIDE_HOURS)
+        logger.info("Refused call %s: outside answering hours", call.get("id"))
+        return {"error": CLOSED_MESSAGE}
+
     # Same rule as a statically routed number: an account with no balance is served by the shared
     # "unavailable" assistant. The flag is kept current by sync_inbound_routing_for_balance.
     if phone.get("suspended_for_balance"):
@@ -443,11 +484,14 @@ async def _decide(payload: dict) -> dict:
         return {"error": UNAVAILABLE_MESSAGE}
 
     # The number's flag is the source of truth. If it is off (VAPI still asking us after a
-    # half-finished toggle) the call simply goes to the agent, unscreened.
+    # half-finished toggle, or only the hours rule applies) the call goes to the agent, unscreened.
     if not phone.get("caller_verification_enabled"):
+        if hours_on:
+            # Recorded so the call can be attributed (logged and billed) even when VAPI reports it
+            # without an assistant id: see answered_calls.
+            _record(phone, call, caller, True, WITHIN_HOURS)
         return {"assistantId": assistant_id}
 
-    caller = _caller_number(msg, call)
     if not caller:
         # A genuine inbound call carries a caller id; seeing none on EVERY call would mean VAPI's
         # payload differs from what _caller_number reads, and verification would silently let
@@ -470,6 +514,9 @@ def _route_to_agent_unscreened(payload: dict) -> dict:
     # Never hand a zero-balance account's caller to its real agent, even on this error path.
     if phone and phone.get("suspended_for_balance"):
         return {"error": UNAVAILABLE_MESSAGE}
+    # Nor outside the number's answering hours: failing open must not mean answering a closed line.
+    if phone and not call_hours.is_open(phone, call_hours.NUMBER, if_unreadable=True):
+        return {"error": CLOSED_MESSAGE}
     assistant_id = _agent_assistant_id(phone) if phone else None
     return {"assistantId": assistant_id} if assistant_id else {"error": UNAVAILABLE_MESSAGE}
 

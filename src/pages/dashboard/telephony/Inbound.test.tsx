@@ -5,7 +5,7 @@ import { render, screen, fireEvent, waitFor, within, act } from "@testing-librar
 vi.mock("@/services/api", () => ({
   api: {
     getInboundQueues: vi.fn(), getAgents: vi.fn(), getPhoneNumbers: vi.fn(), getConversations: vi.fn(),
-    getCallerVerificationStatus: vi.fn(), updatePhoneNumber: vi.fn(), createInboundQueue: vi.fn(),
+    getCallerVerificationStatus: vi.fn(), getAnswerHoursStatus: vi.fn(), updatePhoneNumber: vi.fn(), createInboundQueue: vi.fn(),
     updateInboundQueue: vi.fn(), deleteInboundQueue: vi.fn(), confirmPhonePurchase: vi.fn(),
   },
 }));
@@ -37,6 +37,7 @@ function mock(queues: object[], phones: object[], status: object | string = AVAI
   fn(api.getCallerVerificationStatus).mockResolvedValue(
     typeof status === "string" ? { data: null, error: status } : { data: status, error: null },
   );
+  fn(api.getAnswerHoursStatus).mockResolvedValue({ data: AVAILABLE, error: null });
   updateNumber.mockResolvedValue({ data: {}, error: null });
 }
 
