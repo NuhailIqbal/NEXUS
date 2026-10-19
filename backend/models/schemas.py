@@ -505,24 +505,28 @@ class PhoneNumberUpdate(BaseModel):
     answer_hours_end: Optional[str] = None
 
 
-# ── BYOT (Bring Your Own Twilio) ──
+# ── BYOT (Bring Your Own Carrier: Twilio / Vonage / Telnyx) ──
 
 class TwilioCredentialCreate(BaseModel):
-    """Body for POST /telephony/twilio-credentials: the user's own Twilio Account SID and Auth Token.
+    """Body for POST /telephony/twilio-credentials: the user's own carrier account.
 
-    The service verifies the pair with Twilio before saving. The token is stored encrypted
-    and only a masked form is ever returned.
+    `account_sid` is the public identifier and `auth_token` the secret, whichever carrier
+    (Twilio: Account SID + Auth Token; Vonage: API key + API secret; Telnyx: no identifier,
+    API key as the secret — see services/carriers.py). The service verifies them with the
+    carrier before saving. The secret is stored encrypted and only a masked form is ever
+    returned.
     """
-    account_sid: str
+    carrier: Literal["twilio", "vonage", "telnyx"] = "twilio"
+    account_sid: Optional[str] = None
     auth_token: str
     label: Optional[str] = None
 
 
 class TwilioCredentialUpdate(BaseModel):
-    """Body for PATCH /telephony/twilio-credentials/{id}: change the SID, token and/or label.
+    """Body for PATCH /telephony/twilio-credentials/{id}: change the identifier, secret and/or label.
 
-    Changing the SID or token re-validates with Twilio, reusing the stored value for
-    whichever of the two is omitted; a label-only edit skips that check.
+    Changing the identifier or secret re-validates with the carrier, reusing the stored value
+    for whichever of the two is omitted; a label-only edit skips that check.
     """
     account_sid: Optional[str] = None
     auth_token: Optional[str] = None

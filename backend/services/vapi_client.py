@@ -197,6 +197,29 @@ async def delete_phone_number(phone_id: str) -> None:
         _check(r)
 
 
+# Carrier credentials: Vonage and Telnyx numbers are imported by credentialId rather than
+# inline keys (Twilio takes its SID/token inline). VAPI validates the keys against the
+# carrier when a credential is created, so a bad key fails here with a 400.
+async def create_credential(payload: dict) -> dict:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(f"{BASE_URL}/credential", headers=_headers(), json=payload)
+        _check(r)
+        return r.json()
+
+
+async def update_credential(credential_id: str, payload: dict) -> dict:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.patch(f"{BASE_URL}/credential/{credential_id}", headers=_headers(), json=payload)
+        _check(r)
+        return r.json()
+
+
+async def delete_credential(credential_id: str) -> None:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.delete(f"{BASE_URL}/credential/{credential_id}", headers=_headers())
+        _check(r)
+
+
 # Vapi's own built-in voice provider (provider="vapi") — real voices available on
 # every Vapi account with no third-party provider key required. voiceIds are exact
 # (case-sensitive on Vapi's side); we accept any casing from the wizard and map to

@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { AddIntegrationDialog } from "@/components/integrations/AddIntegrationDialog";
 import { GoogleCalendarCard } from "@/components/integrations/GoogleCalendarCard";
-import { TwilioByotCard } from "@/components/integrations/TwilioByotCard";
+import { CarrierAccountsCard } from "@/components/integrations/CarrierAccountsCard";
 import { IntegrationTile } from "@/components/integrations/IntegrationTile";
 import { api } from "@/services/api";
 import { toast } from "sonner";
@@ -42,10 +42,10 @@ const Integrations = () => {
   const [openAdd, setOpenAdd] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
-  // Twilio BYOT credentials live in their own card/endpoint, not the `integrations`
-  // table — bumping this remounts TwilioByotCard so it refetches after a connection
+  // Carrier (Twilio / Vonage / Telnyx) credentials live in their own card/endpoint, not the
+  // `integrations` table — bumping this remounts CarrierAccountsCard so it refetches after a connection
   // made from the generic Add Integration dialog.
-  const [twilioRefreshKey, setTwilioRefreshKey] = useState(0);
+  const [carrierRefreshKey, setCarrierRefreshKey] = useState(0);
 
   const [testTarget, setTestTarget] = useState<Integration | null>(null);
   const [testState, setTestState] = useState<"idle" | "running" | "success" | "fail">("idle");
@@ -230,7 +230,7 @@ const Integrations = () => {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <GoogleCalendarCard />
-        <TwilioByotCard key={twilioRefreshKey} />
+        <CarrierAccountsCard key={carrierRefreshKey} />
         {integrations.map((i) => <IntegrationCard key={i.id} i={i} />)}
         {/* WhitelistData is currently the only integration type that lands in "other" —
             name the prompt after what it actually is instead of a generic catch-all label. */}
@@ -262,7 +262,7 @@ const Integrations = () => {
         open={openAdd}
         onOpenChange={setOpenAdd}
         onCreate={handleCreateIntegration}
-        onTwilioConnected={() => setTwilioRefreshKey((k) => k + 1)}
+        onCarrierConnected={() => setCarrierRefreshKey((k) => k + 1)}
       />
 
       {/* Test Connection Modal */}

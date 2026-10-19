@@ -36,17 +36,20 @@ import { CallerVerificationSwitch } from "@/components/telephony/CallerVerificat
 import { CallerVerificationLog } from "@/components/telephony/CallerVerificationLog";
 import { RowActions } from "@/components/dashboard/RowActions";
 import { api } from "@/services/api";
+import { carrierFromProviderValue } from "@/lib/carriers";
 import { isCallerVerificationStatus, type CallerVerificationStatus } from "@/lib/callerVerification";
 import { toast } from "sonner";
 
 // User-facing provider labels are kept generic so we don't expose the underlying
 // carrier (and the price it implies) to end users. Raw values are left untouched.
 // BYOT is the one exception — the whole point of it is the user explicitly
-// choosing Twilio, so it's surfaced plainly instead of hidden behind "Standard".
+// choosing their own carrier, so it's surfaced plainly instead of hidden behind "Standard".
 const PROVIDER_LABELS: Record<string, string> = {
   twilio: "Standard",
   vapi: "Standard",
   twilio_byot: "Twilio",
+  vonage_byot: "Vonage",
+  telnyx_byot: "Telnyx",
 };
 /** Maps a raw provider value (case-insensitive) to its user-facing label; unknown values pass through. */
 const providerLabel = (p: string) => PROVIDER_LABELS[(p || "").toLowerCase()] ?? p;
@@ -531,12 +534,12 @@ const PhoneNumbers = () => {
       <CreatePhoneNumberDialog
         open={open}
         onOpenChange={setOpen}
-        // BYOT goes to the dedicated endpoint (import or purchase on the user's own Twilio account).
+        // BYOT goes to the dedicated endpoint (import or purchase on the user's own carrier account).
         // Otherwise a standard number is created; the backend may answer with a Stripe checkout URL.
         onCreate={async (d) => {
           const status = d.active ? "Active" : "Inactive";
 
-          if (d.serviceProvider === "BYOT") {
+          if (carrierFromProviderValue(d.serviceProvider)) {
             const { data, error } = await api.createByotPhoneNumber({
               mode: d.byotMode || "import",
               credential_id: d.byotCredentialId,

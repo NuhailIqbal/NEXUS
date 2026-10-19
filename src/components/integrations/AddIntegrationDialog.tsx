@@ -9,14 +9,15 @@ import { api } from "@/services/api";
 import { CalendarConnectSteps } from "./CalendarConnectSteps";
 import { startGoogleConnect } from "./calendarConnect";
 import type { CalendarStatus } from "./calendarTypes";
+import { CARRIERS, type CarrierKey } from "@/lib/carriers";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate?: (data: { name: string; description: string; type: string; credentials: Record<string, string> }) => void;
-  /** Called after a Twilio (BYOT) connection is saved, so the page's dedicated
-   *  Twilio card (which has its own separate list/delete UI) can refresh. */
-  onTwilioConnected?: () => void;
+  /** Called after a carrier (Twilio / Vonage / Telnyx) connection is saved, so the page's
+   *  dedicated carrier card (which has its own separate list/delete UI) can refresh. */
+  onCarrierConnected?: () => void;
 };
 
 type FieldDef = { key: string; label: string; placeholder: string; help: string; type?: string };
@@ -27,8 +28,9 @@ type FieldDef = { key: string; label: string; placeholder: string; help: string;
 // WhitelistData, Brevo, SendGrid and SMTP are offered here — every other entry that used to
 // live in this list (Twilio, Stripe, OpenAI, Gemini, and a long tail of placeholder providers
 // with no backend behind them at all) has been removed at the user's request. Twilio is back,
-// now backed by the real BYOT feature (services/twilio_byot_service.py) — see `twilioByot` below.
-const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlPaste?: boolean; calendar?: boolean; twilioByot?: boolean; fields: FieldDef[] }[] = [
+// now backed by the real BYOT feature (services/twilio_byot_service.py), together with Vonage
+// and Telnyx — see `carrier` below.
+const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlPaste?: boolean; calendar?: boolean; carrier?: CarrierKey; fields: FieldDef[] }[] = [
   { value: "WhitelistData", label: "WhitelistData", provider: "whitelistdata", urlPaste: true, fields: [
     { key: "apiKey", label: "API Key", placeholder: "d5078618-5c1c-4e3e-…", help: "The apiKey value from your WhitelistData account" },
     { key: "code", label: "Function Code", placeholder: "ONbKJs8jpJZWJU5vO9Zg…", help: "The code value from your WhitelistData endpoint URL" },
@@ -37,12 +39,17 @@ const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlP
   // Not an API-key integration: connecting goes through Google's own sign-in (OAuth), so this type
   // has no fields. Step 2 shows the setup steps and a "Connect with Google" button instead.
   { value: "GoogleCalendar", label: "Google Calendar", calendar: true, fields: [] },
-  // Bring Your Own Twilio: saved via /telephony/twilio-credentials (a dedicated table/endpoint),
-  // not the generic integrations table — see the twilioByot branch in next() below.
-  { value: "TwilioByot", label: "Twilio", twilioByot: true, fields: [
-    { key: "accountSid", label: "Account SID", placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", help: "Twilio Console → Account" },
-    { key: "authToken", label: "Auth Token", placeholder: "Your Twilio Auth Token", help: "Twilio Console → Account → API keys & tokens", type: "password" },
-  ]},
+  // Bring-your-own phone carriers: saved via /telephony/twilio-credentials (a dedicated
+  // table/endpoint), not the generic integrations table — see the carrier branch in next() below.
+  // Field keys are the API's own (account_sid / auth_token); labels come from the registry.
+  ...(Object.values(CARRIERS).map((c) => ({
+    value: `${c.label}Byot`,
+    label: c.label,
+    carrier: c.key,
+    fields: c.fields.map((f) => ({
+      key: f.key, label: f.label, placeholder: f.placeholder, help: f.help, type: f.secret ? "password" : undefined,
+    })),
+  }))),
   { value: "Brevo", label: "Brevo", provider: "brevo", fields: [
     { key: "apiKey", label: "API Key", placeholder: "xkeysib-xxxxxxxxxxxx…", help: "Your Brevo API key (SMTP & API > API Keys)", type: "password" },
     { key: "fromEmail", label: "From Email", placeholder: "noreply@yourdomain.com", help: "Must be a verified sender in Brevo" },
@@ -60,7 +67,7 @@ const INTEGRATION_TYPES: { value: string; label: string; provider?: string; urlP
   ]},
 ];
 
-export function AddIntegrationDialog({ open, onOpenChange, onCreate, onTwilioConnected }: Props) {
+export function AddIntegrationDialog({ open, onOpenChange, onCreate, onCarrierConnected }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -71,7 +78,6 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate, onTwilioCon
 
   const selected = INTEGRATION_TYPES.find((t) => t.value === type);
   const isCalendar = !!selected?.calendar;
-  const isTwilioByot = !!selected?.twilioByot;
 
   const [calStatus, setCalStatus] = useState<CalendarStatus | null>(null);
   const [calLoading, setCalLoading] = useState(false);
@@ -133,14 +139,17 @@ export function AddIntegrationDialog({ open, onOpenChange, onCreate, onTwilioCon
       const missing = selected?.fields.find((f) => !creds[f.key]?.trim());
       if (missing) return toast.error(`${missing.label} is required`);
 
-      if (isTwilioByot) {
+      if (selected?.carrier) {
         setSubmitting(true);
         const { error } = await api.createTwilioCredential({
-          account_sid: creds.accountSid, auth_token: creds.authToken, label: name.trim() || undefined,
+          carrier: selected.carrier,
+          account_sid: creds.account_sid?.trim() || undefined,
+          auth_token: creds.auth_token.trim(),
+          label: name.trim() || undefined,
         });
         setSubmitting(false);
         if (error) return toast.error(error);
-        onTwilioConnected?.();
+        onCarrierConnected?.();
         setStep(3);
         return;
       }

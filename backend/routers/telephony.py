@@ -25,7 +25,7 @@ from models.schemas import (
     OutboundCallCreate,
     TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, twilio_byot_service, whitelist_service, caller_verification, call_hours
+from services import vapi_client, twilio_service, twilio_byot_service, carriers, whitelist_service, caller_verification, call_hours
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -228,7 +228,7 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
     """Provision a phone number (VAPI-native, Twilio→VAPI import, or BYOT) and store the row.
 
     Shared by the direct create endpoint (VAPI), the post-payment confirm endpoint
-    (Twilio), and the BYOT endpoint (twilio_byot).
+    (Twilio), and the BYOT endpoint (twilio_byot / vonage_byot / telnyx_byot).
     """
     provider = (provider or "vapi").lower()
     # Base phone_numbers row; each provider branch below adds its own fields
@@ -250,75 +250,74 @@ async def _provision_phone_number(*, user_id: str, provider: str, number: str | 
     # agent for inbound calls; None when no agent is given or it isn't synced yet.
     assistant_id = await _resolve_assistant_id(user_id, agent_id)
 
-    if provider == "twilio_byot":
-        # Bring-your-own-Twilio: the number lives on the user's own Twilio account.
-        # get_credentials returns None for a credential that doesn't exist or belongs
-        # to someone else, which doubles as the ownership check.
-        creds = twilio_byot_service.get_credentials(credential_id, user_id)
-        if not creds:
-            raise HTTPException(status_code=404, detail="Twilio credential not found")
-        account_sid, auth_token = creds
+    if provider.endswith("_byot"):
+        # Bring-your-own-carrier (twilio_byot / vonage_byot / telnyx_byot): the number lives
+        # on the user's own carrier account. get_credential_record returns None for a
+        # credential that doesn't exist or belongs to someone else, which doubles as the
+        # ownership check; it must also belong to the carrier this provider names.
+        carrier = provider[: -len("_byot")]
+        record = twilio_byot_service.get_credential_record(credential_id, user_id)
+        if not record or record["carrier"] != carrier:
+            raise HTTPException(status_code=404, detail="Carrier account not found")
+        label_name = carriers.spec(carrier).label
+        identifier, secret = record["identifier"], record["secret"]
 
         if mode == "purchase":
-            # Buys a new US number on the user's own Twilio account (not the platform's).
+            # Buys a new US number on the user's own carrier account (not the platform's).
             try:
-                purchased = await twilio_service.buy_us_number(
-                    sms=True, voice=True, area_code=area_code,
-                    account_sid=account_sid, auth_token=auth_token,
-                )
+                purchased = await carriers.buy_number(carrier, identifier, secret, area_code=area_code)
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Twilio purchase failed: {str(e)}")
+                raise HTTPException(status_code=502, detail=f"{label_name} purchase failed: {str(e)}")
             row["number"] = purchased["number"]
-            row["twilio_sid"] = purchased.get("sid")
+            row["twilio_sid"] = purchased.get("ref")
         else:  # mode == "import": the user already owns this number
             number = (number or "").strip()
             if not number:
                 raise HTTPException(status_code=400, detail="A phone number is required to import.")
-            # Verify it's really on their Twilio account before attempting the VAPI import —
+            number = carriers.normalize_number(carrier, number)
+            # Verify it's really on their carrier account before attempting the VAPI import —
             # a typo (missing '+', wrong country code, extra whitespace) would otherwise only
             # surface as VAPI's generic import failure further down, with no hint of why.
-            sid = await twilio_service.find_sid_by_number(number, account_sid=account_sid, auth_token=auth_token)
-            if not sid:
+            ref = await carriers.find_number(carrier, number, identifier, secret)
+            if not ref:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"{number} wasn't found on your connected Twilio account. "
+                    detail=f"{number} wasn't found on your connected {label_name} account. "
                            "Check it's typed correctly, e.g. +15551234567.",
                 )
             row["number"] = number
-            row["twilio_sid"] = sid
+            row["twilio_sid"] = ref
 
-        # Register the Twilio number in VAPI (using the user's own Twilio credentials) so
-        # it can place and receive calls. Skipped when VAPI isn't configured, in which
-        # case the row is stored without a vapi_phone_id.
+        # Register the number in VAPI (Twilio inline with the user's own keys; Vonage/Telnyx
+        # via the VAPI credential created when the account was connected) so it can place
+        # and receive calls. Skipped when VAPI isn't configured, in which case the row is
+        # stored without a vapi_phone_id.
         if settings.vapi_api_key:
             try:
-                vapi_payload: dict = {
-                    "provider": "twilio",
-                    "number": row["number"],
-                    "twilioAccountSid": account_sid,
-                    "twilioAuthToken": auth_token,
-                }
+                vapi_payload: dict = carriers.vapi_phone_payload(
+                    carrier, row["number"], identifier, secret, record["vapi_credential_id"],
+                )
                 if assistant_id:
                     vapi_payload["assistantId"] = assistant_id
                 vapi_result = await vapi_client.create_phone_number(vapi_payload)
                 row["vapi_phone_id"] = vapi_result.get("id")
             except Exception as e:
                 logger.error("Imported %s but VAPI import failed: %s", row["number"], e)
-                # mode="purchase" just spent the user's own money on a Twilio number that
-                # would otherwise be left live (and billed by Twilio) with zero record of
+                # mode="purchase" just spent the user's own money on a number that would
+                # otherwise be left live (and billed by the carrier) with zero record of
                 # it anywhere on our side — best-effort release it so they aren't stuck
                 # paying for a number they can't see or manage. mode="import" never
                 # purchased anything, so there's nothing to roll back.
-                if mode == "purchase" and row.get("twilio_sid"):
+                if mode == "purchase":
                     try:
-                        await twilio_service.release_number(
-                            row["twilio_sid"], account_sid=account_sid, auth_token=auth_token,
+                        await carriers.release_number(
+                            carrier, row["number"], row["twilio_sid"], identifier, secret,
                         )
                     except Exception:
                         logger.exception(
-                            "Failed to roll back Twilio number %s (sid=%s) after a failed VAPI "
-                            "import — it is still live on the user's own Twilio account",
-                            row["number"], row.get("twilio_sid"),
+                            "Failed to roll back %s number %s (ref=%s) after a failed VAPI "
+                            "import — it is still live on the user's own %s account",
+                            label_name, row["number"], row.get("twilio_sid"), label_name,
                         )
                 raise HTTPException(status_code=502, detail="Voice service error. Please try again.")
 
@@ -448,6 +447,9 @@ async def create_phone_number(body: PhoneNumberCreate, user=Depends(get_current_
     session_id} for a Stripe Checkout that is completed via /phone-numbers/confirm."""
     owner_id = resolve_owner_id(user["user_id"])
     provider = (body.provider or "vapi").lower()
+    if provider.endswith("_byot"):
+        # Bring-your-own-carrier numbers have their own endpoint (credential + mode required).
+        raise HTTPException(status_code=400, detail="Use the bring-your-own-account endpoint for this provider.")
 
     if provider == "twilio":
         # Enough balance → pay from the wallet and provision immediately.
@@ -567,21 +569,21 @@ async def confirm_phone_checkout(body: PhoneConfirm, user=Depends(get_current_us
 
 @router.get("/twilio-credentials")
 async def list_twilio_credentials(user=Depends(get_current_user)):
-    """List the account's saved Twilio (BYOT) credentials. The auth token is never
-    returned; each entry carries only a masked version."""
+    """List the account's saved carrier (Twilio / Vonage / Telnyx BYOT) credentials. The
+    secret is never returned; each entry carries only a masked version."""
     owner_id = resolve_owner_id(user["user_id"])
     return {"data": twilio_byot_service.list_credentials(owner_id), "error": None}
 
 
 @router.post("/twilio-credentials")
 async def create_twilio_credential(body: TwilioCredentialCreate, user=Depends(get_current_user)):
-    """Save the user's own Twilio Account SID and Auth Token. The pair is validated
-    against Twilio first and stored encrypted; responds 400 if it is rejected or
-    can't be verified."""
+    """Save the user's own carrier account (body.carrier: twilio, vonage or telnyx).
+    The credentials are validated against the carrier first and stored encrypted;
+    responds 400 if they are rejected or can't be verified."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
         row = await twilio_byot_service.save_credentials(
-            owner_id, body.account_sid, body.auth_token, body.label,
+            owner_id, body.account_sid, body.auth_token, body.label, carrier=body.carrier,
         )
     except twilio_byot_service.InvalidTwilioCredentials as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -590,9 +592,9 @@ async def create_twilio_credential(body: TwilioCredentialCreate, user=Depends(ge
 
 @router.patch("/twilio-credentials/{credential_id}")
 async def update_twilio_credential(credential_id: str, body: TwilioCredentialUpdate, user=Depends(get_current_user)):
-    """Partially update a saved Twilio credential (SID, token and/or label). Changing
-    the SID or token re-validates against Twilio; 400 if invalid, 404 if the
-    credential doesn't exist or isn't owned by this account."""
+    """Partially update a saved carrier credential (identifier, secret and/or label).
+    Changing the identifier or secret re-validates against the carrier; 400 if invalid,
+    404 if the credential doesn't exist or isn't owned by this account."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
         row = await twilio_byot_service.update_credentials(
@@ -602,7 +604,7 @@ async def update_twilio_credential(credential_id: str, body: TwilioCredentialUpd
     except twilio_byot_service.InvalidTwilioCredentials as e:
         raise HTTPException(status_code=400, detail=str(e))
     if row is None:
-        raise HTTPException(status_code=404, detail="Twilio credential not found")
+        raise HTTPException(status_code=404, detail="Carrier account not found")
     return {"data": row, "error": None}
 
 
@@ -611,7 +613,7 @@ async def delete_twilio_credential(credential_id: str, user=Depends(get_current_
     """Delete a saved Twilio credential. Responds 400 if a phone number still uses it."""
     owner_id = resolve_owner_id(user["user_id"])
     try:
-        twilio_byot_service.delete_credentials(credential_id, owner_id)
+        await twilio_byot_service.delete_credentials(credential_id, owner_id)
     except twilio_byot_service.CredentialInUse as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"data": None, "error": None}
@@ -630,9 +632,15 @@ async def create_byot_phone_number(body: PhoneNumberByotCreate, user=Depends(get
     if mode == "import" and not body.number:
         raise HTTPException(status_code=400, detail="number is required for mode='import'")
 
+    # The credential decides the carrier (and so the provider value stored on the number);
+    # a missing or foreign credential is a 404 here, before anything is bought or imported.
+    record = twilio_byot_service.get_credential_record(body.credential_id, owner_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Carrier account not found")
+
     row = await _provision_phone_number(
         user_id=owner_id,
-        provider="twilio_byot",
+        provider=f"{record['carrier']}_byot",
         number=body.number,
         area_code=body.area_code,
         agent_id=body.agent_id,

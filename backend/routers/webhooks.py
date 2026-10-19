@@ -218,9 +218,9 @@ def _answered_by_us(payload: dict) -> dict | None:
 
 
 def _is_byot_call(payload: dict) -> bool:
-    """True if the phone number that handled this call is a BYOT (user-owned Twilio)
-    number — used to exclude the platform's estimated Twilio carrier leg from the
-    call's charge, since the user already pays Twilio directly for it."""
+    """True if the phone number that handled this call is a BYOT number (user's own
+    Twilio / Vonage / Telnyx account) — used to exclude the platform's estimated carrier
+    leg from the call's charge, since the user already pays their carrier directly."""
     vapi_phone_id = _extract_phone_number_id(payload)
     if not vapi_phone_id:
         return False
@@ -231,7 +231,7 @@ def _is_byot_call(payload: dict) -> bool:
         .limit(1)
         .execute()
     )
-    return bool(row.data and (row.data[0].get("provider") or "").lower() == "twilio_byot")
+    return bool(row.data and (row.data[0].get("provider") or "").lower().endswith("_byot"))
 
 
 # A call counts as "qualified" when the AI handed it off to a human — VAPI

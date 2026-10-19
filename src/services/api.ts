@@ -258,7 +258,7 @@ export const api = {
 
   // Telephony - BYOT (Bring Your Own Twilio)
   getTwilioCredentials: () => get("/telephony/twilio-credentials"),
-  createTwilioCredential: (data: { account_sid: string; auth_token: string; label?: string }) =>
+  createTwilioCredential: (data: { carrier?: "twilio" | "vonage" | "telnyx"; account_sid?: string; auth_token: string; label?: string }) =>
     post("/telephony/twilio-credentials", data),
   updateTwilioCredential: (id: string, data: { account_sid?: string; auth_token?: string; label?: string }) =>
     patch(`/telephony/twilio-credentials/${id}`, data),

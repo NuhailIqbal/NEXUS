@@ -1,8 +1,9 @@
 /**
  * "Create Phone Number" dialog, opened from the Phone Numbers page ("Buy Number").
- * Collects purpose, provider (standard Twilio-backed or BYOT), optional BYOT account/number and
- * inbound agent, validates, and hands a PhoneNumberData to onCreate; the parent calls the API.
- * Itself calls only getAgents and getTwilioCredentials, and embeds ConnectTwilioDialog.
+ * Collects purpose, provider (standard, or the user's own Twilio / Vonage / Telnyx account — BYOT),
+ * optional BYOT account/number and inbound agent, validates, and hands a PhoneNumberData to
+ * onCreate; the parent calls the API.
+ * Itself calls only getAgents and getTwilioCredentials, and embeds ConnectCarrierDialog.
  */
 import { useEffect, useState } from "react";
 import { X, Plus, CheckCircle2 } from "lucide-react";
@@ -14,7 +15,8 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/services/api";
-import { ConnectTwilioDialog } from "@/components/telephony/ConnectTwilioDialog";
+import { ConnectCarrierDialog } from "@/components/telephony/ConnectCarrierDialog";
+import { CARRIERS, carrierFromProviderValue, carrierOf } from "@/lib/carriers";
 
 type Props = {
   open: boolean;
@@ -23,7 +25,7 @@ type Props = {
 };
 
 export type Purpose = "inbound" | "outbound" | "both";
-/** BYOT: "import" a number already owned on the user's Twilio account, or "purchase" a new one there. */
+/** BYOT: "import" a number already owned on the user's carrier account, or "purchase" a new one there. */
 export type ByotMode = "import" | "purchase";
 
 export type PhoneNumberData = {
@@ -37,17 +39,25 @@ export type PhoneNumberData = {
   byotNumber?: string;
 };
 
-/** A saved Twilio account as returned by GET /telephony/twilio-credentials (token is masked). */
-type TwilioCredential = { id: string; account_sid: string; auth_token_masked?: string; label?: string | null };
+/** A saved carrier account as returned by GET /telephony/twilio-credentials (secret is masked). */
+type CarrierCredential = {
+  id: string;
+  carrier?: string | null;
+  account_sid?: string | null;
+  auth_token_masked?: string;
+  label?: string | null;
+};
 
-const PROVIDERS = ["Twilio", "BYOT"];
+// "Twilio" is the standard (platform-provided) number; the others are the user's own carrier account.
+const PROVIDERS = ["Twilio", ...Object.values(CARRIERS).map((c) => c.providerValue)];
 
 // User-facing labels are kept generic so we don't expose the underlying carrier
-// (and the price it implies) to end users. Internal value stays "Twilio". BYOT is
-// the one exception — the whole point of it is the user explicitly choosing Twilio.
+// (and the price it implies) to end users. Internal value stays "Twilio". The BYOT
+// entries are the exception — the whole point of them is the user explicitly choosing
+// their own carrier.
 const PROVIDER_LABELS: Record<string, string> = {
   Twilio: "Standard",
-  BYOT: "Twilio",
+  ...Object.fromEntries(Object.values(CARRIERS).map((c) => [c.providerValue, c.label])),
 };
 
 /**
@@ -63,19 +73,20 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     byotMode: "import",
   });
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
-  const [credentials, setCredentials] = useState<TwilioCredential[]>([]);
+  const [credentials, setCredentials] = useState<CarrierCredential[]>([]);
   const [connectOpen, setConnectOpen] = useState(false);
 
-  // Fetches connected Twilio accounts; also used as the refresh callback after connecting a new one.
+  // Fetches connected carrier accounts; also used as the refresh callback after connecting a new one.
   const loadCredentials = () => {
     api.getTwilioCredentials().then(({ data: d }) => {
-      const list = (d as TwilioCredential[]) ?? [];
+      const list = (d as CarrierCredential[]) ?? [];
       setCredentials(list);
-      // Auto-select when exactly one account is connected — no need to make the user
-      // pick from a list of one, and it makes the "already connected" state obvious.
-      if (list.length === 1) {
-        setData((prev) => (prev.byotCredentialId ? prev : { ...prev, byotCredentialId: list[0].id }));
-      }
+      // Auto-select when exactly one account is connected for the chosen carrier — no need to
+      // make the user pick from a list of one, and it makes the "already connected" state obvious.
+      setData((prev) => {
+        const only = accountsFor(list, prev.serviceProvider);
+        return only.length === 1 && !prev.byotCredentialId ? { ...prev, byotCredentialId: only[0].id } : prev;
+      });
     });
   };
 
@@ -95,17 +106,26 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     onOpenChange(v);
   };
 
-  const isByot = data.serviceProvider === "BYOT";
+  const carrier = carrierFromProviderValue(data.serviceProvider);
+  const isByot = !!carrier;
+  const accounts = accountsFor(credentials, data.serviceProvider);
+
+  // Switching provider drops the previously picked account (it belongs to another carrier) and
+  // auto-selects the new carrier's account when there's exactly one.
+  const chooseProvider = (v: string) => {
+    const only = accountsFor(credentials, v);
+    setData({ ...data, serviceProvider: v, byotCredentialId: only.length === 1 ? only[0].id : undefined });
+  };
 
   // Validates the form (toasting the first problem) and, if valid, passes it to onCreate and closes.
   const create = () => {
     if (!data.purpose) return toast.error("Please select a purpose");
     if (!data.serviceProvider) return toast.error("Please select a service provider");
     if (isByot) {
-      if (!data.byotCredentialId) return toast.error("Please select (or connect) a Twilio account");
+      if (!data.byotCredentialId) return toast.error(`Please select (or connect) a ${carrier!.label} account`);
       if (data.byotMode === "import" && !data.byotNumber?.trim()) return toast.error("Enter the phone number you already own");
     }
-    // Trim so accidental leading/trailing whitespace never breaks the Twilio
+    // Trim so accidental leading/trailing whitespace never breaks the carrier
     // account-ownership match on a BYOT import.
     onCreate?.(data.byotNumber ? { ...data, byotNumber: data.byotNumber.trim() } : data);
     close(false);
@@ -147,7 +167,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
           <div>
             <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
-            <Select value={data.serviceProvider} onValueChange={(v) => setData({ ...data, serviceProvider: v })}>
+            <Select value={data.serviceProvider} onValueChange={chooseProvider}>
               <SelectTrigger aria-label="Service Provider">
                 <SelectValue placeholder="Please select your phone number provider" />
               </SelectTrigger>
@@ -164,43 +184,44 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
             </div>
           )}
 
-          {isByot && (
+          {carrier && (
             <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
               <p className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">$1/month</span> platform fee. Twilio bills you
+                <span className="font-medium text-foreground">$1/month</span> platform fee. {carrier.label} bills you
                 directly for the number and call minutes.
               </p>
+              {carrier.numberNote && <p className="text-xs text-muted-foreground">{carrier.numberNote}</p>}
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="block text-sm font-semibold">Twilio account</label>
-                  {credentials.length > 0 && (
+                  <label className="block text-sm font-semibold">{carrier.label} account</label>
+                  {accounts.length > 0 && (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
                       <CheckCircle2 className="h-3.5 w-3.5" /> Connected
                     </span>
                   )}
                 </div>
-                {credentials.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No Twilio account connected yet.</p>
+                {accounts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No {carrier.label} account connected yet.</p>
                 ) : (
                   <Select
                     value={data.byotCredentialId || ""}
                     onValueChange={(v) => setData({ ...data, byotCredentialId: v })}
                   >
-                    <SelectTrigger aria-label="Twilio account">
-                      <SelectValue placeholder="Select a connected Twilio account" />
+                    <SelectTrigger aria-label={`${carrier.label} account`}>
+                      <SelectValue placeholder={`Select a connected ${carrier.label} account`} />
                     </SelectTrigger>
                     <SelectContent>
-                      {credentials.map((c) => (
+                      {accounts.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
-                          {c.label || c.account_sid}
+                          {c.label || c.account_sid || `${carrier.label} account`}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 )}
                 <Button type="button" variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
-                  {credentials.length === 0 ? "Connect a Twilio account" : "Connect another Twilio account"}
+                  {accounts.length === 0 ? `Connect a ${carrier.label} account` : `Connect another ${carrier.label} account`}
                 </Button>
               </div>
 
@@ -215,7 +236,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="import">I already own a number</SelectItem>
-                    <SelectItem value="purchase">Buy a new number on my Twilio account</SelectItem>
+                    <SelectItem value="purchase">Buy a new number on my {carrier.label} account</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -270,10 +291,16 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
           </Button>
         </div>
 
-        <ConnectTwilioDialog open={connectOpen} onOpenChange={setConnectOpen} onConnected={loadCredentials} />
+        <ConnectCarrierDialog open={connectOpen} onOpenChange={setConnectOpen} onConnected={loadCredentials} carrier={carrier?.key} />
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The saved accounts that belong to the carrier behind a provider value (none for Standard). */
+function accountsFor(list: CarrierCredential[], providerValue: string): CarrierCredential[] {
+  const c = carrierFromProviderValue(providerValue);
+  return c ? list.filter((a) => carrierOf(a.carrier).key === c.key) : [];
 }
 
 /** Labelled on/off switch row. */

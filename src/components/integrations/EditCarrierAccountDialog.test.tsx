@@ -7,7 +7,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { toast } from "sonner";
 import { api } from "@/services/api";
-import { EditTwilioAccountDialog } from "./EditTwilioAccountDialog";
+import { EditCarrierAccountDialog } from "./EditCarrierAccountDialog";
 
 const updateCred = api.updateTwilioCredential as ReturnType<typeof vi.fn>;
 
@@ -16,7 +16,7 @@ const target = { id: "cred-1", account_sid: "ACabc123", label: "Main account" };
 function setup(t = target) {
   const onOpenChange = vi.fn();
   const onSaved = vi.fn();
-  render(<EditTwilioAccountDialog target={t} onOpenChange={onOpenChange} onSaved={onSaved} />);
+  render(<EditCarrierAccountDialog target={t} onOpenChange={onOpenChange} onSaved={onSaved} />);
   return { onOpenChange, onSaved };
 }
 
@@ -25,7 +25,7 @@ beforeEach(() => {
   updateCred.mockResolvedValue({ data: { id: "cred-1" }, error: null });
 });
 
-describe("EditTwilioAccountDialog", () => {
+describe("EditCarrierAccountDialog", () => {
   it("is prefilled with the current label and Account SID, Auth Token blank", () => {
     setup();
     expect(screen.getByDisplayValue("Main account")).toBeInTheDocument();
@@ -92,8 +92,42 @@ describe("EditTwilioAccountDialog", () => {
 
   it("nothing renders when there is no target", () => {
     const { container } = render(
-      <EditTwilioAccountDialog target={null} onOpenChange={vi.fn()} />
+      <EditCarrierAccountDialog target={null} onOpenChange={vi.fn()} />
     );
     expect(container.querySelector('[role="dialog"]')).not.toBeInTheDocument();
+  });
+});
+
+describe("EditCarrierAccountDialog — Vonage and Telnyx", () => {
+  it("Vonage is prefilled with its API Key; rotating the secret sends only auth_token + label", async () => {
+    const onSaved = vi.fn();
+    render(
+      <EditCarrierAccountDialog
+        target={{ id: "cred-v", carrier: "vonage", account_sid: "vkey01", label: "Vonage main" }}
+        onOpenChange={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+    expect(screen.getAllByText("Edit Vonage account").length).toBeGreaterThan(0);
+    expect(screen.getByDisplayValue("vkey01")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current one"), { target: { value: "newsecret" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await waitFor(() => expect(updateCred).toHaveBeenCalledWith("cred-v", { label: "Vonage main", auth_token: "newsecret" }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Vonage account updated"));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("Telnyx has no identifier field and a label-only edit sends just the label", async () => {
+    render(
+      <EditCarrierAccountDialog
+        target={{ id: "cred-t", carrier: "telnyx", account_sid: null, label: "Telnyx main" }}
+        onOpenChange={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByText("Edit Telnyx account").length).toBeGreaterThan(0);
+    expect(screen.queryByPlaceholderText("KEYxxxxxxxxxxxxxxxx")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue("Telnyx main"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await waitFor(() => expect(updateCred).toHaveBeenCalledWith("cred-t", { label: "Renamed" }));
   });
 });

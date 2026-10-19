@@ -664,6 +664,10 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
     stripe_session_id text,
     suspended_for_balance boolean DEFAULT false,
     next_billing_at timestamp with time zone,
+    -- BYOT numbers (provider twilio_byot / vonage_byot / telnyx_byot): the connected carrier
+    -- account row (twilio_byot_credentials.id), and the carrier's own reference for the
+    -- number in twilio_sid (Twilio PN sid / Vonage msisdn / Telnyx phone number id). The
+    -- "twilio_" names are historical; both columns are carrier-agnostic.
     twilio_credential_id uuid,
     -- Inbound caller verification (off by default): VAPI asks this server per call and calls
     -- from numbers that are not mobile lines are refused (services/caller_verification.py).
@@ -680,17 +684,22 @@ CREATE TABLE IF NOT EXISTS public.phone_numbers (
 
 --
 -- Name: twilio_byot_credentials; Type: TABLE; Schema: public; Owner: -
--- BYOT (Bring Your Own Twilio): one row per Twilio account a user has connected.
--- auth_token is never stored in the clear — config_encrypted holds a Fernet-encrypted
--- JSON blob ({"auth_token": "..."}), same pattern as integrations.config_encrypted.
+-- BYOT (Bring Your Own Carrier): one row per Twilio / Vonage / Telnyx account a user has
+-- connected. The secret is never stored in the clear — config_encrypted holds a
+-- Fernet-encrypted JSON blob ({"auth_token": "..."}), same pattern as
+-- integrations.config_encrypted. account_sid is the public identifier (Twilio Account SID /
+-- Vonage API key; NULL for Telnyx, which has only an API key). vapi_credential_id is the
+-- matching VAPI credential for Vonage/Telnyx (their numbers are imported by credentialId).
 --
 
 CREATE TABLE IF NOT EXISTS public.twilio_byot_credentials (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
-    account_sid text NOT NULL,
+    carrier text DEFAULT 'twilio'::text NOT NULL,
+    account_sid text,
     config_encrypted text NOT NULL,
     label text,
+    vapi_credential_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );

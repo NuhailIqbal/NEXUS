@@ -538,8 +538,15 @@ async def list_all_phone_numbers(admin=Depends(get_admin_user)):
         n["owner_email"] = email_map.get(uid, "")
         n["owner_name"] = name_map.get(uid, "")
         n["owner_number_count"] = counts.get(uid, 0)
-        # Effective monthly fee: Twilio is billed $3/mo; VAPI numbers are free.
-        n["monthly_cost"] = PHONE_NUMBER_MONTHLY_COST if (n.get("provider") or "").lower() == "twilio" else 0.0
+        # Effective monthly fee: platform Twilio is billed $3/mo; bring-your-own-carrier numbers
+        # carry their own (lower) fee on the row; VAPI numbers are free.
+        provider = (n.get("provider") or "").lower()
+        if provider == "twilio":
+            n["monthly_cost"] = PHONE_NUMBER_MONTHLY_COST
+        elif provider.endswith("_byot"):
+            n["monthly_cost"] = float(n.get("monthly_cost") or 0)
+        else:
+            n["monthly_cost"] = 0.0
         # days_left is whole days until the next renewal (floored); it goes negative once
         # the renewal date has passed. Both fields are None when there is no billing date.
         expires = _parse_dt(n.get("next_billing_at"))

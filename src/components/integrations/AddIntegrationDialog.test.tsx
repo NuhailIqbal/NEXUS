@@ -31,9 +31,9 @@ const connect = startGoogleConnect as ReturnType<typeof vi.fn>;
 function setup() {
   const onCreate = vi.fn();
   const onOpenChange = vi.fn();
-  const onTwilioConnected = vi.fn();
-  render(<AddIntegrationDialog open onOpenChange={onOpenChange} onCreate={onCreate} onTwilioConnected={onTwilioConnected} />);
-  return { onCreate, onOpenChange, onTwilioConnected };
+  const onCarrierConnected = vi.fn();
+  render(<AddIntegrationDialog open onOpenChange={onOpenChange} onCreate={onCreate} onCarrierConnected={onCarrierConnected} />);
+  return { onCreate, onOpenChange, onCarrierConnected };
 }
 
 /** Radix Select in jsdom: open with the keyboard, pick an option with Enter. */
@@ -238,7 +238,7 @@ describe("Add Integration — Twilio", () => {
   });
 
   it("saves via the dedicated BYOT endpoint, not the generic integrations endpoint", async () => {
-    const { onCreate, onTwilioConnected } = setup();
+    const { onCreate, onCarrierConnected } = setup();
     await chooseType("Twilio");
     fireEvent.change(screen.getByPlaceholderText("e.g., My Custom API"), { target: { value: "Main Twilio" } });
     next();
@@ -247,9 +247,9 @@ describe("Add Integration — Twilio", () => {
     fireEvent.click(screen.getByRole("button", { name: /Create/ }));
 
     await waitFor(() => expect(createCred).toHaveBeenCalledWith({
-      account_sid: "ACreal123", auth_token: "secrettoken", label: "Main Twilio",
+      carrier: "twilio", account_sid: "ACreal123", auth_token: "secrettoken", label: "Main Twilio",
     }));
-    await waitFor(() => expect(onTwilioConnected).toHaveBeenCalled());
+    await waitFor(() => expect(onCarrierConnected).toHaveBeenCalled());
     expect(onCreate).not.toHaveBeenCalled(); // never goes through the generic path
     expect(await screen.findByText(/Integration Created Successfully/)).toBeInTheDocument();
   });
@@ -290,5 +290,67 @@ describe("Add Integration — Twilio", () => {
     fireEvent.click(screen.getByRole("button", { name: /Create/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: /Connecting/ })).toBeDisabled());
     resolve!({ data: { id: "cred-1" }, error: null });
+  });
+});
+
+describe("Add Integration — Vonage and Telnyx", () => {
+  const createCred = api.createTwilioCredential as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    createCred.mockResolvedValue({ data: { id: "cred-1" }, error: null });
+  });
+
+  it("both are offered in the type list", async () => {
+    setup();
+    const trigger = screen.getByRole("combobox", { name: "Integration type" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(await screen.findByRole("option", { name: "Vonage" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Telnyx" })).toBeInTheDocument();
+  });
+
+  it("Vonage asks for an API Key and an API Secret and saves them with carrier=vonage", async () => {
+    const { onCreate, onCarrierConnected } = setup();
+    await chooseType("Vonage");
+    fireEvent.change(screen.getByPlaceholderText("e.g., My Custom API"), { target: { value: "Main Vonage" } });
+    next();
+    fireEvent.change(await screen.findByPlaceholderText("Your Vonage API Key"), { target: { value: " abcd1234 " } });
+    const secret = screen.getByPlaceholderText("Your Vonage API Secret");
+    expect(secret).toHaveAttribute("type", "password");
+    fireEvent.change(secret, { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: /Create/ }));
+
+    await waitFor(() => expect(createCred).toHaveBeenCalledWith({
+      carrier: "vonage", account_sid: "abcd1234", auth_token: "s3cret", label: "Main Vonage",
+    }));
+    await waitFor(() => expect(onCarrierConnected).toHaveBeenCalled());
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it("Telnyx asks for a single API Key and sends no account_sid", async () => {
+    const { onCarrierConnected } = setup();
+    await chooseType("Telnyx");
+    fireEvent.change(screen.getByPlaceholderText("e.g., My Custom API"), { target: { value: "Main Telnyx" } });
+    next();
+    const key = await screen.findByPlaceholderText("KEYxxxxxxxxxxxxxxxx");
+    expect(key).toHaveAttribute("type", "password");
+    fireEvent.change(key, { target: { value: "KEYabc" } });
+    fireEvent.click(screen.getByRole("button", { name: /Create/ }));
+
+    await waitFor(() => expect(createCred).toHaveBeenCalledWith({
+      carrier: "telnyx", account_sid: undefined, auth_token: "KEYabc", label: "Main Telnyx",
+    }));
+    await waitFor(() => expect(onCarrierConnected).toHaveBeenCalled());
+  });
+
+  it("a missing Vonage secret is refused before calling the API", async () => {
+    setup();
+    await chooseType("Vonage");
+    fireEvent.change(screen.getByPlaceholderText("e.g., My Custom API"), { target: { value: "V" } });
+    next();
+    fireEvent.change(await screen.findByPlaceholderText("Your Vonage API Key"), { target: { value: "abcd" } });
+    fireEvent.click(screen.getByRole("button", { name: /Create/ }));
+    expect(toast.error).toHaveBeenCalledWith("API Secret is required");
+    expect(createCred).not.toHaveBeenCalled();
   });
 });

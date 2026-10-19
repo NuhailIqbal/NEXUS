@@ -1,26 +1,37 @@
 """
-BYOT (Bring Your Own Twilio) credential storage.
+BYOT (Bring Your Own Carrier) credential storage — Twilio, Vonage and Telnyx accounts.
 
-A user's Twilio Auth Token is sensitive — it grants full control of their Twilio
-account (buy/release numbers, send SMS, read call/SMS logs, spend their money).
-It is never stored or returned in the clear: encrypted at rest with the same
-Fernet scheme `integrations.config_encrypted` already uses (services/encryption.py),
-and only ever masked when shown back to the frontend.
+A user's carrier secret (Twilio Auth Token / Vonage API secret / Telnyx API key) is
+sensitive — it grants control of their carrier account (buy/release numbers, spend their
+money). It is never stored or returned in the clear: encrypted at rest with the same
+Fernet scheme `integrations.config_encrypted` already uses (services/encryption.py), and
+only ever masked when shown back to the frontend. What "identifier" and "secret" mean per
+carrier is documented in services/carriers.py (the columns/fields keep their historical
+Twilio names: account_sid / auth_token).
+
+Vonage and Telnyx numbers are imported into VAPI by credentialId, so connecting one of those
+accounts also registers a VAPI credential (stored as vapi_credential_id); it is updated when
+the keys change and removed with the account.
 """
 # Entry points: save_credentials / list_credentials / update_credentials /
 # delete_credentials back the /twilio-credentials CRUD endpoints in routers/telephony.py;
-# get_credentials is the internal-only decrypting lookup used when provisioning a BYOT
+# get_credential_record is the internal-only decrypting lookup used when provisioning a BYOT
 # phone number there. Tables: twilio_byot_credentials (read/write) and phone_numbers
 # (read-only, for the in-use check on delete). All lookups are scoped by user_id, which the
 # router passes as the team owner's id.
+import logging
+
 from database import supabase
+from services import carriers, vapi_client
 from services.encryption import encrypt_config, decrypt_config, mask_config
-from services.twilio_service import validate_credentials
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidTwilioCredentials(Exception):
-    """Raised when an Account SID / Auth Token pair is missing, rejected by Twilio, or
-    could not be verified. The message is user-facing; the router maps it to HTTP 400."""
+    """Raised when a carrier's credentials are missing, rejected by the carrier, or could
+    not be verified. The message is user-facing; the router maps it to HTTP 400.
+    (Name kept from when Twilio was the only carrier.)"""
     pass
 
 
@@ -31,8 +42,10 @@ class CredentialInUse(Exception):
 
 
 def _row_public(row: dict) -> dict:
-    """Strip config_encrypted and attach a masked auth token for display."""
-    out = {k: v for k, v in row.items() if k != "config_encrypted"}
+    """Strip config_encrypted (and the internal VAPI credential id) and attach a masked
+    secret for display."""
+    out = {k: v for k, v in row.items() if k not in ("config_encrypted", "vapi_credential_id")}
+    out["carrier"] = row.get("carrier") or "twilio"
     # Decrypt only to build the mask (first/last two characters). If the blob can't be
     # decrypted (e.g. the encryption key changed), show a fully masked placeholder so
     # listing credentials never fails because of one unreadable row.
@@ -44,41 +57,86 @@ def _row_public(row: dict) -> dict:
     return out
 
 
-async def save_credentials(user_id: str, account_sid: str, auth_token: str, label: str | None = None) -> dict:
-    """Validate a Twilio SID/token pair against Twilio, then store it for `user_id`.
-
-    The token is Fernet-encrypted into twilio_byot_credentials.config_encrypted; nothing is
-    written unless Twilio accepts the pair. Returns the saved row in public form (masked
-    token, no ciphertext). Raises InvalidTwilioCredentials for blank, rejected or
-    unverifiable credentials. No de-duplication: the same account can be saved twice.
-    """
-    account_sid = (account_sid or "").strip()
-    auth_token = (auth_token or "").strip()
-    if not account_sid or not auth_token:
-        raise InvalidTwilioCredentials("Account SID and Auth Token are both required.")
+async def _verify(carrier: str, identifier: str | None, secret: str) -> None:
+    """Raise InvalidTwilioCredentials unless the carrier accepts these credentials."""
+    spec = carriers.spec(carrier)
     try:
-        valid = await validate_credentials(account_sid, auth_token)
+        valid = await carriers.validate_credentials(carrier, identifier, secret)
     except Exception:
-        # A network/timeout error reaching Twilio must not surface as a raw 500 — the
+        # A network/timeout error reaching the carrier must not surface as a raw 500 — the
         # user can't tell that apart from "my credentials are wrong", so give them a
         # clear, retryable message instead.
-        raise InvalidTwilioCredentials("Could not verify these credentials with Twilio right now. Please try again.")
+        raise InvalidTwilioCredentials(
+            f"Could not verify these credentials with {spec.label} right now. Please try again."
+        )
     if not valid:
-        raise InvalidTwilioCredentials("Twilio rejected these credentials — check the Account SID and Auth Token.")
+        raise InvalidTwilioCredentials(spec.rejected_message)
+
+
+async def save_credentials(user_id: str, account_sid: str | None, auth_token: str,
+                           label: str | None = None, carrier: str = "twilio") -> dict:
+    """Validate a carrier account against the carrier, then store it for `user_id`.
+
+    The secret is Fernet-encrypted into twilio_byot_credentials.config_encrypted; nothing is
+    stored unless the carrier accepts the credentials (and, for Vonage/Telnyx, the voice
+    service accepts the matching credential). Returns the saved row in public form (masked
+    secret, no ciphertext). Raises InvalidTwilioCredentials for blank, rejected or
+    unverifiable credentials. No de-duplication: the same account can be saved twice.
+    """
+    try:
+        spec = carriers.spec(carrier)
+    except ValueError as e:
+        raise InvalidTwilioCredentials(str(e))
+    identifier = (account_sid or "").strip() or None
+    secret = (auth_token or "").strip()
+    if not secret or (spec.identifier_required and not identifier):
+        raise InvalidTwilioCredentials(spec.required_message)
+    if not spec.identifier_required:
+        identifier = None
+
+    await _verify(spec.key, identifier, secret)
+
+    vapi_credential_id = None
+    payload = carriers.vapi_credential_payload(spec.key, identifier, secret, f"nexus-{spec.key}-{user_id[:8]}")
+    if payload:
+        try:
+            vapi_credential_id = (await vapi_client.create_credential(payload)).get("id")
+        except Exception as e:
+            logger.error("VAPI credential create failed for %s account: %s", spec.key, e)
+            raise InvalidTwilioCredentials(
+                f"{spec.label} accepted these credentials, but the account couldn't be set up for "
+                "voice calls. Check the keys have full access and try again."
+            )
 
     row = {
         "user_id": user_id,
-        "account_sid": account_sid,
-        "config_encrypted": encrypt_config({"auth_token": auth_token}),
+        "carrier": spec.key,
+        "account_sid": identifier,
+        "config_encrypted": encrypt_config({"auth_token": secret}),
         "label": label,
+        "vapi_credential_id": vapi_credential_id,
     }
-    result = supabase.table("twilio_byot_credentials").insert(row).execute()
+    try:
+        result = supabase.table("twilio_byot_credentials").insert(row).execute()
+    except Exception:
+        await _drop_vapi_credential(vapi_credential_id)  # don't leave an orphan behind
+        raise
     return _row_public(result.data[0] if result.data else row)
 
 
+async def _drop_vapi_credential(vapi_credential_id: str | None) -> None:
+    """Best-effort removal of a VAPI credential; a failure is logged, never raised."""
+    if not vapi_credential_id:
+        return
+    try:
+        await vapi_client.delete_credential(vapi_credential_id)
+    except Exception:
+        logger.warning("Failed to delete VAPI credential %s", vapi_credential_id, exc_info=True)
+
+
 def list_credentials(user_id: str) -> list[dict]:
-    """All of `user_id`'s saved Twilio credentials, newest first, in public form
-    (masked token, no ciphertext). Makes no call to Twilio."""
+    """All of `user_id`'s saved carrier accounts, newest first, in public form
+    (masked secret, no ciphertext). Makes no call to any carrier."""
     result = (
         supabase.table("twilio_byot_credentials")
         .select("*")
@@ -89,12 +147,13 @@ def list_credentials(user_id: str) -> list[dict]:
     return [_row_public(r) for r in (result.data or [])]
 
 
-def get_credentials(credential_id: str, user_id: str) -> tuple[str, str] | None:
-    """Decrypted (account_sid, auth_token) for internal use only — never returned
-    to the frontend. None if the credential doesn't exist or isn't owned by user_id."""
+def get_credential_record(credential_id: str, user_id: str) -> dict | None:
+    """Decrypted record for internal use only — never returned to the frontend:
+    {"carrier", "identifier", "secret", "vapi_credential_id"}. None if the credential
+    doesn't exist or isn't owned by user_id."""
     row = (
         supabase.table("twilio_byot_credentials")
-        .select("account_sid, config_encrypted")
+        .select("carrier, account_sid, config_encrypted, vapi_credential_id")
         .eq("id", credential_id)
         .eq("user_id", user_id)
         .maybe_single()
@@ -108,15 +167,27 @@ def get_credentials(credential_id: str, user_id: str) -> tuple[str, str] | None:
         config = decrypt_config(row.data["config_encrypted"])
     except Exception:
         return None
-    return row.data["account_sid"], config.get("auth_token", "")
+    return {
+        "carrier": row.data.get("carrier") or "twilio",
+        "identifier": row.data.get("account_sid"),
+        "secret": config.get("auth_token", ""),
+        "vapi_credential_id": row.data.get("vapi_credential_id"),
+    }
+
+
+def get_credentials(credential_id: str, user_id: str) -> tuple[str, str] | None:
+    """Decrypted (identifier, secret) pair — see get_credential_record for the full record."""
+    record = get_credential_record(credential_id, user_id)
+    return (record["identifier"], record["secret"]) if record else None
 
 
 async def update_credentials(credential_id: str, user_id: str, account_sid: str | None = None,
                              auth_token: str | None = None, label: str | None = None) -> dict | None:
-    """Partial update. Changing the SID or token re-validates against Twilio before
-    saving (using the existing stored value for whichever of the two wasn't given —
-    e.g. rotating just the Auth Token doesn't require re-typing the Account SID).
-    Returns None if the credential doesn't exist or isn't owned by user_id."""
+    """Partial update. Changing the identifier or secret re-validates against the carrier
+    before saving (using the stored value for whichever of the two wasn't given — e.g.
+    rotating just the secret doesn't require re-typing the identifier), and for
+    Vonage/Telnyx updates the VAPI credential in place so numbers already imported keep
+    working. Returns None if the credential doesn't exist or isn't owned by user_id."""
     row = (
         supabase.table("twilio_byot_credentials")
         .select("*")
@@ -128,34 +199,47 @@ async def update_credentials(credential_id: str, user_id: str, account_sid: str 
     if not row.data:
         return None
 
+    carrier = row.data.get("carrier") or "twilio"
+    spec = carriers.spec(carrier)
+
     updates: dict = {}
     # A blank label clears it (stored as NULL) rather than saving an empty string.
     if label is not None:
         updates["label"] = label.strip() or None
 
-    # Only SID/token changes need a Twilio round-trip; a label-only edit skips validation.
+    # Only identifier/secret changes need a carrier round-trip; a label-only edit skips validation.
     if account_sid is not None or auth_token is not None:
-        new_sid = (account_sid if account_sid is not None else row.data["account_sid"]).strip()
-        if auth_token is not None:
-            new_token = auth_token.strip()
+        if spec.identifier_required:
+            new_id = (account_sid if account_sid is not None else (row.data.get("account_sid") or "")).strip()
         else:
-            # Rotating only the SID reuses the stored token. If that can't be decrypted the
-            # token ends up empty and the "both required" check below rejects the update,
-            # so the user is asked to re-enter it.
+            new_id = None
+        if auth_token is not None:
+            new_secret = auth_token.strip()
+        else:
+            # Rotating only the identifier reuses the stored secret. If that can't be
+            # decrypted the secret ends up empty and the "required" check below rejects the
+            # update, so the user is asked to re-enter it.
             try:
-                new_token = decrypt_config(row.data["config_encrypted"]).get("auth_token", "")
+                new_secret = decrypt_config(row.data["config_encrypted"]).get("auth_token", "")
             except Exception:
-                new_token = ""
-        if not new_sid or not new_token:
-            raise InvalidTwilioCredentials("Account SID and Auth Token are both required.")
-        try:
-            valid = await validate_credentials(new_sid, new_token)
-        except Exception:
-            raise InvalidTwilioCredentials("Could not verify these credentials with Twilio right now. Please try again.")
-        if not valid:
-            raise InvalidTwilioCredentials("Twilio rejected these credentials — check the Account SID and Auth Token.")
-        updates["account_sid"] = new_sid
-        updates["config_encrypted"] = encrypt_config({"auth_token": new_token})
+                new_secret = ""
+        if not new_secret or (spec.identifier_required and not new_id):
+            raise InvalidTwilioCredentials(spec.required_message)
+        await _verify(carrier, new_id, new_secret)
+
+        vapi_credential_id = row.data.get("vapi_credential_id")
+        if spec.needs_vapi_credential and vapi_credential_id:
+            try:
+                await vapi_client.update_credential(
+                    vapi_credential_id, carriers.vapi_credential_update_payload(carrier, new_id, new_secret),
+                )
+            except Exception as e:
+                logger.error("VAPI credential update failed for %s account: %s", carrier, e)
+                raise InvalidTwilioCredentials(
+                    f"Could not update this {spec.label} account right now. Please try again."
+                )
+        updates["account_sid"] = new_id
+        updates["config_encrypted"] = encrypt_config({"auth_token": new_secret})
 
     # Nothing to change: return the current row without touching the database.
     if not updates:
@@ -171,10 +255,10 @@ async def update_credentials(credential_id: str, user_id: str, account_sid: str 
     return _row_public(result.data[0] if result.data else {**row.data, **updates})
 
 
-def delete_credentials(credential_id: str, user_id: str) -> None:
+async def delete_credentials(credential_id: str, user_id: str) -> None:
     """Refuses to delete a credential that a live phone number still references — doing
     so would leave that number's twilio_credential_id pointing at nothing, with no way
-    to re-resolve its Twilio account for a future release/retry."""
+    to re-resolve its carrier account for a future release/retry."""
     # Any phone_numbers row that references the credential blocks deletion, whatever its status.
     in_use = (
         supabase.table("phone_numbers")
@@ -186,8 +270,19 @@ def delete_credentials(credential_id: str, user_id: str) -> None:
     if in_use.data:
         numbers = ", ".join(r["number"] for r in in_use.data if r.get("number"))
         raise CredentialInUse(
-            f"This Twilio account is still used by {len(in_use.data)} phone number"
+            f"This account is still used by {len(in_use.data)} phone number"
             f"{'s' if len(in_use.data) != 1 else ''} ({numbers}). Remove them first."
         )
-    # Removes only our stored copy; the user's Twilio account itself is never touched.
+    row = (
+        supabase.table("twilio_byot_credentials")
+        .select("vapi_credential_id")
+        .eq("id", credential_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    # Removes our stored copy (and the matching VAPI credential, if any); the user's carrier
+    # account itself is never touched.
     supabase.table("twilio_byot_credentials").delete().eq("id", credential_id).eq("user_id", user_id).execute()
+    if row.data:
+        await _drop_vapi_credential(row.data.get("vapi_credential_id"))

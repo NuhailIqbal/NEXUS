@@ -9,7 +9,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { toast } from "sonner";
 import { api } from "@/services/api";
-import { TwilioByotCard } from "./TwilioByotCard";
+import { CarrierAccountsCard } from "./CarrierAccountsCard";
 
 const getCreds = api.getTwilioCredentials as ReturnType<typeof vi.fn>;
 const deleteCred = api.deleteTwilioCredential as ReturnType<typeof vi.fn>;
@@ -22,9 +22,9 @@ beforeEach(() => {
   updateCred.mockResolvedValue({ data: { id: "cred-1" }, error: null });
 });
 
-describe("TwilioByotCard", () => {
+describe("CarrierAccountsCard", () => {
   it("shows nothing when nothing is connected (first connection happens via Add Integration)", async () => {
-    const { container } = render(<TwilioByotCard />);
+    const { container } = render(<CarrierAccountsCard />);
     await waitFor(() => expect(getCreds).toHaveBeenCalled());
     expect(container.querySelector("section")).toBeNull();
     expect(screen.queryByText("Twilio")).not.toBeInTheDocument();
@@ -35,7 +35,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123", label: "Main account", auth_token_masked: "se****en" }],
       error: null,
     });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     expect(await screen.findByText("Main account")).toBeInTheDocument();
     expect(screen.getByText(/ACabc123/)).toBeInTheDocument();
     expect(screen.getByText(/se\*\*\*\*en/)).toBeInTheDocument();
@@ -46,7 +46,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123" }], // no label, no auth_token_masked
       error: null,
     });
-    const { container } = render(<TwilioByotCard />);
+    const { container } = render(<CarrierAccountsCard />);
     await waitFor(() => expect(getCreds).toHaveBeenCalled());
     const title = container.querySelector(".font-medium.text-foreground");
     expect(title).toHaveTextContent("ACabc123");
@@ -59,7 +59,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123", auth_token_masked: "se****en" }],
       error: null,
     });
-    const { container } = render(<TwilioByotCard />);
+    const { container } = render(<CarrierAccountsCard />);
     const title = await screen.findByText("ACabc123");
     expect(title).toHaveClass("font-medium");
     const subtitle = container.querySelector(".text-xs.text-muted-foreground");
@@ -72,7 +72,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123", label: "Main account" }],
       error: null,
     });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     await screen.findByText("Main account");
     expect(screen.queryByRole("button", { name: /Connect/ })).not.toBeInTheDocument();
   });
@@ -85,7 +85,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123", label: "Renamed" }],
       error: null,
     });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     await screen.findByText("Main account");
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     // "Edit Twilio account" appears twice (a visually-hidden DialogTitle for a11y,
@@ -102,7 +102,7 @@ describe("TwilioByotCard", () => {
 
   it("a load failure is reported via toast", async () => {
     getCreds.mockResolvedValue({ data: null, error: "Network error" });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Network error"));
   });
 
@@ -111,7 +111,7 @@ describe("TwilioByotCard", () => {
       data: [{ id: "cred-1", account_sid: "ACabc123", label: "Main account" }],
       error: null,
     }).mockResolvedValue({ data: [], error: null });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     await screen.findByText("Main account");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
@@ -131,7 +131,7 @@ describe("TwilioByotCard", () => {
       error: null,
     });
     deleteCred.mockResolvedValue({ data: null, error: "This Twilio account is still used by 1 phone number (+15551234567). Remove them first." });
-    render(<TwilioByotCard />);
+    render(<CarrierAccountsCard />);
     await screen.findByText("Main account");
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await screen.findByText(/Remove this Twilio account/);
@@ -139,5 +139,51 @@ describe("TwilioByotCard", () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
       expect.stringContaining("still used by 1 phone number")
     ));
+  });
+});
+
+describe("CarrierAccountsCard — several carriers", () => {
+  const rows = [
+    { id: "t1", carrier: "twilio", account_sid: "ACabc123", label: "Twilio main", auth_token_masked: "tw****en" },
+    { id: "v1", carrier: "vonage", account_sid: "vkey01", label: "Vonage main", auth_token_masked: "vo****et" },
+    { id: "n1", carrier: "telnyx", account_sid: null, label: null, auth_token_masked: "KE****34" },
+  ];
+
+  it("shows one tile per connected carrier, each with its own accounts", async () => {
+    getCreds.mockResolvedValue({ data: rows, error: null });
+    render(<CarrierAccountsCard />);
+    expect(await screen.findByText("Twilio main")).toBeInTheDocument();
+    expect(screen.getByText("Vonage main")).toBeInTheDocument();
+    expect(screen.getByText("vkey01 · vo****et")).toBeInTheDocument();
+    // Telnyx has neither a label nor an identifier: falls back to a generic title + masked key
+    expect(screen.getByText("Telnyx account")).toBeInTheDocument();
+    expect(screen.getByText("KE****34")).toBeInTheDocument();
+  });
+
+  it("a carrier with no accounts gets no tile", async () => {
+    getCreds.mockResolvedValue({ data: [rows[1]], error: null });
+    const { container } = render(<CarrierAccountsCard />);
+    await screen.findByText("Vonage main");
+    expect(container.textContent).toContain("Vonage");
+    expect(container.textContent).not.toContain("Telnyx");
+    expect(container.textContent).not.toContain("Twilio");
+  });
+
+  it("removing a Vonage account names Vonage in the confirmation and the toast", async () => {
+    getCreds.mockResolvedValueOnce({ data: [rows[1]], error: null }).mockResolvedValue({ data: [], error: null });
+    render(<CarrierAccountsCard />);
+    await screen.findByText("Vonage main");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Remove this Vonage account?")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: /Remove/ }).slice(-1)[0]);
+    await waitFor(() => expect(deleteCred).toHaveBeenCalledWith("v1"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Vonage account removed"));
+  });
+
+  it("rows without a carrier (older API) are treated as Twilio", async () => {
+    getCreds.mockResolvedValue({ data: [{ id: "old", account_sid: "ACold", label: "Legacy" }], error: null });
+    const { container } = render(<CarrierAccountsCard />);
+    await screen.findByText("Legacy");
+    expect(container.textContent).toContain("Twilio");
   });
 });

@@ -678,18 +678,26 @@ def _ensure_columns(conn) -> None:
         # BYOT (Bring Your Own Twilio): a number can reference a user-connected Twilio
         # account instead of the platform's own one; its provider value is 'twilio_byot'.
         'ALTER TABLE public.phone_numbers ADD COLUMN IF NOT EXISTS twilio_credential_id uuid',
-        # config_encrypted holds the Fernet-encrypted Twilio auth token; the account SID is stored
-        # in the clear in account_sid.
+        # config_encrypted holds the Fernet-encrypted carrier secret; account_sid is the public
+        # identifier (Twilio SID / Vonage API key), stored in the clear.
         '''CREATE TABLE IF NOT EXISTS public.twilio_byot_credentials (
             id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
             user_id uuid NOT NULL,
-            account_sid text NOT NULL,
+            carrier text DEFAULT 'twilio' NOT NULL,
+            account_sid text,
             config_encrypted text NOT NULL,
             label text,
+            vapi_credential_id text,
             created_at timestamptz DEFAULT now() NOT NULL,
             updated_at timestamptz DEFAULT now() NOT NULL
         )''',
         'CREATE INDEX IF NOT EXISTS twilio_byot_credentials_user_idx ON public.twilio_byot_credentials (user_id)',
+        # BYOT grew from Twilio-only to Vonage and Telnyx: which carrier the account belongs
+        # to, the matching VAPI credential (Vonage/Telnyx numbers are imported by
+        # credentialId), and no public identifier for Telnyx (API key only).
+        "ALTER TABLE public.twilio_byot_credentials ADD COLUMN IF NOT EXISTS carrier text DEFAULT 'twilio' NOT NULL",
+        'ALTER TABLE public.twilio_byot_credentials ADD COLUMN IF NOT EXISTS vapi_credential_id text',
+        'ALTER TABLE public.twilio_byot_credentials ALTER COLUMN account_sid DROP NOT NULL',
         # Admin toggle: whether a BYOT call's charge leaves out the estimated Twilio carrier leg,
         # since those users already pay Twilio directly for it. On by default.
         'ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS byot_exclude_twilio_leg boolean DEFAULT true',
