@@ -64,7 +64,7 @@ const underTheHood = [
   {
     icon: AudioLines,
     title: "Natural voice output",
-    desc: `${VOICE_COUNT} production voices across English accents and Pakistani Urdu, each previewable in the dashboard before you assign it.`,
+    desc: `${VOICE_COUNT} production voices across English accents, Pakistani Urdu, Spanish and German, each previewable in the dashboard before you assign it.`,
     badge: `${VOICE_COUNT} voices`,
   },
   {

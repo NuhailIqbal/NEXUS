@@ -65,6 +65,8 @@ const AIAgents = () => {
   const LANG_MAP: Record<string, string> = {
     "English": "en-US",
     "Urdu": "ur-PK",
+    "Spanish": "es-ES",
+    "German": "de-DE",
     // Kept for agents saved before the language list was simplified.
     "English (US)": "en-US",
     "English (UK)": "en-GB",

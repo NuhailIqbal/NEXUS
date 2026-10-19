@@ -84,13 +84,13 @@ const groups: Group[] = [
       {
         icon: Mic,
         title: `${VOICE_COUNT} production voices`,
-        desc: "American, Canadian, Indian-American and Asian-American English voices, plus two Pakistani Urdu voices. Preview any of them with your own sample line.",
+        desc: "American, Canadian, Indian-American and Asian-American English voices, plus two Pakistani Urdu, two Spanish and two German voices. Preview any of them with your own sample line.",
         badge: `${VOICE_COUNT} voices`,
       },
       {
         icon: Languages,
-        title: "English, Urdu or multilingual",
-        desc: "Pick a language per agent. Urdu agents reply in Roman Urdu, and multilingual agents detect the caller's language and answer in kind.",
+        title: "English, Urdu, Spanish, German or multilingual",
+        desc: "Pick a language per agent. Urdu agents reply in Roman Urdu, Spanish and German agents hold the whole call in their language, and multilingual agents detect the caller's language and answer in kind.",
         badge: `${LANGUAGE_OPTIONS.length} modes`,
       },
       {

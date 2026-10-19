@@ -28,12 +28,18 @@ const voices = [
   { name: "Naina", accent: "Indian American", note: "Calm, collected" },
   { name: "Zara", accent: "Pakistani (Urdu)", note: "Warm, professional" },
   { name: "Ali", accent: "Pakistani (Urdu)", note: "Steady, professional" },
+  { name: "Lucia", accent: "For Spanish", note: "Upbeat, professional" },
+  { name: "Mateo", accent: "For Spanish", note: "Smooth, conversational" },
+  { name: "Greta", accent: "For German", note: "Upbeat, professional" },
+  { name: "Lukas", accent: "For German", note: "Smooth, conversational" },
 ];
 
 const languages = [
   { name: "English", note: "Every voice, every accent" },
   { name: "Urdu", note: "Replies in Roman Urdu" },
-  { name: "Multilingual", note: "Detects the caller's language and answers in kind" },
+  { name: "Spanish", note: "Speaks Spanish for the whole call" },
+  { name: "German", note: "Speaks German for the whole call" },
+  { name: "Multilingual", note: "Detects English, Spanish, German or Urdu and answers in kind" },
 ];
 
 const included = [
@@ -54,8 +60,8 @@ const AIWorkforce = () => (
         </h2>
         <p className="text-muted-foreground mt-4 max-w-2xl mx-auto">
           {VOICE_COUNT} production voices across American, Canadian, Indian-American and Asian-American
-          English, plus Pakistani Urdu. Preview any of them in the dashboard before you assign one to
-          an agent.
+          English, plus Pakistani Urdu, Spanish and German. Preview any of them in the dashboard before
+          you assign one to an agent.
         </p>
       </div>
 

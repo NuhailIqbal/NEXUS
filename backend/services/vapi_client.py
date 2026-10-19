@@ -254,6 +254,39 @@ _URDU_VOICE_IDS = {
 # Fallback for non-English agents whose voice is blank or unrecognized (see _resolve_voice).
 _DEFAULT_URDU_VOICE = _URDU_VOICE_IDS["zara"]
 
+# Spanish and German voices. Both are ElevenLabs built-in ("default") voices, which exist in every
+# ElevenLabs account, so nothing has to be added to the account first, and ElevenLabs lists both
+# as verified for Spanish AND German — "Matilda" (female) and "Eric" (male). That is why each id
+# appears under a Spanish and under a German display name. They speak through the same
+# eleven_multilingual_v2 model as the Urdu voices (the model officially covers both languages),
+# so a voice is not language-locked: any of these names also works for any other language.
+# Display names are ours, like "Zara"/"Ali" above. To use a different voice for a language (for
+# example a native-accent voice from the ElevenLabs Voice Library, which has to be added to the
+# ElevenLabs account first) change the id here and in src/pages/dashboard/AIVoices.tsx.
+_ELEVENLABS_MATILDA = "XrExE9yKIg1WjnnlVkGX"
+_ELEVENLABS_ERIC = "cjVigY5qzO86Huf0OWal"
+_SPANISH_VOICE_IDS = {
+    "lucia": _ELEVENLABS_MATILDA,  # female
+    "mateo": _ELEVENLABS_ERIC,     # male
+}
+_GERMAN_VOICE_IDS = {
+    "greta": _ELEVENLABS_MATILDA,  # female
+    "lukas": _ELEVENLABS_ERIC,     # male
+}
+
+# Voice used when an agent in one of these languages has no usable voice. Keyed by the language
+# code _resolve_language returns; values are _VOICE_REGISTRY keys.
+_DEFAULT_VOICE_BY_LANGUAGE = {
+    "es": "lucia",
+    "de": "greta",
+}
+
+
+def _elevenlabs_voice(voice_id: str) -> dict:
+    """A ready-to-send VAPI "voice" block for an ElevenLabs voice id."""
+    return {"provider": "11labs", "voiceId": voice_id, "model": "eleven_multilingual_v2"}
+
+
 # Every voice name the app recognizes, regardless of which language an agent is set
 # to — lets an agent's voice be picked independently from the full catalog (matching
 # the AI Voices page) rather than only from whichever short list matched its language.
@@ -262,8 +295,8 @@ _VOICE_REGISTRY: dict[str, dict] = {
     name.lower(): {"provider": "vapi", "voiceId": name} for name in _VAPI_VOICE_IDS
 }
 _VOICE_REGISTRY.update({
-    name: {"provider": "11labs", "voiceId": voice_id, "model": "eleven_multilingual_v2"}
-    for name, voice_id in _URDU_VOICE_IDS.items()
+    name: _elevenlabs_voice(voice_id)
+    for name, voice_id in {**_URDU_VOICE_IDS, **_SPANISH_VOICE_IDS, **_GERMAN_VOICE_IDS}.items()
 })
 
 
@@ -273,18 +306,28 @@ def _resolve_voice(voice: str | None, language: str | None = None) -> dict:
     'language', so any voice can be paired with any language the UI offers.
 
     If 'voice' is blank/unrecognized, fall back to a sensible default for the
-    language: Vapi's 'Elliot' for English, the ElevenLabs 'Zara' for anything else
-    (Vapi's own voices can't speak non-English languages). Requires an ElevenLabs
-    provider key configured on the VAPI account/dashboard for the ElevenLabs voices."""
+    language: Vapi's 'Elliot' for English, 'Lucia' for Spanish, 'Greta' for German and the
+    ElevenLabs 'Zara' for anything else (Vapi's own voices can't speak non-English languages).
+    Spanish and German go one step further: they never use one of Vapi's built-in English
+    voices, so if one is named the language's default voice is used instead (an English-only
+    voice would read Spanish or German text badly). Requires an ElevenLabs provider key
+    configured on the VAPI account/dashboard for the ElevenLabs voices."""
     raw = (voice or "").strip().lower()
+    lang_code = _resolve_language(language)
+    default_name = _DEFAULT_VOICE_BY_LANGUAGE.get(lang_code)
     if raw in _VOICE_REGISTRY:
+        block = _VOICE_REGISTRY[raw]
+        if default_name and block["provider"] == "vapi":
+            return dict(_VOICE_REGISTRY[default_name])
         # Copy so a caller that edits the block cannot mutate the shared registry entry.
-        return dict(_VOICE_REGISTRY[raw])
-    # Unknown voice: only English falls back to a built-in Vapi voice; every other
-    # language gets the ElevenLabs multilingual default below.
-    if _resolve_language(language) in ("en", "en-US", "en-GB"):
+        return dict(block)
+    # Unknown voice: Spanish and German get their own default; only English falls back to a
+    # built-in Vapi voice; every other language gets the ElevenLabs multilingual default below.
+    if default_name:
+        return dict(_VOICE_REGISTRY[default_name])
+    if lang_code in ("en", "en-US", "en-GB"):
         return {"provider": "vapi", "voiceId": _DEFAULT_VAPI_VOICE}
-    return {"provider": "11labs", "voiceId": _DEFAULT_URDU_VOICE, "model": "eleven_multilingual_v2"}
+    return _elevenlabs_voice(_DEFAULT_URDU_VOICE)
 
 
 def _resolve_language(language: str | None) -> str:
@@ -298,14 +341,21 @@ def _resolve_language(language: str | None) -> str:
         # Kept for agents saved before the language list was simplified to just "English".
         "english (us)": "en-US",
         "english (uk)": "en-GB",
+        # "spanish" / "german" are the labels the agent form saves; the "(es)" style labels
+        # below are the older ones.
+        "spanish": "es",
         "spanish (es)": "es",
         "spanish (mx)": "es",
         "french (fr)":  "fr",
         "italian (it)": "it",
+        "german": "de",
         "german (de)":  "de",
         "urdu": "ur",
         "urdu (pk)": "ur",
         "multilingual": "multi",
+        # The bare codes, so API clients that send "ES" / "De" still get Deepgram's lowercase form.
+        "es": "es",
+        "de": "de",
     }
     # Anything not in the table is passed through unchanged when it is short enough to
     # be a language code already (e.g. "fr", "pt-BR"); longer free text falls back to "en".
@@ -317,10 +367,13 @@ def _resolve_transcriber(language: str | None) -> dict:
     so that language pins the model explicitly; other languages keep Vapi's default.
     "multi" (Multilingual — auto-detects/code-switches between languages within a call)
     is also pinned to Nova-3 for its broader per-language coverage — confirmed live
-    against Vapi's POST /assistant that "multi" is accepted on both Nova-2 and Nova-3."""
+    against Vapi's POST /assistant that "multi" is accepted on both Nova-2 and Nova-3.
+    Spanish and German are pinned to Nova-3 too: both models list them, Nova-3 is the more
+    accurate one, and Nova-3's "multi" (which Multilingual agents use) covers them as well —
+    Nova-2's "multi" only covers Spanish and English."""
     lang_code = _resolve_language(language)
     transcriber = {"provider": "deepgram", "language": lang_code}
-    if lang_code in ("ur", "multi"):
+    if lang_code in ("ur", "multi", "es", "de"):
         transcriber["model"] = "nova-3"
     return transcriber
 
@@ -366,21 +419,81 @@ _MULTILINGUAL_DIRECTIVE = (
     "above — always write your reply in ROMAN URDU (Latin/English alphabet), e.g. "
     "\"Aap kaisay hain\", \"Shukriya\". NEVER use Urdu script (Nastaliq/Arabic letters) "
     "or Devanagari (Hindi) script, no matter what script the caller's own speech came "
-    "through as.\n\n---\n\n"
+    "through as.\n\n"
+    # Added when Spanish and German became agent languages. Deepgram's "multi" transcriber
+    # (Nova-3) already understands both, so this only has to make the model answer them in
+    # kind. It goes after the Urdu rules so every instruction above stays word-for-word as it was.
+    "SPANISH AND GERMAN: Callers may also speak Spanish or German. When they do, reply fully "
+    "in that same language for the rest of the call — including what you say when the caller "
+    "is silent or unclear, before a transfer, and in your goodbye — in clear, neutral wording, "
+    "addressing them formally (usted in Spanish, Sie in German) unless they are clearly "
+    "casual. Never answer a Spanish- or German-speaking caller in English, and write both "
+    "languages in their normal Latin spelling with accents and umlauts.\n\n---\n\n"
 )
+
+
+# Spanish and German agents must hold the WHOLE call in their language. The greeting is the
+# agent's own text, spoken as written; everything the model says after it comes from here and
+# from the agent's prompt, which is usually written in English — so the directive names every
+# moment a model tends to fall back to English (silence, a misheard caller, a transfer, the
+# goodbye) and tells it to translate the instructions instead of answering in their language.
+# Written in English because the model follows English instructions most reliably; the quoted
+# example lines anchor the register.
+_SPANISH_DIRECTIVE = (
+    "IMPORTANT — LANGUAGE (MUST FOLLOW): This agent speaks SPANISH (español) only. Hold the "
+    "ENTIRE call in Spanish, from your first word to your last. Every reply must be in Spanish: "
+    "greetings, questions, confirmations, answers, and any apology or fallback line. That "
+    "includes what you say when the caller is silent or you did not catch what they said (for "
+    "example \"¿Sigue ahí?\" or \"Perdone, ¿podría repetirlo?\"), what you say before a call is "
+    "transferred to a person (for example \"Un momento, por favor, le comunico.\"), and your "
+    "closing goodbye (for example \"Gracias por su llamada. ¡Que tenga un buen día!\").\n\n"
+    "Never switch to English or any other language — not even if the caller does, if they ask "
+    "you to, or if the instructions below are written in English. Understand those instructions "
+    "and carry them out in Spanish. If a tool returns text in another language, say it in "
+    "Spanish.\n\n"
+    "Use clear, neutral Spanish that any Spanish speaker will understand (no slang or regional "
+    "expressions) and address the caller formally (usted) unless they clearly prefer a casual "
+    "tone. Say numbers, dates, times, prices, phone numbers and email addresses the way a "
+    "native Spanish speaker would read them aloud. Keep business, brand and product names "
+    "exactly as they are written.\n\n---\n\n"
+)
+
+_GERMAN_DIRECTIVE = (
+    "IMPORTANT — LANGUAGE (MUST FOLLOW): This agent speaks GERMAN (Deutsch) only. Hold the "
+    "ENTIRE call in German, from your first word to your last. Every reply must be in German: "
+    "greetings, questions, confirmations, answers, and any apology or fallback line. That "
+    "includes what you say when the caller is silent or you did not catch what they said (for "
+    "example \"Sind Sie noch da?\" or \"Entschuldigung, könnten Sie das bitte wiederholen?\"), "
+    "what you say before a call is transferred to a person (for example \"Einen Moment bitte, "
+    "ich verbinde Sie.\"), and your closing goodbye (for example \"Vielen Dank für Ihren Anruf. "
+    "Auf Wiederhören!\").\n\n"
+    "Never switch to English or any other language — not even if the caller does, if they ask "
+    "you to, or if the instructions below are written in English. Understand those instructions "
+    "and carry them out in German. If a tool returns text in another language, say it in "
+    "German.\n\n"
+    "Use clear Standard German (Hochdeutsch) and address the caller formally (Sie) unless they "
+    "clearly prefer the informal \"du\". Say numbers, dates, times, prices, phone numbers and "
+    "email addresses the way a native German speaker would read them aloud. Keep business, "
+    "brand and product names exactly as they are written.\n\n---\n\n"
+)
+
+# Directive to prepend per language code; English (and any language without an entry) needs none.
+_LANGUAGE_DIRECTIVES = {
+    "ur": _URDU_SCRIPT_DIRECTIVE,
+    "multi": _MULTILINGUAL_DIRECTIVE,
+    "es": _SPANISH_DIRECTIVE,
+    "de": _GERMAN_DIRECTIVE,
+}
 
 
 def apply_language_directive(system_prompt: str | None, language: str | None) -> str:
     """Prepend any language-specific behavioral instruction the model needs beyond what
     the agent's own prompt says (Urdu needs a script directive; Multilingual needs a
-    caller-language-matching directive)."""
+    caller-language-matching directive; Spanish and German need a "never leave the language"
+    directive). English gets the prompt back unchanged."""
     prompt = system_prompt or ""
-    lang_code = _resolve_language(language)
-    if lang_code == "ur":
-        return _URDU_SCRIPT_DIRECTIVE + prompt
-    if lang_code == "multi":
-        return _MULTILINGUAL_DIRECTIVE + prompt
-    return prompt
+    directive = _LANGUAGE_DIRECTIVES.get(_resolve_language(language))
+    return directive + prompt if directive else prompt
 
 
 import re
@@ -394,11 +507,29 @@ def _tool_name_slug(agent_name: str | None) -> str:
     return slug or "agent"
 
 
-def build_transfer_tool_payload(agent_name: str | None, number: str) -> dict:
+# What VAPI says to the caller just before it transfers the call. It is a fixed string stored on
+# the transferCall tool, so it cannot follow a caller's language: English is used for every
+# language without its own line (including Multilingual, whose callers' language is not known
+# when the tool is created).
+_TRANSFER_MESSAGE = "Please hold while I connect you."
+_TRANSFER_MESSAGES = {
+    "es": "Por favor, espere un momento mientras le comunico.",
+    "de": "Einen Moment bitte, ich verbinde Sie.",
+}
+
+
+def transfer_message(language: str | None = None) -> str:
+    """The line spoken to the caller before a transfer, in the agent's language."""
+    return _TRANSFER_MESSAGES.get(_resolve_language(language), _TRANSFER_MESSAGE)
+
+
+def build_transfer_tool_payload(agent_name: str | None, number: str, language: str | None = None) -> dict:
     """A standalone VAPI transferCall tool that forwards a qualified call to `number`.
 
     Created via POST /tool and attached to the assistant by toolId — so it shows up
     as its own entry in the VAPI Tools library (e.g. transfer_call_tool_<agent>).
+    `language` is the agent's language; it only decides which language the "please hold"
+    line is spoken in (see transfer_message).
     """
     return {
         "type": "transferCall",
@@ -412,7 +543,7 @@ def build_transfer_tool_payload(agent_name: str | None, number: str) -> dict:
             # phone number; used as the caller ID of the transferred leg.
             "callerId": "{{customer.number}}",
             # Spoken to the caller just before the transfer starts.
-            "message": "Please hold while I connect you.",
+            "message": transfer_message(language),
             "description": "Transfer to this destination",
         }],
     }

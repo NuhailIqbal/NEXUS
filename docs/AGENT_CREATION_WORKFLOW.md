@@ -39,8 +39,8 @@ Basic configuration and business context.
 | Website | ⬜ | Optional; has an “Analyze” helper button |
 | **Main Goal** | ✅ | What the agent should accomplish |
 | **Industry** | ✅ | Pick one of 8 (Retail, Healthcare, Finance, Real Estate, Education, Travel, SaaS, Other) → stored as `category` |
-| Language | ⬜ | Default **English (US)** |
-| Voice | ⬜ | Default **Aria** (Aria/Marco/Nora/Kai/Eva/Tom) |
+| Language | ⬜ | **English** (default), **Urdu**, **Spanish**, **German** or **Multilingual (auto-detect)**. Saved as that label in `ai_agents.language`; the backend turns it into the speech-recognition language, the language instructions the model gets and the "please hold" line spoken before a transfer |
+| Voice | ⬜ | Default **Elliot** (a built-in English voice, English only). Spanish, German and Multilingual agents need a multilingual voice to speak those languages aloud: choosing one of them while an English-only voice is selected switches to **Lucia** (Spanish), **Greta** (German) or **Zara** (Multilingual); **Mateo**, **Lukas**, **Zara** and **Ali** work for any language. On the server a Spanish or German agent never uses an English-only voice (it gets Lucia/Greta instead); a Multilingual agent keeps whatever voice was saved |
 
 *Validation:* Name, Main Goal, and Industry must be filled to continue.
 

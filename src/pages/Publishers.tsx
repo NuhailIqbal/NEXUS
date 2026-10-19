@@ -45,7 +45,7 @@ const benefits = [
   {
     icon: Languages,
     title: "Speak your callers' language",
-    desc: "Run an English or Urdu receptionist, or a multilingual one that detects the caller's language and replies in kind.",
+    desc: "Run an English, Spanish, German or Urdu receptionist, or a multilingual one that detects the caller's language and replies in kind.",
     badge: "Multilingual",
   },
   {

@@ -126,7 +126,7 @@ const useCases: UseCase[] = [
     icon: Wifi,
     vertical: "Telecommunications & Internet",
     title: "Multilingual customer lines",
-    description: "Serve English and Urdu-speaking customers from the same number with a multilingual agent that answers in the caller's language.",
+    description: "Serve English, Spanish, German and Urdu-speaking customers from the same number with a multilingual agent that answers in the caller's language.",
     direction: "Inbound",
     tags: ["Multilingual", "AI receptionist", "Urdu voices"],
   },

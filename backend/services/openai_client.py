@@ -12,6 +12,7 @@ import logging
 import httpx
 
 from config import settings
+from services.vapi_client import apply_language_directive
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,20 @@ class OpenAIError(Exception):
     pass
 
 
-async def chat_reply(system_prompt: str | None, user_message: str, first_message: str | None = None) -> str | None:
-    """Generate an in-character agent reply to a test message via OpenAI (gpt-4o-mini)."""
+async def chat_reply(system_prompt: str | None, user_message: str, first_message: str | None = None,
+                     language: str | None = None) -> str | None:
+    """Generate an in-character agent reply to a test message via OpenAI (gpt-4o-mini).
+
+    `language` is the agent's language; it adds the same language instruction a real call gets,
+    so a Spanish or German agent's test reply is in that language. None leaves the prompt as is."""
     if not settings.openai_api_key or not user_message:
         return None
 
     # Build the system message from the agent's own prompt (with a generic fallback),
     # then append the test-mode instructions so the model answers as spoken text only.
     sys = (system_prompt or "You are a helpful AI voice agent.").strip()
+    # English has no directive, so this is a no-op unless a language was sent.
+    sys = apply_language_directive(sys, language).strip()
     if first_message:
         sys += f'\nYour usual opening line is: "{first_message}".'
     sys += (

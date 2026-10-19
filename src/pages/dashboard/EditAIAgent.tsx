@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn, isE164 } from "@/lib/utils";
+import { normalizeLanguage } from "@/lib/languages";
 import { api } from "@/services/api";
 import {
   STEPS,
@@ -38,17 +39,6 @@ type Agent = {
   website: string | null;
   transfer_number: string | null;
   selected_tool_keys?: string[] | null;
-};
-
-/** Maps a stored language string onto one of the three Select options: English, Urdu or Multilingual. */
-// Same normalization the old Settings dialog used — agents created before the language
-// list was simplified can have values like "Urdu (PK)" that don't match any Select
-// option, which would otherwise render the field blank.
-const normalizeLanguage = (lang: string | null): string => {
-  if (!lang) return "English";
-  if (lang === "Multilingual") return "Multilingual";
-  if (/urdu/i.test(lang)) return "Urdu";
-  return "English";
 };
 
 /** Blank form shown until an agent has loaded; the load effect replaces it with the agent's values. */

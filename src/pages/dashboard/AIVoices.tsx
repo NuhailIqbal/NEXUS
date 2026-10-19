@@ -31,6 +31,14 @@ const VOICES_CATALOG = [
   // _resolve_voice / _URDU_VOICE_IDS). "Zara"/"Ali" are our own display names.
   { id: 14, name: "Zara", language: "Urdu", accent: "Pakistani", gender: "Female", description: "Realistic, warm, professional", favorite: false },
   { id: 15, name: "Ali", language: "Urdu", accent: "Pakistani", gender: "Male", description: "Realistic, steady, professional", favorite: false },
+  // Spanish and German voices — also ElevenLabs' multilingual model (see backend/services/
+  // vapi_client.py's _SPANISH_VOICE_IDS / _GERMAN_VOICE_IDS). The names are our own. Each pair is
+  // one built-in ElevenLabs voice that ElevenLabs verifies for both languages, so Lucia and
+  // Greta sound alike, as do Mateo and Lukas.
+  { id: 16, name: "Lucia", language: "Spanish", accent: "Multilingual", gender: "Female", description: "Natural, upbeat, professional", favorite: false },
+  { id: 17, name: "Mateo", language: "Spanish", accent: "Multilingual", gender: "Male", description: "Natural, smooth, conversational", favorite: false },
+  { id: 18, name: "Greta", language: "German", accent: "Multilingual", gender: "Female", description: "Natural, upbeat, professional", favorite: false },
+  { id: 19, name: "Lukas", language: "German", accent: "Multilingual", gender: "Male", description: "Natural, smooth, conversational", favorite: false },
 ];
 import { Button } from "@/components/ui/button";
 import {
@@ -67,6 +75,10 @@ const EN_TRANSCRIBER = { provider: "deepgram", language: "en" };
 // the default nova-2 model). Must mirror backend/services/vapi_client.py's
 // _resolve_transcriber, or this preview 400s instead of playing.
 const UR_TRANSCRIBER = { provider: "deepgram", language: "ur", model: "nova-3" };
+// Spanish and German also run on Nova-3 (both models list them; Nova-3 is the more accurate).
+// Must mirror backend/services/vapi_client.py's _resolve_transcriber too.
+const ES_TRANSCRIBER = { provider: "deepgram", language: "es", model: "nova-3" };
+const DE_TRANSCRIBER = { provider: "deepgram", language: "de", model: "nova-3" };
 
 /**
  * Maps a lower-cased voice name to the `voice` and `transcriber` blocks passed to
@@ -89,6 +101,11 @@ const VOICE_BLOCKS: Record<string, { voice: Record<string, unknown>; transcriber
   // Urdu (PK) — ElevenLabs multilingual voices (see backend's _URDU_VOICE_IDS).
   zara: { voice: { provider: "11labs", voiceId: "21m00Tcm4TlvDq8ikWAM", model: "eleven_multilingual_v2" }, transcriber: UR_TRANSCRIBER },
   ali: { voice: { provider: "11labs", voiceId: "pNInz6obpgDQGcFmaJgB", model: "eleven_multilingual_v2" }, transcriber: UR_TRANSCRIBER },
+  // Spanish and German — ElevenLabs multilingual voices (see backend's _SPANISH_VOICE_IDS / _GERMAN_VOICE_IDS).
+  lucia: { voice: { provider: "11labs", voiceId: "XrExE9yKIg1WjnnlVkGX", model: "eleven_multilingual_v2" }, transcriber: ES_TRANSCRIBER },
+  mateo: { voice: { provider: "11labs", voiceId: "cjVigY5qzO86Huf0OWal", model: "eleven_multilingual_v2" }, transcriber: ES_TRANSCRIBER },
+  greta: { voice: { provider: "11labs", voiceId: "XrExE9yKIg1WjnnlVkGX", model: "eleven_multilingual_v2" }, transcriber: DE_TRANSCRIBER },
+  lukas: { voice: { provider: "11labs", voiceId: "cjVigY5qzO86Huf0OWal", model: "eleven_multilingual_v2" }, transcriber: DE_TRANSCRIBER },
 };
 
 /** Vapi public (browser-safe) key; empty string when unset, which disables previews. */
@@ -190,6 +207,12 @@ const AIVoices = () => {
         // Roman Urdu, not English — this voice needs Roman-Urdu text to actually
         // demonstrate its Urdu pronunciation (English text would just come out English).
         ? `Assalam-o-alaikum, mera naam ${v.name} hai. Main aapke AI agent ki awaaz ban ${v.gender === "Female" ? "sakti" : "sakta"} hoon.`
+        // Spanish and German samples are written in the language itself so the voice is heard
+        // speaking it (English text would come out in English).
+        : v.language === "Spanish"
+        ? `Hola, soy ${v.name}. Puedo ser la voz de su próximo agente de inteligencia artificial.`
+        : v.language === "German"
+        ? `Hallo, ich bin ${v.name}. Ich kann die Stimme Ihres nächsten KI-Agenten sein.`
         : `Hi, I'm ${v.name}. I speak ${v.language}${v.accent ? ` with ${article(v.accent)} ${v.accent} accent` : ""}. I'd love to be the voice of your next AI agent.`,
     );
     setSpeaking(false);

@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, isE164 } from "@/lib/utils";
 import { ALL_VOICE_NAMES } from "@/lib/voices";
+import { AGENT_LANGUAGES, greetingNote, greetingPlaceholder, voiceAfterLanguageChange, voiceLanguageNote } from "@/lib/languages";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
 import { LiveVoiceModal, VoiceAgentInfo } from "@/components/dashboard/LiveVoiceModal";
@@ -352,6 +353,19 @@ export function StepSetup({
   // The full voice catalog from @/lib/voices; every voice is offered whatever the language.
   const voiceOptions = ALL_VOICE_NAMES;
   const [analyzing, setAnalyzing] = useState(false);
+  // Set when the voice can't speak the language (see voiceLanguageNote); null most of the time.
+  const voiceNote = voiceLanguageNote(form.language, form.voice);
+
+  /**
+   * Language dropdown handler. Spanish and German can't use the English-only voices, so picking one
+   * of them while such a voice is selected moves the voice to that language's default; any other
+   * change leaves the voice alone.
+   */
+  const changeLanguage = (language: string) => {
+    update("language", language);
+    const voice = voiceAfterLanguageChange(language, form.voice);
+    if (voice !== form.voice) update("voice", voice);
+  };
 
   /**
    * "Analyze" button handler: asks the backend (POST /agents/analyze-website, rate limited per
@@ -477,14 +491,14 @@ export function StepSetup({
         <SectionTitle icon={<Sparkles className="h-4 w-4 text-primary" />}>Communication</SectionTitle>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Language">
-            <Select value={form.language} onValueChange={(v) => update("language", v)}>
+            <Select value={form.language} onValueChange={changeLanguage}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="English">English</SelectItem>
-                <SelectItem value="Urdu">Urdu</SelectItem>
-                <SelectItem value="Multilingual">Multilingual (auto-detect)</SelectItem>
+                {AGENT_LANGUAGES.map((l) => (
+                  <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </Field>
@@ -499,6 +513,7 @@ export function StepSetup({
                 ))}
               </SelectContent>
             </Select>
+            {voiceNote && <p className="mt-1 text-xs text-warning" role="note">{voiceNote}</p>}
           </Field>
         </div>
       </div>
@@ -636,9 +651,12 @@ export function StepPrompt({
         <input
           value={form.greeting}
           onChange={(e) => update("greeting", e.target.value)}
-          placeholder="Hi! How can I help you today?"
+          placeholder={greetingPlaceholder(form.language)}
           className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
         />
+        {greetingNote(form.language) && (
+          <p className="mt-1 text-xs text-muted-foreground">{greetingNote(form.language)}</p>
+        )}
       </Field>
     </div>
   );
@@ -659,9 +677,10 @@ export function StepTesting({
   const [voiceTestStarting, setVoiceTestStarting] = useState(false);
 
   /**
-   * Text test: sends the test message with the current system prompt and greeting to
+   * Text test: sends the test message with the current system prompt, greeting and language to
    * POST /agents/test, which makes a single model completion without saving anything. The
-   * reply therefore reflects only the prompt and greeting, not tools, call events or knowledge.
+   * reply therefore reflects only the prompt, greeting and language rules, not tools, call
+   * events or knowledge.
    */
   const runTest = async () => {
     if (!form.testMessage.trim()) {
@@ -674,6 +693,7 @@ export function StepTesting({
       message: form.testMessage,
       system_prompt: form.systemPrompt || null,
       first_message: form.greeting || null,
+      language: form.language || null,
     });
     setLoading(false);
     if (error) {

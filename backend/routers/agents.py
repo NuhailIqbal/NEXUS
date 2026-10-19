@@ -157,7 +157,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
         if body.transfer_number and body.transfer_number.strip():
             try:
                 t = await vapi_client.create_tool(
-                    vapi_client.build_transfer_tool_payload(body.name, body.transfer_number)
+                    vapi_client.build_transfer_tool_payload(body.name, body.transfer_number, body.language)
                 )
                 transfer_tool_id = t.get("id")
             except Exception as e:
@@ -222,7 +222,7 @@ async def test_agent(body: AgentTest, user=Depends(get_current_user)):
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="AI testing is not configured — add OPENAI_API_KEY on the server.")
     try:
-        reply = await chat_reply(body.system_prompt, body.message, body.first_message)
+        reply = await chat_reply(body.system_prompt, body.message, body.first_message, body.language)
     except OpenAIError as e:
         raise HTTPException(status_code=502, detail=str(e))
     if not reply:
@@ -336,7 +336,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
     if agent.get("transfer_number") and str(agent["transfer_number"]).strip() and not transfer_tool_id:
         try:
             t = await vapi_client.create_tool(
-                vapi_client.build_transfer_tool_payload(agent["name"], agent["transfer_number"])
+                vapi_client.build_transfer_tool_payload(agent["name"], agent["transfer_number"], agent.get("language"))
             )
             transfer_tool_id = t.get("id")
         except Exception as e:
@@ -503,8 +503,8 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
             if "first_message" in updates:
                 vapi_payload["firstMessage"] = updates["first_message"]
             # Rebuild the model block when the prompt, the transfer number, OR the
-            # language changes (Urdu needs a script directive injected — see
-            # vapi_client.apply_language_directive). The transfer is a standalone VAPI
+            # language changes (Urdu, Spanish, German and Multilingual need a directive
+            # injected — see vapi_client.apply_language_directive). The transfer is a standalone VAPI
             # transferCall tool attached by id, so we recompute the full toolIds (preset
             # tools + transfer tool) to avoid dropping them.
             # Changes to the selected preset tools or the call events land here too, since
@@ -536,7 +536,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                     new_num = (updates.get("transfer_number") or "").strip()
                     agent_name = updates.get("name") or agent.get("name") or ""
                     if new_num:
-                        t_payload = vapi_client.build_transfer_tool_payload(agent_name, new_num)
+                        t_payload = vapi_client.build_transfer_tool_payload(agent_name, new_num, effective_language)
                         if transfer_tool_id:
                             await vapi_client.update_tool(transfer_tool_id, t_payload)
                         else:
@@ -551,6 +551,25 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                                 pass
                         transfer_tool_id = None
                         db_updates["transfer_tool_id"] = None
+                elif (
+                    transfer_tool_id
+                    and (agent.get("transfer_number") or "").strip()
+                    and vapi_client.transfer_message(effective_language)
+                    != vapi_client.transfer_message(agent.get("language"))
+                ):
+                    # The number is unchanged, but the language moved to or from one whose spoken
+                    # "please hold" line differs (English -> Spanish, German -> English...), so the
+                    # existing tool's line is refreshed. The edit form re-sends the language on every
+                    # save, so only a real change of the line reaches VAPI; English, Urdu and
+                    # Multilingual share one line and never trigger this.
+                    await vapi_client.update_tool(
+                        transfer_tool_id,
+                        vapi_client.build_transfer_tool_payload(
+                            updates.get("name") or agent.get("name") or "",
+                            agent["transfer_number"],
+                            effective_language,
+                        ),
+                    )
 
                 # Every kind of tool goes into one list: the toolIds sent here are the
                 # assistant's full set, so leaving one out would detach it.

@@ -268,6 +268,10 @@ class AgentTest(BaseModel):
     message: str
     system_prompt: Optional[str] = None
     first_message: Optional[str] = None
+    # The agent's language label or code. When sent, the test applies the same language rules a
+    # real call gets (see vapi_client.apply_language_directive); when omitted the reply follows
+    # the prompt alone, as before.
+    language: Optional[str] = None
 
 
 class AgentVoiceTestStart(BaseModel):

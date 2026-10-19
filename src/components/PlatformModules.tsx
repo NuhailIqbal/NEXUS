@@ -10,7 +10,7 @@ const modules = [
     title: "AI Voice Agents",
     description:
       "A guided setup walks you through the agent's goal, industry, voice and knowledge, then lets you talk to it in your browser before it ever dials out.",
-    features: ["Website auto-fill", "Prompt studio", "English & Urdu", "Live test call"],
+    features: ["Website auto-fill", "Prompt studio", "English, Urdu, Spanish & German", "Live test call"],
     stat: String(VOICE_COUNT),
     statLabel: "production voices",
   },

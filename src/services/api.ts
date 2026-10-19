@@ -139,7 +139,7 @@ export const api = {
   getAgent: (id: string) => get(`/agents/${id}`),
   createAgent: (data: any) => post("/agents", data),
   // Text-only dry run of a not-yet-saved prompt (a single OpenAI completion); nothing is saved or called.
-  testAgent: (data: { message: string; system_prompt?: string | null; first_message?: string | null }) => post("/agents/test", data),
+  testAgent: (data: { message: string; system_prompt?: string | null; first_message?: string | null; language?: string | null }) => post("/agents/test", data),
   // Live voice test of an unsaved agent: start creates a throwaway VAPI assistant and end
   // deletes it (best effort; the backend reports success even if the deletion fails).
   startVoiceTest: (data: { name: string; voice?: string | null; language?: string | null; system_prompt?: string | null; first_message?: string | null }) =>

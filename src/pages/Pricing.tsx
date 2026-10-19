@@ -20,7 +20,7 @@ import {
 
 const included = [
   "Unlimited AI agents",
-  `${VOICE_COUNT} production voices, English, Urdu & multilingual`,
+  `${VOICE_COUNT} production voices, English, Urdu, Spanish, German & multilingual`,
   "Outbound campaigns with CSV import and DNC screening",
   "24/7 AI receptionist for inbound calls",
   "Recording, transcript and AI summary on every call",
@@ -192,7 +192,7 @@ const Pricing = () => (
             ))}
           </ul>
           <p className="text-xs text-muted-foreground mt-5 pt-4 border-t border-border">
-            Supports {LANGUAGE_OPTIONS.length} language modes at the same rate. No premium surcharge for Urdu or multilingual agents.
+            Supports {LANGUAGE_OPTIONS.length} language modes at the same rate. No premium surcharge for Urdu, Spanish, German or multilingual agents.
           </p>
         </div>
       </div>
