@@ -627,6 +627,8 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     call_hours_days integer[] DEFAULT '{0,1,2,3,4}'::integer[] NOT NULL,
     call_hours_start text DEFAULT '09:00'::text NOT NULL,
     call_hours_end text DEFAULT '17:00'::text NOT NULL,
+    -- Per-day windows and breaks (services/call_hours.py): {} = the same window every day, no breaks.
+    call_hours_schedule jsonb DEFAULT '{}'::jsonb NOT NULL,
     dial_cursor uuid,
     -- Set when a run was stopped by the calling hours: the campaign then continues by itself the next
     -- time they open (services/campaign_scheduler.py). Cleared by anything a person does to it.

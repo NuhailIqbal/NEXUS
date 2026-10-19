@@ -559,11 +559,12 @@ const Outbound = () => {
               </Select>
             </div>
             <CallingHoursFields
+              advanced
               idPrefix="campaign-settings-hours"
               value={settingsHours}
               onChange={setSettingsHours}
               switchLabel="Only call during set hours"
-              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. A run that is still going when they end stops, and carries on by itself from the next contact the next time they open."
+              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. A run that is still going when they end, or when a break begins, stops and carries on by itself from the next contact when the hours (or the break) are over."
               startLabel="Calls start"
               endLabel="Calls stop"
             />

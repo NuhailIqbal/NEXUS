@@ -1,4 +1,4 @@
-import { pick } from "@/test/pick";
+import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { vi as viConfig } from "vitest";
@@ -472,5 +472,142 @@ describe("Outbound campaigns: a person's Pause while it runs, and a running camp
     await waitFor(() => expect(launchButton()).toBeEnabled());
     fireEvent.click(launchButton());
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/already running/)));
+  });
+});
+
+describe("Outbound campaigns: breaks and a custom schedule in the settings", () => {
+  const openSettings = async () => {
+    await screen.findByText("Spring Push");
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
+    return screen.findByRole("dialog");
+  };
+  const save = () => fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+  const sentSchedule = () => (fn(api.updateCampaign).mock.calls[0][1] as Record<string, unknown>).call_hours_schedule;
+  const lunch = { start: "13:00", end: "14:00" };
+
+  it("opens with the stored breaks", async () => {
+    mock([withHours(OPEN_STATE, { call_hours_schedule: { mode: "same", breaks: [lunch] } })]);
+    render(<Outbound />);
+    await openSettings();
+    expect(screen.getByRole("radio", { name: "Same schedule every day" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Break 1 start")).toHaveTextContent("1:00 PM");
+    expect(screen.getByLabelText("Break 1 end")).toHaveTextContent("2:00 PM");
+  });
+
+  it("opens with a stored custom schedule: its days on, with their own hours and breaks", async () => {
+    mock([withHours(OPEN_STATE, { call_hours_schedule: { mode: "per_day", days: {
+      "0": { on: true, start: "09:00", end: "18:00", breaks: [lunch] }, "5": { on: true, start: "10:00", end: "14:00", breaks: [] },
+    } } })]);
+    render(<Outbound />);
+    await openSettings();
+    expect(screen.getByRole("radio", { name: "Custom schedule per day" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Monday" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Tuesday" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Saturday" })).toBeChecked();
+    expect(screen.getByLabelText("Monday end")).toHaveTextContent("6:00 PM");
+    expect(screen.getByLabelText("Saturday start")).toHaveTextContent("10:00 AM");
+    expect(screen.getByLabelText("Monday break 1 start")).toHaveTextContent("1:00 PM");
+  });
+
+  it("adding a break and saving sends it with the schedule", async () => {
+    mock([withHours(OPEN_STATE)]);
+    render(<Outbound />);
+    await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Add break" }));
+    save();
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    expect(sentSchedule()).toEqual({ mode: "same", breaks: [lunch] });
+    expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({ call_hours_days: [0, 1, 2, 3, 4], call_hours_start: "09:00", call_hours_end: "17:00" });
+  });
+
+  it("saving without touching the schedule sends it unchanged", async () => {
+    mock([withHours(OPEN_STATE, { call_hours_schedule: { mode: "same", breaks: [lunch] } })]);
+    render(<Outbound />);
+    await openSettings();
+    save();
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    expect(sentSchedule()).toEqual({ mode: "same", breaks: [lunch] });
+  });
+
+  it("a custom schedule is saved day by day, with off days sent as off", async () => {
+    mock([withHours(OPEN_STATE)]);
+    render(<Outbound />);
+    await openSettings();
+    fireEvent.click(screen.getByRole("radio", { name: "Custom schedule per day" }));
+    await choose("Friday end", "1:00 PM");
+    fireEvent.click(screen.getByRole("switch", { name: "Tuesday" }));
+    save();
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    const sent = sentSchedule() as { mode: string; days: Record<string, unknown> };
+    expect(sent.mode).toBe("per_day");
+    expect(sent.days["0"]).toEqual({ on: true, start: "09:00", end: "17:00", breaks: [] });
+    expect(sent.days["1"]).toEqual({ on: false });
+    expect(sent.days["4"]).toEqual({ on: true, start: "09:00", end: "13:00", breaks: [] });
+    expect(sent.days["5"]).toEqual({ on: false });
+  });
+
+  it("a problem is refused before anything is sent, with the reason", async () => {
+    mock([withHours(OPEN_STATE, { call_hours_schedule: { mode: "same", breaks: [{ start: "07:00", end: "08:00" }] } })]);
+    render(<Outbound />);
+    await openSettings();
+    expect(screen.getByRole("alert")).toHaveTextContent("A break must fall inside the running hours (9:00 AM–5:00 PM).");
+    save();
+    expect(toast.error).toHaveBeenCalledWith("A break must fall inside the running hours (9:00 AM–5:00 PM).");
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("the server's refusal of a schedule is shown and the dialog stays open", async () => {
+    mock([withHours(OPEN_STATE)]);
+    fn(api.updateCampaign).mockResolvedValue({ data: null, error: "Breaks can't overlap." });
+    render(<Outbound />);
+    await openSettings();
+    save();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Breaks can't overlap."));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("the card says the hours with their breaks (the server's words)", async () => {
+    mock([withHours({ ...OPEN_STATE, summary: "Mon–Fri, 9:00 AM–6:00 PM, break 1:00 PM–2:00 PM (Asia/Karachi)" })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push")).toHaveTextContent("break 1:00 PM–2:00 PM");
+  });
+
+  it("during a break the card is closed and says when it opens again", async () => {
+    mock([withHours({ enabled: true, open: false, next_open_at: "2026-10-13T09:00:00Z", summary: "Mon–Fri, 9:00 AM–6:00 PM, break 1:00 PM–2:00 PM (Asia/Karachi)" })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push")).toHaveTextContent(/Closed — opens Tue, Oct 13, 2:00 PM/);
+  });
+
+  it("a new campaign made in the wizard carries its schedule", async () => {
+    mock([campaign()]);
+    fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
+    fn(api.createCampaign).mockResolvedValue({ data: {}, error: null });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    fireEvent.click(screen.getAllByRole("button", { name: /New Campaign/ })[0]);
+    await screen.findByText("Campaign Information");
+    fireEvent.click(screen.getAllByRole("combobox")[1]);
+    const numbers = await screen.findAllByText("+15550001111");
+    fireEvent.click(numbers[numbers.length - 1]);
+    fireEvent.change(screen.getByPlaceholderText(/Q3 Cold Outreach/), { target: { value: "Autumn" } });
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(await screen.findByRole("option", { name: "Sara" }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(await screen.findByRole("option", { name: /Leads/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the campaign may call");
+    fireEvent.click(screen.getByRole("switch", { name: "Only call during set hours" }));
+    await pick("Timezone", "karachi");
+    fireEvent.click(screen.getByRole("button", { name: "Add break" }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Campaign Summary");
+    fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    await waitFor(() => expect(api.createCampaign).toHaveBeenCalled());
+    expect(fn(api.createCampaign).mock.calls[0][0]).toMatchObject({
+      call_hours_schedule: { mode: "same", breaks: [{ start: "13:00", end: "14:00" }] },
+    });
   });
 });

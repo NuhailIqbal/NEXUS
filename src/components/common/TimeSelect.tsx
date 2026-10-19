@@ -19,8 +19,8 @@ const SLOTS: SearchOption[] = Array.from({ length: 96 }, (_, i) => {
 
 /** Searchable time dropdown (every 15 minutes). Value is "HH:MM". */
 export function TimeSelect({
-  id, value, onChange, disabled,
-}: { id: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  id, value, onChange, disabled, ariaLabel,
+}: { id: string; value: string; onChange: (v: string) => void; disabled?: boolean; ariaLabel?: string }) {
   // Keep a value that isn't on the 15-minute grid selectable rather than silently changing it.
   // An empty or malformed value gets the plain grid; an off-grid "HH:MM" is added as one extra
   // option, sorted by its zero-padded string.
@@ -30,7 +30,7 @@ export function TimeSelect({
   // The search box is turned off (searchable={false}), so the list is simply scrolled and the
   // slots' `keywords` have no effect here.
   return (
-    <SearchSelect id={id} value={value} onChange={onChange} options={options} disabled={disabled}
+    <SearchSelect id={id} ariaLabel={ariaLabel} value={value} onChange={onChange} options={options} disabled={disabled}
       placeholder="Select time" searchable={false} />
   );
 }

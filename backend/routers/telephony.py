@@ -1184,7 +1184,7 @@ async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
 # How long a run's lease is honoured without a sign of life (every batch refreshes it). A run that
 # crashed or was killed leaves its lease behind; after this long a new Start may take it over.
 RUN_LEASE_STALE_SECONDS = 600
-_HOURS_COLUMNS = ("call_hours_enabled", "call_hours_timezone", "call_hours_days", "call_hours_start", "call_hours_end")
+_HOURS_COLUMNS = ("call_hours_enabled", "call_hours_timezone", "call_hours_days", "call_hours_start", "call_hours_end", "call_hours_schedule")
 _RUN_COLUMNS = "status, list_id, run_token, " + ", ".join(_HOURS_COLUMNS)
 
 

@@ -733,6 +733,8 @@ def _ensure_columns(conn) -> None:
         "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_days integer[] DEFAULT '{0,1,2,3,4}' NOT NULL",
         "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_start text DEFAULT '09:00' NOT NULL",
         "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_end text DEFAULT '17:00' NOT NULL",
+        # Per-day windows and breaks: {} = the same window every day, no breaks.
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS call_hours_schedule jsonb DEFAULT '{}'::jsonb NOT NULL",
         'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS dial_cursor uuid',
         # A number's AI receptionist only answers inside its hours (off by default = answers always).
         # Turning them on routes the number through this server like caller verification does.

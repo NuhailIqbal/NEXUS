@@ -1,4 +1,4 @@
-import { pick } from "@/test/pick";
+import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { vi as viConfig } from "vitest";
@@ -163,5 +163,70 @@ describe("CreateCampaignDialog: calling hours step", () => {
     await screen.findByText("Days and times the campaign may call");
     expect(hoursSwitch()).toBeChecked();
     expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Pakistan/);
+  });
+});
+
+describe("CreateCampaignDialog: breaks and a custom schedule", () => {
+  const radio = (name: string) => screen.getByRole("radio", { name });
+  const reviewHours = async () => {
+    const review = await screen.findByText("Campaign Summary");
+    return (within(review.closest("div.rounded-xl") as HTMLElement).getByText("Calling Hours").parentElement as HTMLElement);
+  };
+
+  it("a break is added at step 3, shown in the review and sent with the campaign", async () => {
+    const onCreate = vi.fn();
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+    await toHoursStep();
+    await enableHours();
+    fireEvent.click(screen.getByRole("button", { name: "Add break" }));
+    next();
+    expect(await reviewHours()).toHaveTextContent("Mon–Fri, 9:00 AM–5:00 PM, break 1:00 PM–2:00 PM (Asia/Karachi)");
+    fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    expect(onCreate.mock.calls[0][0].hours).toMatchObject({ mode: "same", breaks: [{ start: "13:00", end: "14:00" }] });
+  });
+
+  it("a break that ends before it starts stops the wizard at step 3 with the reason", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toHoursStep();
+    await enableHours();
+    fireEvent.click(screen.getByRole("button", { name: "Add break" }));
+    await choose("Break 1 end", "12:00 PM");
+    expect(screen.getByRole("alert")).toHaveTextContent("A break must end after it starts.");
+    next();
+    expect(toast.error).toHaveBeenCalledWith("A break must end after it starts.");
+    expect(screen.getByText(/Step 3 of 4/)).toBeInTheDocument();
+  });
+
+  it("a custom schedule per day is summarised by day in the review and kept when going back", async () => {
+    const onCreate = vi.fn();
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+    await toHoursStep();
+    await enableHours();
+    fireEvent.click(radio("Custom schedule per day"));
+    fireEvent.click(screen.getByRole("switch", { name: "Saturday" }));
+    await choose("Saturday end", "1:00 PM");
+    fireEvent.click(screen.getByRole("button", { name: "Add Monday break" }));
+    next();
+    expect(await reviewHours()).toHaveTextContent("Mon 9:00 AM–5:00 PM (break 1:00 PM–2:00 PM); Tue–Fri 9:00 AM–5:00 PM; Sat 9:00 AM–1:00 PM (Asia/Karachi)");
+
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByText("Days and times the campaign may call");
+    expect(radio("Custom schedule per day")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Saturday end")).toHaveTextContent("1:00 PM");
+    next();
+    await screen.findByText("Campaign Summary");
+    fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    expect(onCreate.mock.calls[0][0].hours.mode).toBe("per_day");
+  });
+
+  it("a problem on one day stops the wizard and names the day", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toHoursStep();
+    await enableHours();
+    fireEvent.click(radio("Custom schedule per day"));
+    await choose("Wednesday end", "8:00 AM");
+    next();
+    expect(toast.error).toHaveBeenCalledWith("Wednesday: End time must be after start time.");
+    expect(screen.getByText(/Step 3 of 4/)).toBeInTheDocument();
   });
 });

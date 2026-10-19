@@ -11,7 +11,9 @@ const hours = (over: Partial<CallingHours> = {}): CallingHours => ({
 
 describe("defaultHours", () => {
   it("is switched off, Monday to Friday, 9 to 5, with NO time zone chosen", () => {
-    expect(defaultHours()).toEqual({ enabled: false, timezone: "", days: [0, 1, 2, 3, 4], start: "09:00", end: "17:00" });
+    expect(defaultHours()).toMatchObject({ enabled: false, timezone: "", days: [0, 1, 2, 3, 4], start: "09:00", end: "17:00" });
+    // ... the same every day, with no breaks
+    expect(defaultHours()).toMatchObject({ mode: "same", breaks: [], scheduleEdited: false });
   });
 
   it("does not take the time zone from the browser", () => {
@@ -28,7 +30,9 @@ describe("defaultHours", () => {
 describe("hoursFromRow / hoursToPayload", () => {
   it("reads a campaign row and a phone-number row by their own prefix", () => {
     const campaign = { call_hours_enabled: true, call_hours_timezone: "Asia/Karachi", call_hours_days: [1, 2], call_hours_start: "10:00", call_hours_end: "12:00", answer_hours_enabled: false };
-    expect(hoursFromRow(campaign, CAMPAIGN_PREFIX)).toEqual({ enabled: true, timezone: "Asia/Karachi", days: [1, 2], start: "10:00", end: "12:00" });
+    expect(hoursFromRow(campaign, CAMPAIGN_PREFIX)).toMatchObject({ enabled: true, timezone: "Asia/Karachi", days: [1, 2], start: "10:00", end: "12:00" });
+    // a phone number has no schedule of its own: exactly the five fields
+    expect(hoursFromRow(campaign, NUMBER_PREFIX)).toEqual({ enabled: false, timezone: "", days: [0, 1, 2, 3, 4], start: "09:00", end: "17:00" });
     expect(hoursFromRow(campaign, NUMBER_PREFIX).enabled).toBe(false);
   });
 
@@ -64,7 +68,8 @@ describe("hoursFromRow / hoursToPayload", () => {
 
   it("round-trips", () => {
     const h = hours({ timezone: "Europe/London", days: [5, 6], start: "08:15", end: "00:00" });
-    expect(hoursFromRow(hoursToPayload(h, CAMPAIGN_PREFIX), CAMPAIGN_PREFIX)).toEqual(h);
+    expect(hoursFromRow(hoursToPayload(h, CAMPAIGN_PREFIX), CAMPAIGN_PREFIX)).toMatchObject(h);
+    expect(hoursFromRow(hoursToPayload(h, NUMBER_PREFIX), NUMBER_PREFIX)).toEqual(h);
   });
 });
 

@@ -407,6 +407,9 @@ class CampaignCreate(BaseModel):
     call_hours_days: list[int] = [0, 1, 2, 3, 4]    # Monday = 0
     call_hours_start: str = "09:00"
     call_hours_end: str = "17:00"
+    # Per-day windows and breaks: {"mode": "same", "breaks": [{"start","end"}]} or
+    # {"mode": "per_day", "days": {"0": {"on", "start", "end", "breaks"}, ...}}; {} = same, no breaks.
+    call_hours_schedule: dict = {}
 
 
 class CampaignUpdate(BaseModel):
@@ -424,6 +427,7 @@ class CampaignUpdate(BaseModel):
     call_hours_days: Optional[list[int]] = None
     call_hours_start: Optional[str] = None
     call_hours_end: Optional[str] = None
+    call_hours_schedule: Optional[dict] = None
 
 
 # ── Inbound Queues ──

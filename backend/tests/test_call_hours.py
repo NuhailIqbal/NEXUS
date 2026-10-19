@@ -68,7 +68,7 @@ class ValidateTests(unittest.TestCase):
     def test_nothing_sent_gives_the_defaults_off(self):
         self.assertEqual(self.v(), {"call_hours_enabled": False, "call_hours_timezone": None,
                                     "call_hours_days": [0, 1, 2, 3, 4], "call_hours_start": "09:00",
-                                    "call_hours_end": "17:00"})
+                                    "call_hours_end": "17:00", "call_hours_schedule": {"mode": "same", "breaks": []}})
 
     def test_the_result_uses_the_prefix_it_was_given(self):
         self.assertEqual(set(self.v(prefix=N)), set(call_hours.fields(N)))
