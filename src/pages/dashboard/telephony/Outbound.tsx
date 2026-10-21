@@ -524,7 +524,7 @@ const Outbound = () => {
 
       {/* Settings Dialog */}
       <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
-        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Campaign Settings</DialogTitle>
             <DialogDescription>Update campaign details.</DialogDescription>
@@ -534,29 +534,31 @@ const Outbound = () => {
               <Label>Name</Label>
               <Input value={settingsForm.name} onChange={(e) => setSettingsForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
-            <div className="space-y-2">
-              <Label>Agent</Label>
-              <select
-                value={settingsForm.agent_id}
-                onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))}
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="">Select agent…</option>
-                {Array.from(agentsById.entries()).map(([id, name]) => (
-                  <option key={id} value={id}>{name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label>Status</Label>
-              <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Active">Active</SelectItem>
-                  <SelectItem value="Paused">Paused</SelectItem>
-                  <SelectItem value="Inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Agent</Label>
+                <select
+                  value={settingsForm.agent_id}
+                  onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))}
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  <option value="">Select agent…</option>
+                  {Array.from(agentsById.entries()).map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Paused">Paused</SelectItem>
+                    <SelectItem value="Inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <CallingHoursFields
               advanced

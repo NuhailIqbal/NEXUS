@@ -482,7 +482,7 @@ const Inbound = () => {
 
       {/* Settings Dialog */}
       <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && !savingSettings && setSettingsTarget(null)}>
-        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
           <DialogHeader className="text-left">
             <DialogTitle className="flex items-center gap-2 pr-6">
               <SettingsIcon className="h-5 w-5 shrink-0 text-primary" />
@@ -495,26 +495,28 @@ const Inbound = () => {
               <Label>Name</Label>
               <Input value={settingsForm.name} onChange={(e) => setSettingsForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
-            <div className="space-y-2">
-              <Label>AI Agent</Label>
-              <Select value={settingsForm.agent_id} onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select an agent…" /></SelectTrigger>
-                <SelectContent>
-                  {agents.filter((a) => a.vapi_assistant_id).map((a) => (
-                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Status</Label>
-              <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Active">Active</SelectItem>
-                  <SelectItem value="Inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>AI Agent</Label>
+                <Select value={settingsForm.agent_id} onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select an agent…" /></SelectTrigger>
+                  <SelectContent>
+                    {agents.filter((a) => a.vapi_assistant_id).map((a) => (
+                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             {settingsTarget?.phone_number_id ? (
               <CallingHoursFields
