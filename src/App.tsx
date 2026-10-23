@@ -60,6 +60,12 @@ import {
   AnalyticsCampaign,
   AnalyticsScenario,
 } from "./pages/dashboard/analytics/AnalyticsPages.tsx";
+import CallConsumptionOverview from "./pages/dashboard/call-consumption/Overview";
+import { CallConsumptionCampaign, CallConsumptionVertical, CallConsumptionState } from "./pages/dashboard/call-consumption/Breakdown";
+import CallConsumptionPeriodic from "./pages/dashboard/call-consumption/Periodic";
+import CallConsumptionDirection from "./pages/dashboard/call-consumption/InboundOutbound";
+import CallConsumptionHourly from "./pages/dashboard/call-consumption/HourlyHeatmap";
+import CallConsumptionReasons from "./pages/dashboard/call-consumption/NonConsumptionReasons";
 import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
 import CallEvents from "./pages/dashboard/CallEvents";
 import CallEventsLayout from "./pages/dashboard/CallEventsLayout";
@@ -148,6 +154,15 @@ const App = () => {
                   <Route path="analytics/channel" element={<AnalyticsChannel />} />
                   <Route path="analytics/campaign" element={<AnalyticsCampaign />} />
                   <Route path="analytics/scenario" element={<AnalyticsScenario />} />
+                  <Route path="call-consumption" element={<Navigate to="/dashboard/call-consumption/overview" replace />} />
+                  <Route path="call-consumption/overview" element={<CallConsumptionOverview />} />
+                  <Route path="call-consumption/campaign" element={<CallConsumptionCampaign />} />
+                  <Route path="call-consumption/vertical" element={<CallConsumptionVertical />} />
+                  <Route path="call-consumption/state" element={<CallConsumptionState />} />
+                  <Route path="call-consumption/direction" element={<CallConsumptionDirection />} />
+                  <Route path="call-consumption/periodic" element={<CallConsumptionPeriodic />} />
+                  <Route path="call-consumption/hourly-heatmap" element={<CallConsumptionHourly />} />
+                  <Route path="call-consumption/reasons" element={<CallConsumptionReasons />} />
                   <Route path="call-events" element={<CallEventsLayout />}>
                     <Route index element={<CallEvents />} />
                     <Route path="callbacks" element={<Callbacks />} />

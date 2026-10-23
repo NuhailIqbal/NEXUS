@@ -9,7 +9,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Bot, Mic, Database, Phone,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap,
+  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap, PhoneCall,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -77,6 +77,19 @@ const NAV: NavItem[] = [
       { label: "Channel", to: "/dashboard/analytics/channel" },
       { label: "Campaign", to: "/dashboard/analytics/campaign" },
       { label: "Scenario", to: "/dashboard/analytics/scenario" },
+    ],
+  },
+  {
+    label: "Reports",
+    icon: PhoneCall,
+    children: [
+      { label: "Overview", to: "/dashboard/call-consumption/overview" },
+      { label: "Campaign", to: "/dashboard/call-consumption/campaign" },
+      { label: "Vertical", to: "/dashboard/call-consumption/vertical" },
+      { label: "State", to: "/dashboard/call-consumption/state" },
+      { label: "Hourly Heatmap", to: "/dashboard/call-consumption/hourly-heatmap" },
+      { label: "Inbound & Outbound", to: "/dashboard/call-consumption/direction" },
+      { label: "Weekly & Monthly", to: "/dashboard/call-consumption/periodic" },
     ],
   },
   { label: "Call Events", to: "/dashboard/call-events", icon: Zap },

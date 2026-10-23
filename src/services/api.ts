@@ -93,6 +93,40 @@ function del<T = any>(path: string) {
 }
 
 /**
+ * GET `path` with the user's token and save the response as a file (the browser can't attach the
+ * Authorization header to a plain link). Resolves to `{ error }`: null on success, else the server's message.
+ */
+async function downloadFile(path: string, filename: string): Promise<{ error: string | null }> {
+  const token = await getToken();
+  try {
+    const res = await fetch(`${API_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { error: typeof body.detail === "string" ? body.detail : `Error ${res.status}` };
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return { error: null };
+  } catch (e: unknown) {
+    return { error: (e instanceof Error && e.message) || "Network error" };
+  }
+}
+
+/** `?a=1&b=2` for a params object (values are URL-encoded; empty values are skipped). */
+function queryString(params: Record<string, string | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
+/**
  * sessionStorage key for the admin-portal JWT (set by Admin.tsx after api.adminLogin). It lives
  * in sessionStorage, not localStorage, so it disappears when the tab closes.
  */
@@ -309,6 +343,13 @@ export const api = {
   getAnalyticsCampaign: () => get("/analytics/campaign"),
   getAnalyticsAgent: () => get("/analytics/agent"),
   getAnalyticsTimeseries: (days = 14) => get(`/analytics/timeseries?days=${days}`),
+
+  // Call Consumption — `path` is the part after /call-consumption (e.g. "/overview/kpis"); `params` come from
+  // lib/callConsumption.ts filterParams(). Exports download a CSV through the authenticated fetch above.
+  getCallConsumption: <T = unknown>(path: string, params: Record<string, string | undefined> = {}) =>
+    get<T>(`/call-consumption${path}${queryString(params)}`),
+  downloadCallConsumption: (path: string, params: Record<string, string | undefined>, filename: string) =>
+    downloadFile(`/call-consumption${path}${queryString(params)}`, filename),
 
   // Automation
   getFlows: () => get("/automation/flows"),

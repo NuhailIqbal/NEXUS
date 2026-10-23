@@ -447,6 +447,8 @@ def import_vapi_call(call: dict, user_id: str, agent_id: str | None = None) -> s
         "transcript": transcript,
         "recording_url": recording_url,
     }
+    if ended_reason:
+        row["ended_reason"] = ended_reason
     if stereo_recording_url:
         row["stereo_recording_url"] = stereo_recording_url
     if messages:
@@ -623,6 +625,8 @@ async def _handle_call_ended(payload: dict):
         "recording_url": recording_url,
         "duration": duration_str,
     }
+    if ended_reason:
+        updates["ended_reason"] = ended_reason
     if stereo_recording_url:
         updates["stereo_recording_url"] = stereo_recording_url
     if transcript_messages:

@@ -469,6 +469,10 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     -- The NEXUS number the call used (phone_numbers.id); with campaign_id it decides which time
     -- zone the call's times are shown in (see routers/conversations.py).
     phone_number_id uuid,
+    -- VAPI's endedReason for the finished call (e.g. customer-did-not-answer). Call Consumption
+    -- (services/call_consumption.py) buckets it into consumed / why-dropped; NULL on calls logged before
+    -- this column existed, which that module then classifies from `status` alone.
+    ended_reason text,
     CONSTRAINT conversations_direction_check CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))
 );
 
