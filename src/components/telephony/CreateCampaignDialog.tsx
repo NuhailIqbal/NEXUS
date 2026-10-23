@@ -1,12 +1,15 @@
 /**
- * Create-campaign wizard dialog, opened from the Outbound campaigns page.
- * Reads api.getAgents, getLists, getPhoneNumbers and getDncStatus; the parent performs
- * the actual createCampaign call.
+ * Campaign wizard dialog, opened from the Outbound campaigns page: CreateCampaignDialog to make a campaign
+ * and EditCampaignDialog to change one. Both are the same five steps (basics, contact list, calling hours,
+ * call retry, review); the edit one starts from the campaign's current values, adds a Status field and
+ * offers "Save Changes" on every step, so a small change does not need five clicks.
+ * Reads api.getAgents, getLists, getPhoneNumbers and getDncStatus; the parent performs the actual
+ * createCampaign / updateCampaign call.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   X, Rocket, Mic, Phone, Clipboard, BookOpen, Check, ChevronsUpDown,
-  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert, Clock,
+  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert, Clock, Repeat,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -25,6 +28,8 @@ import {
   defaultHours, describeHours, validateHours, type CallingHours,
 } from "@/components/hours/callingHours";
 import { DAY_LABELS } from "@/components/integrations/calendarTypes";
+import { RetryFields } from "@/components/telephony/RetryFields";
+import { defaultRetry, describeRetry, validateRetry, type RetrySettings } from "@/lib/callRetry";
 
 /** open/onOpenChange control the dialog; onCreate receives the final form data on launch. */
 type Props = {
@@ -33,8 +38,19 @@ type Props = {
   onCreate?: (data: CampaignData) => void;
 };
 
+type EditProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The campaign's current values: the form starts from them each time the dialog opens. */
+  initial: CampaignData;
+  /** Saves the form. Return false (or reject) to keep the dialog open, e.g. when the server refused it. */
+  onSave: (data: CampaignData) => Promise<boolean | void> | boolean | void;
+};
+
 /** Form state collected across the wizard steps. */
-type CampaignData = {
+export type CampaignData = {
+  /** "Active" | "Paused" | "Inactive": only offered when editing. */
+  status: string;
   name: string;
   description: string;
   agentId: string;
@@ -43,35 +59,58 @@ type CampaignData = {
   dncScreeningEnabled: boolean;
   /** When on, the campaign only places calls on these days between these times. */
   hours: CallingHours;
+  /** Call another time when a number does not pick up (see RetryFields). */
+  retry: RetrySettings;
 };
 
 type Agent       = { id: string; name: string };
 type ListRow     = { id: string; name: string; contact_count?: number };
 type PhoneNumber = { id: string; number: string };
 
-/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 hours, 3 review). */
+/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 hours, 3 retry, 4 review). */
 const STEPS = [
   { title: "Campaign Basics", subtitle: "Name, agent, phone number" },
   { title: "Contact List",    subtitle: "Pick the list to dial" },
   { title: "Calling Hours",   subtitle: "Days and times the campaign may call" },
+  { title: "Auto Redial",      subtitle: "Call again when a number does not pick up" },
   { title: "Review & Launch", subtitle: "Confirm and launch" },
 ];
 
 /** Fresh form state; DNC screening defaults to on for new campaigns. */
 const emptyData = (): CampaignData => ({
-  name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
+  status: "Inactive", name: "", description: "", agentId: "", listId: "", phoneNumberId: "",
   dncScreeningEnabled: true,
   hours: defaultHours(),
+  retry: defaultRetry(),
 });
 
-/**
- * Three-step wizard for creating an outbound campaign. Loads agents, lists, phone
- * numbers and DNC status each time it opens. It does not call the create API itself:
- * it hands the data to onCreate and closes.
- */
+/** Wizard for creating an outbound campaign: hands the data to onCreate and closes. */
 export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
+  return <CampaignWizard mode="create" open={open} onOpenChange={onOpenChange} onSubmit={(d) => { onCreate?.(d); }} />;
+}
+
+/** The same wizard for changing a campaign: prefilled from `initial`, saved through onSave. */
+export function EditCampaignDialog({ open, onOpenChange, initial, onSave }: EditProps) {
+  return <CampaignWizard mode="edit" open={open} onOpenChange={onOpenChange} initial={initial} onSubmit={onSave} />;
+}
+
+type WizardProps = {
+  mode: "create" | "edit";
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initial?: CampaignData;
+  onSubmit: (data: CampaignData) => Promise<boolean | void> | boolean | void;
+};
+
+/**
+ * The five-step wizard behind both dialogs. Loads agents, lists, phone numbers and DNC status each time it
+ * opens. It does not call the API itself: it hands the data to onSubmit (and closes, unless that returns false).
+ */
+function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardProps) {
+  const editing = mode === "edit";
   const [step, setStep] = useState(0);
-  const [data, setData] = useState<CampaignData>(emptyData());
+  const [data, setData] = useState<CampaignData>(initial ?? emptyData());
+  const [saving, setSaving] = useState(false);
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [lists, setLists] = useState<ListRow[]>([]);
@@ -79,6 +118,14 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
   const [dncEnabled, setDncEnabled] = useState(false);
   const [dncIntegrationId, setDncIntegrationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Every opening starts from the first step: editing from the campaign's values, creating from an empty form.
+  useEffect(() => {
+    if (!open) return;
+    setStep(0);
+    setData(editing && initial ? initial : emptyData());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -98,43 +145,63 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
   const update = <K extends keyof CampaignData>(key: K, value: CampaignData[K]) =>
     setData((d) => ({ ...d, [key]: value }));
 
-  /** Returns the wizard to step 1 with empty data. */
-  const reset = () => { setStep(0); setData(emptyData()); };
-
-  /** Dialog close handler; discards the form when closing. */
-  const close = (next: boolean) => { if (!next) reset(); onOpenChange(next); };
+  /** Dialog close handler; discards the form when closing (the next opening starts afresh). */
+  const close = (next: boolean) => { if (!saving) onOpenChange(next); };
 
   const progress = ((step + 1) / STEPS.length) * 100;
+  // The last step reads "Review & Save" when editing.
+  const meta = editing && step === STEPS.length - 1 ? { title: "Review & Save", subtitle: "Confirm your changes" } : STEPS[step];
+
+  /**
+   * What is wrong with a step's fields, in words, or null. Creating needs an agent, a number and a list; an
+   * existing campaign may not have them yet (it could always be saved without), so editing only needs a name.
+   */
+  const problemOf = (s: number): string | null => {
+    if (s === 0) {
+      if (!data.name.trim()) return "Campaign name is required";
+      if (!editing && !data.agentId) return "Select an agent";
+      if (!editing && !data.phoneNumberId) return "Select a phone number";
+    }
+    if (s === 1 && !editing && !data.listId) return "Select a contact list";
+    if (s === 2) return data.hours.enabled ? validateHours(data.hours) : null;
+    if (s === 3) return validateRetry(data.retry);
+    return null;
+  };
 
   /** Validates the current step's required fields and advances. */
   const next = () => {
-    if (step === 0) {
-      if (!data.name.trim()) return toast.error("Campaign name is required");
-      if (!data.agentId)     return toast.error("Select an agent");
-      if (!data.phoneNumberId) return toast.error("Select a phone number");
-    }
-    if (step === 1 && !data.listId) return toast.error("Select a contact list");
-    if (step === 2) {
-      const hoursProblem = data.hours.enabled ? validateHours(data.hours) : null;
-      if (hoursProblem) return toast.error(hoursProblem);
-    }
+    const problem = problemOf(step);
+    if (problem) return toast.error(problem);
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
 
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
-  /** Passes the collected data to the parent and closes the dialog. */
-  const launch = () => {
-    onCreate?.(data);
-    close(false);
+  /** Checks every step (jumping to the first one with a problem), then hands the data to the parent. */
+  const submit = async () => {
+    for (let s = 0; s < STEPS.length; s++) {
+      const problem = problemOf(s);
+      if (problem) { setStep(s); return toast.error(problem); }
+    }
+    setSaving(true);
+    let keepOpen = false;
+    try {
+      keepOpen = (await onSubmit(data)) === false;
+    } catch {
+      keepOpen = true;
+    }
+    setSaving(false);
+    if (!keepOpen) onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:rounded-xl [&>button]:hidden">
         <VisuallyHidden>
-          <DialogTitle>Create Outbound Campaign</DialogTitle>
-          <DialogDescription>Configure and launch an outbound dialing campaign in 4 steps.</DialogDescription>
+          <DialogTitle>{editing ? "Edit Outbound Campaign" : "Create Outbound Campaign"}</DialogTitle>
+          <DialogDescription>
+            {editing ? "Change an outbound dialing campaign in 5 steps." : "Configure and launch an outbound dialing campaign in 5 steps."}
+          </DialogDescription>
         </VisuallyHidden>
 
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
@@ -143,24 +210,24 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
               <Rocket className="h-5 w-5" />
             </div>
             <div className="text-xl font-bold tracking-tight">
-              Create <span className="text-primary">Outbound Campaign</span>
+              {editing ? "Edit" : "Create"} <span className="text-primary">Outbound Campaign</span>
               <span className="ml-1 text-sm font-normal text-muted-foreground">Step {step + 1} of {STEPS.length}</span>
             </div>
           </div>
-          <button onClick={() => close(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close">
+          <button onClick={() => close(false)} disabled={saving} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="border-b border-border bg-primary/5 px-6 py-4">
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-base font-semibold">{STEPS[step].title}</h3>
+            <h3 className="text-base font-semibold">{meta.title}</h3>
             <span className="text-sm font-medium text-muted-foreground">{Math.round(progress)}% Complete</span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
             <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} />
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">{STEPS[step].subtitle}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{meta.subtitle}</p>
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto px-6 py-6">
@@ -169,25 +236,37 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your agents, lists, and numbers…
             </div>
           )}
-          {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} />}
+          {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} editing={editing} />}
           {!loading && step === 1 && <Step3 data={data} update={update} lists={lists} />}
           {!loading && step === 2 && <StepHours data={data} update={update} />}
-          {!loading && step === 3 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} />}
+          {!loading && step === 3 && <StepRetry data={data} update={update} editing={editing} />}
+          {!loading && step === 4 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} editing={editing} />}
         </div>
 
         <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <Button variant="outline" onClick={back} disabled={step === 0} className="w-full sm:w-auto">
+          <Button variant="outline" onClick={back} disabled={step === 0 || saving} className="w-full sm:w-auto">
             <ChevronLeft className="mr-1 h-4 w-4" /> Previous
           </Button>
-          {step < STEPS.length - 1 ? (
-            <Button onClick={next} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
-              Next <ChevronRight className="ml-1 h-4 w-4" />
-            </Button>
-          ) : (
-            <Button onClick={launch} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
-              <Rocket className="mr-1.5 h-4 w-4" /> Launch Campaign
-            </Button>
-          )}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+            {/* Editing can save from any step; the rest of the form is checked first. */}
+            {editing && step < STEPS.length - 1 && (
+              <Button variant="outline" onClick={submit} disabled={saving} className="w-full sm:w-auto">
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Changes
+              </Button>
+            )}
+            {step < STEPS.length - 1 ? (
+              <Button onClick={next} disabled={saving} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
+                Next <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            ) : (
+              <Button onClick={submit} disabled={saving} className="w-full bg-primary text-primary-foreground hover:opacity-90 sm:w-auto">
+                {saving
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : editing ? null : <Rocket className="mr-1.5 h-4 w-4" />}
+                {editing ? "Save Changes" : "Launch Campaign"}
+              </Button>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -198,7 +277,7 @@ export function CreateCampaignDialog({ open, onOpenChange, onCreate }: Props) {
 
 /** Step 1: name, description, agent, from-number and per-campaign DNC screening toggle. */
 function Step1({
-  data, update, agents, phoneNumbers, dncEnabled, dncIntegrationId,
+  data, update, agents, phoneNumbers, dncEnabled, dncIntegrationId, editing,
 }: {
   data: CampaignData;
   update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void;
@@ -206,6 +285,7 @@ function Step1({
   phoneNumbers: PhoneNumber[];
   dncEnabled: boolean;
   dncIntegrationId: string | null;
+  editing?: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -213,9 +293,22 @@ function Step1({
         <Field label="Campaign Name" required>
           <Input value={data.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Q3 Cold Outreach" />
         </Field>
-        <Field label="Description" hint="Optional internal note about this campaign">
-          <Textarea value={data.description} onChange={(e) => update("description", e.target.value)} placeholder="What's this campaign for?" rows={3} />
-        </Field>
+        {editing ? (
+          <Field label="Status" hint="Active campaigns place calls (and redials); Paused and Inactive ones do not.">
+            <Select value={data.status} onValueChange={(v) => update("status", v)}>
+              <SelectTrigger aria-label="Status"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Active">Active</SelectItem>
+                <SelectItem value="Paused">Paused</SelectItem>
+                <SelectItem value="Inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : (
+          <Field label="Description" hint="Optional internal note about this campaign">
+            <Textarea value={data.description} onChange={(e) => update("description", e.target.value)} placeholder="What's this campaign for?" rows={3} />
+          </Field>
+        )}
       </Section>
 
       <Section icon={Clipboard} title="AI Agent">
@@ -311,6 +404,19 @@ function StepHours({
   );
 }
 
+/** Step 4 of the wizard: call retry (call a number again when it does not pick up; off by default). */
+function StepRetry({
+  data, update, editing,
+}: { data: CampaignData; update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void; editing?: boolean }) {
+  return (
+    <div className="space-y-6">
+      <Section icon={Repeat} title="Auto Redial">
+        <RetryFields idPrefix="campaign-retry" value={data.retry} onChange={(r) => update("retry", r)} editing={editing} />
+      </Section>
+    </div>
+  );
+}
+
 /** Step 2 of the wizard (named Step3): contact list picker. */
 function Step3({
   data, update, lists,
@@ -345,15 +451,16 @@ function Step3({
   );
 }
 
-/** Step 4 of the wizard (named Step4): read-only review of the chosen options. */
+/** Step 5 of the wizard (named Step4): read-only review of the chosen options. */
 function Step4({
-  data, agents, lists, phoneNumbers, dncEnabled,
+  data, agents, lists, phoneNumbers, dncEnabled, editing,
 }: {
   data: CampaignData;
   agents: Agent[];
   lists: ListRow[];
   phoneNumbers: PhoneNumber[];
   dncEnabled: boolean;
+  editing?: boolean;
 }) {
   const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? " ", [agents, data.agentId]);
   const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? " ", [lists, data.listId]);
@@ -364,10 +471,12 @@ function Step4({
       <Section icon={Mic} title="Campaign Summary">
         <div className="grid gap-3 sm:grid-cols-2">
           <ReviewItem label="Campaign Name"    value={data.name || " "} />
+          {editing && <ReviewItem label="Status" value={data.status} />}
           <ReviewItem label="AI Agent"         value={agentName} />
           <ReviewItem label="Contact List"     value={listName} />
           <ReviewItem label="From Number"      value={numberLabel} />
           <ReviewItem label="Calling Hours"     value={data.hours.enabled ? describeHours(data.hours, DAY_LABELS) : "Any time"} />
+          <ReviewItem label="Auto Redial"        value={describeRetry(data.retry)} />
         </div>
 
         {/* Combines the account-wide WhitelistData status with this campaign's own

@@ -410,6 +410,14 @@ class CampaignCreate(BaseModel):
     # Per-day windows and breaks: {"mode": "same", "breaks": [{"start","end"}]} or
     # {"mode": "per_day", "days": {"0": {"on", "start", "end", "breaks"}, ...}}; {} = same, no breaks.
     call_hours_schedule: dict = {}
+    # Call retry / redial (services/call_retry.py): when on, a number whose call ended in one of the
+    # `retry_on` outcomes (no_answer, busy, voicemail, failed) is called again `retry_interval_minutes`
+    # after that call ended, up to `retry_max_attempts` calls in all (the first included). The router
+    # validates the ranges (1-10 attempts, 5-60 minutes) and answers 400 with a message.
+    retry_enabled: StrictBool = False
+    retry_max_attempts: int = 3
+    retry_interval_minutes: int = 10
+    retry_on: list[str] = ["no_answer", "busy", "voicemail", "failed"]
 
 
 class CampaignUpdate(BaseModel):
@@ -428,6 +436,11 @@ class CampaignUpdate(BaseModel):
     call_hours_start: Optional[str] = None
     call_hours_end: Optional[str] = None
     call_hours_schedule: Optional[dict] = None
+    # Call retry settings (see CampaignCreate); any subset may be sent. They apply to future calls only.
+    retry_enabled: Optional[StrictBool] = None
+    retry_max_attempts: Optional[int] = None
+    retry_interval_minutes: Optional[int] = None
+    retry_on: Optional[list[str]] = None
 
 
 # ── Inbound Queues ──

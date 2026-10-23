@@ -781,6 +781,51 @@ def _ensure_columns(conn) -> None:
             user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
             created_at timestamptz DEFAULT now() NOT NULL
         )''',
+        # Call retry / redial (services/call_retry.py), per campaign: off by default. `retry_on` holds the
+        # outcomes that trigger a redial (no_answer, busy, voicemail, failed).
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS retry_enabled boolean DEFAULT false NOT NULL',
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS retry_max_attempts integer DEFAULT 3 NOT NULL',
+        'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS retry_interval_minutes integer DEFAULT 10 NOT NULL',
+        "ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS retry_on text[] DEFAULT '{no_answer,busy,voicemail,failed}' NOT NULL",
+        # One row per number (contact) of a campaign: how many calls it has had in the current round, when the
+        # next one is due and, once it is settled, why no more are placed (final_status NULL = still going).
+        '''CREATE TABLE IF NOT EXISTS public.campaign_leads (
+            id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+            campaign_id uuid NOT NULL REFERENCES public.outbound_campaigns(id) ON DELETE CASCADE,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            contact_id uuid NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
+            phone text NOT NULL,
+            round integer DEFAULT 1 NOT NULL,
+            attempts integer DEFAULT 0 NOT NULL,
+            last_attempt_at timestamptz,
+            last_outcome text,
+            next_attempt_at timestamptz,
+            final_status text,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            updated_at timestamptz DEFAULT now() NOT NULL,
+            UNIQUE (campaign_id, contact_id)
+        )''',
+        'CREATE INDEX IF NOT EXISTS campaign_leads_due_idx ON public.campaign_leads (campaign_id, next_attempt_at) WHERE final_status IS NULL',
+        # Every call placed to a number by a campaign. ended_at stays NULL while the call is in progress; the
+        # partial unique index below is what guarantees a number is never on two campaign calls at once.
+        '''CREATE TABLE IF NOT EXISTS public.campaign_attempts (
+            id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+            lead_id uuid NOT NULL REFERENCES public.campaign_leads(id) ON DELETE CASCADE,
+            campaign_id uuid NOT NULL REFERENCES public.outbound_campaigns(id) ON DELETE CASCADE,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            phone_key text NOT NULL,
+            round integer DEFAULT 1 NOT NULL,
+            attempt_number integer NOT NULL,
+            vapi_call_id text,
+            placed_at timestamptz DEFAULT now() NOT NULL,
+            ended_at timestamptz,
+            outcome text,
+            ended_reason text,
+            settings jsonb DEFAULT '{}'::jsonb NOT NULL
+        )''',
+        'CREATE UNIQUE INDEX IF NOT EXISTS campaign_attempts_one_open_call_idx ON public.campaign_attempts (user_id, phone_key) WHERE ended_at IS NULL',
+        'CREATE INDEX IF NOT EXISTS campaign_attempts_call_idx ON public.campaign_attempts (vapi_call_id)',
+        'CREATE INDEX IF NOT EXISTS campaign_attempts_lead_idx ON public.campaign_attempts (lead_id, attempt_number)',
     ]
     for stmt in statements:
         try:

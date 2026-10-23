@@ -95,7 +95,9 @@ class SchedulerBase(ZoneBase):
         return supabase.table("notifications").select("*").eq("user_id", self.user).eq("kind", "campaign_auto_resume").execute().data
 
     def stopped_first_day(self, zone, calls=4, **extra):
-        """A campaign whose first run (09:00) was cut off by the closing time after `calls` calls."""
+        """A campaign whose first run (09:00) was cut off by the closing time after `calls` calls. Its calls
+        have ended by the time it returns (a number holds one open call at a time)."""
+        self.hang_up_all()
         c = self.campaign(zone, **extra)
         y, m, d = DAY
         self.at(local(zone, y, m, d, 9))
@@ -103,6 +105,7 @@ class SchedulerBase(ZoneBase):
         r = self.start(c["id"])
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["data"]["stopped_by_hours"], r.text)
+        self.hang_up_all()
         return c
 
 
@@ -544,6 +547,7 @@ class DuringARunTests(SchedulerBase):
         c = self.make_campaign("UTC", call_hours_enabled=False)
         self.assertEqual(self.start(c["id"]).json()["data"]["dialed"], 10)
         self.assertEqual(self.row(c["id"])["status"], "Active")
+        self.hang_up_all()                                              # the first round of calls has ended
         self.assertEqual(self.start(c["id"]).status_code, 200)         # Active with no place saved: not running
         self.assertEqual(len(self.dialed()), 20)
 
@@ -603,7 +607,9 @@ class BoundaryTests(SchedulerBase):
         self.closing_after(None, None)
         before = len(self.dialed())
         self.assertEqual(self.sweep(local(zone, *day(1), 9, 0)), {"resumed": 2, "waiting": 0, "refused": 0})
-        self.assertEqual(len(self.dialed()) - before, 12, "6 contacts left in each")
+        # Both campaigns carry on, but they share one list: each of the 6 numbers left is called ONCE, because a
+        # number is never on two calls at the same time (the other campaign's call to it is still open).
+        self.assertEqual(len(self.dialed()) - before, 6, "6 numbers left, each called once")
         for c in (first, second):
             self.assertEqual(self.row(c["id"])["status"], "Active")
 

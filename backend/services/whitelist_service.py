@@ -313,14 +313,16 @@ async def _lookup(config: dict, phone_key: str) -> tuple[bool | None, dict | Non
 async def check_number(user_id: str, phone: str, *, cached: bool | None = None) -> dict:
     """Whether `phone` may be dialed for `user_id`.
 
-    Returns {"allowed": bool, "reason": str | None, "source": "disabled"|"cache"|"api"}.
+    Returns {"allowed": bool, "reason": str | None, "source": "disabled"|"cache"|"api", "suppressed": bool}.
+    `suppressed` is True only for a real verdict that the number is on the list; a refusal because the
+    number could not be read or the provider is down is not a suppression (allowed is False, suppressed False).
 
     Pass `cached` to reuse a verdict already fetched in a batch pre-warm and skip the
     per-number cache read.
     """
     config = await _get_whitelist_config(user_id)
     if not config:
-        return {"allowed": True, "reason": None, "source": "disabled"}
+        return {"allowed": True, "reason": None, "source": "disabled", "suppressed": False}
 
     phone_key = normalize_phone(phone)
     if not phone_key:
@@ -329,6 +331,7 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
             "allowed": False,
             "reason": "Number could not be read for DNC screening.",
             "source": "api",
+            "suppressed": False,
         }
 
     # Compare against None, not truthiness: a cached False is a real verdict ("screened and
@@ -340,6 +343,7 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
             "allowed": not cached,
             "reason": "On your DNC/litigation suppression list." if cached else None,
             "source": "cache",
+            "suppressed": bool(cached),
         }
 
     found, raw = await _lookup(config, phone_key)
@@ -350,6 +354,7 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
             "allowed": False,
             "reason": "DNC screening is unavailable, so the call was not placed.",
             "source": "api",
+            "suppressed": False,
         }
 
     _cache_put(user_id, phone_key, found, raw)
@@ -357,4 +362,5 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
         "allowed": not found,
         "reason": "On your DNC/litigation suppression list." if found else None,
         "source": "api",
+        "suppressed": bool(found),
     }

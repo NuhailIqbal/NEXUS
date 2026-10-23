@@ -1,4 +1,4 @@
-import { pick } from "@/test/pick";
+import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { vi as viConfig } from "vitest";
@@ -52,10 +52,15 @@ function mock(queues: object[], phones: object[], hoursStatus: object = { availa
 const cardOf = (name: string) => screen.getByText(name).closest("div.rounded-xl") as HTMLElement;
 const hoursSwitch = () => screen.getByRole("switch", { name: "Only answer during set hours" });
 const save = () => fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+/** Opens the edit wizard (the same two steps as creating a receptionist) on its second step, the answering hours. */
 async function openSettings(name = "Front Desk") {
   await screen.findByText(name);
   fireEvent.click(within(cardOf(name)).getByTitle("Settings"));
-  return screen.findByRole("dialog");
+  const dialog = await screen.findByRole("dialog");
+  await screen.findByText("Receptionist Basics");
+  fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  await screen.findByText("Days and times the receptionist answers");
+  return dialog;
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -136,6 +141,7 @@ describe("AI Receptionist: answering hours in the settings", () => {
     mock([queue()], [hoursPhone(OPEN_STATE)]);
     render(<Inbound />);
     await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));      // the name is on the first step
     fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "Reception" } });
     save();
     await waitFor(() => expect(api.updateInboundQueue).toHaveBeenCalled());
@@ -261,6 +267,7 @@ describe("AI Receptionist: no time zone is pre-selected", () => {
     mock([queue()], [untouched()]);
     render(<Inbound />);
     await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));      // the name is on the first step
     fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "Reception" } });
     save();
     await waitFor(() => expect(api.updateInboundQueue).toHaveBeenCalled());
@@ -276,5 +283,118 @@ describe("AI Receptionist: no time zone is pre-selected", () => {
     save();
     await waitFor(() => expect(api.updatePhoneNumber).toHaveBeenCalled());
     expect(fn(api.updatePhoneNumber).mock.calls[0][1]).toMatchObject({ answer_hours_enabled: false, answer_hours_timezone: "Asia/Karachi" });
+  });
+});
+
+describe("AI Receptionist: the edit wizard", () => {
+  const openEdit = async () => {
+    await screen.findByText("Front Desk");
+    fireEvent.click(within(cardOf("Front Desk")).getByTitle("Settings"));
+    await screen.findByText("Receptionist Basics");
+  };
+  const saveBtn = () => screen.getByRole("button", { name: /Save Changes/ });
+
+  it("is the creation wizard in edit mode: two steps, starting from the receptionist, number shown and fixed", async () => {
+    mock([queue({ status: "Inactive" })], [phone()]);
+    render(<Inbound />);
+    await openEdit();
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 2/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Front Desk")).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inactive");
+    expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("Sara");
+    expect(within(screen.getByRole("dialog")).getByText("+15550001111")).toBeInTheDocument();
+    expect(screen.getByText(/cannot be changed here/)).toBeInTheDocument();
+    expect(screen.queryByText(/Buy a new number/)).not.toBeInTheDocument();
+  });
+
+  it("saves from the first step: name, agent and status go to the receptionist, the number is not touched", async () => {
+    mock([queue()], [phone()]);
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Front Desk"), { target: { value: "Reception" } });
+    await choose("Status", "Inactive");
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateInboundQueue).toHaveBeenCalled());
+    expect(fn(api.updateInboundQueue).mock.calls[0]).toEqual(["q1", { name: "Reception", agent_id: "a1", status: "Inactive" }]);
+    expect(api.updatePhoneNumber).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith("Receptionist updated");
+    await waitFor(() => expect(screen.queryByText("Receptionist Basics")).not.toBeInTheDocument());
+  });
+
+  it("the second step is the answering hours, with Save Changes as its main button", async () => {
+    mock([queue()], [hoursPhone(OPEN_STATE, { answer_hours_timezone: "Asia/Karachi" })]);
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the receptionist answers");
+    expect(hoursSwitch()).toBeChecked();
+    expect(screen.queryByRole("button", { name: /Next/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByText("Receptionist Basics");
+  });
+
+  it("a name that is cleared is refused, from either step", async () => {
+    mock([queue()], [phone()]);
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Front Desk"), { target: { value: " " } });
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    expect(toast.error).toHaveBeenCalledWith("Name is required");
+    fireEvent.click(saveBtn());
+    expect(toast.error).toHaveBeenCalledTimes(2);
+    expect(api.updateInboundQueue).not.toHaveBeenCalled();
+  });
+
+  it("hours problems found while saving from the first step send the wizard to the hours step", async () => {
+    mock([queue()], [phone()]);
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the receptionist answers");
+    fireEvent.click(hoursSwitch());
+    for (const d of ["Mon", "Tue", "Wed", "Thu", "Fri"]) fireEvent.click(screen.getByRole("button", { name: d }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByText("Receptionist Basics");
+    fireEvent.click(saveBtn());
+    expect(await screen.findByText("Days and times the receptionist answers")).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalled();
+    expect(api.updatePhoneNumber).not.toHaveBeenCalled();
+    expect(api.updateInboundQueue).not.toHaveBeenCalled();
+  });
+
+  it("a refusal from the server keeps the wizard open", async () => {
+    mock([queue()], [phone()]);
+    fn(api.updateInboundQueue).mockResolvedValue({ data: null, error: "Agent is not set up" });
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Agent is not set up"));
+    expect(screen.getByText("Receptionist Basics")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalledWith("Receptionist updated");
+  });
+
+  it("without a phone number it says so and answering hours wait for one, but it still saves", async () => {
+    mock([queue({ phone_number_id: undefined })], []);
+    render(<Inbound />);
+    await openEdit();
+    expect(screen.getByText("No phone number yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    expect(await screen.findByText(/once this receptionist has a phone number/)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Only answer during set hours" })).not.toBeInTheDocument();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateInboundQueue).toHaveBeenCalled());
+    expect(api.updatePhoneNumber).not.toHaveBeenCalled();
+  });
+
+  it("an unsaved edit is gone the next time it is opened", async () => {
+    mock([queue()], [phone()]);
+    render(<Inbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Front Desk"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]);
+    await waitFor(() => expect(screen.queryByText("Receptionist Basics")).not.toBeInTheDocument());
+    await openEdit();
+    expect(screen.getByDisplayValue("Front Desk")).toBeInTheDocument();
   });
 });

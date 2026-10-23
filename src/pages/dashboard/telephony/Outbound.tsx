@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import {
   Plus, PhoneOutgoing, Play, Pause as PauseIcon,
   CheckCircle2, XCircle, Loader2, AlertTriangle,
-  Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock,
+  Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock, Repeat, ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,18 +16,16 @@ import {
   Dialog, DialogContent, DialogDescription,
   DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select, SelectContent, SelectItem,
-  SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { CreateCampaignDialog } from "@/components/telephony/CreateCampaignDialog";
+import { CreateCampaignDialog, EditCampaignDialog, type CampaignData } from "@/components/telephony/CreateCampaignDialog";
 import { RowActions } from "@/components/dashboard/RowActions";
-import { CallingHoursFields } from "@/components/hours/CallingHoursFields";
+import { CampaignNumbersDialog } from "@/components/telephony/CampaignNumbersDialog";
 import {
-  CAMPAIGN_PREFIX, defaultHours, describeNextOpen, hoursFromRow, hoursToPayload, validateHours,
-  type CallingHours, type HoursState,
+  describeRetryShort, retryFromRow, retryOutcomesNote, retryToPayload,
+  type RetryStats,
+} from "@/lib/callRetry";
+import {
+  CAMPAIGN_PREFIX, describeNextOpen, hoursFromRow, hoursToPayload,
+  type HoursState,
 } from "@/components/hours/callingHours";
 import { api } from "@/services/api";
 import { toast } from "sonner";
@@ -52,6 +50,13 @@ type Campaign = {
   // True while the calling hours have stopped a run and the campaign will carry on by itself the next
   // time they open (next_at, UTC; null = they are open now, so within the next minute).
   auto_resume?: { pending: boolean; next_at: string | null };
+  // Call retry settings (retry_*) and the counts the list returns with each campaign.
+  dnc_screening_enabled?: boolean;
+  retry_enabled?: boolean;
+  retry_max_attempts?: number;
+  retry_interval_minutes?: number;
+  retry_on?: string[];
+  retry_stats?: RetryStats;
 };
 
 /** One row of the pre-launch checklist dialog. */
@@ -111,8 +116,7 @@ const Outbound = () => {
   const [loading, setLoading] = useState(true);
 
   const [settingsTarget, setSettingsTarget] = useState<Campaign | null>(null);
-  const [settingsForm, setSettingsForm] = useState<{ name: string; agent_id: string; status: string }>({ name: "", agent_id: "", status: "" });
-  const [settingsHours, setSettingsHours] = useState<CallingHours>(defaultHours());
+  const [numbersTarget, setNumbersTarget] = useState<Campaign | null>(null);
 
   const [preflightTarget, setPreflightTarget] = useState<Campaign | null>(null);
   const [checks, setChecks] = useState<CheckItem[]>([]);
@@ -259,10 +263,12 @@ const Outbound = () => {
     }
     // Suppressed numbers aren't failures — they were deliberately skipped by DNC screening,
     // so they're reported separately from VAPI errors.
-    const skipped = suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "";
+    const onCall: number = (data as { already_on_call?: number } | null)?.already_on_call ?? 0;
+    const skipped = (suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "")
+      + (onCall > 0 ? `, ${onCall} skipped (already on a call)` : "");
     if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown error"}${skipped}`);
     else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed${skipped}`);
-    else if (suppressed > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
+    else if (suppressed > 0 || onCall > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
     else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);
     fetchCampaigns();
   };
@@ -278,26 +284,42 @@ const Outbound = () => {
     fetchCampaigns();
   };
 
-  /** Opens the settings dialog pre-filled from the campaign. */
-  const openSettings = (c: Campaign) => {
-    setSettingsTarget(c);
-    setSettingsForm({ name: c.name, agent_id: c.agent_id, status: c.status });
-    setSettingsHours(hoursFromRow(c as unknown as Record<string, unknown>, CAMPAIGN_PREFIX));
-  };
+  /** Opens the edit wizard, which starts from the campaign's current values. */
+  const openSettings = (c: Campaign) => setSettingsTarget(c);
 
-  /** PATCHes name, agent and status of the campaign being edited. */
-  const saveSettings = async () => {
-    if (!settingsTarget) return;
-    const problem = validateHours(settingsHours);
-    if (problem) return toast.error(problem);
+  /** The campaign as the edit wizard's form. */
+  const formOf = (c: Campaign): CampaignData => ({
+    status: c.status,
+    name: c.name,
+    description: "",
+    agentId: c.agent_id ?? "",
+    listId: c.list_id ?? "",
+    phoneNumberId: c.phone_number_id ?? "",
+    dncScreeningEnabled: c.dnc_screening_enabled ?? true,
+    hours: hoursFromRow(c as unknown as Record<string, unknown>, CAMPAIGN_PREFIX),
+    retry: retryFromRow(c as unknown as Record<string, unknown>),
+  });
+
+  /**
+   * PATCHes everything the edit wizard shows. Resolves false (the wizard stays open, with the reason in a
+   * toast) when the server refuses; the list, number and agent are only sent when one is chosen.
+   */
+  const saveSettings = async (d: CampaignData): Promise<boolean> => {
+    if (!settingsTarget) return false;
     const { error } = await api.updateCampaign(settingsTarget.id, {
-      ...settingsForm,
-      ...hoursToPayload(settingsHours, CAMPAIGN_PREFIX),
+      name: d.name,
+      status: d.status,
+      ...(d.agentId ? { agent_id: d.agentId } : {}),
+      ...(d.listId ? { list_id: d.listId } : {}),
+      ...(d.phoneNumberId ? { phone_number_id: d.phoneNumberId } : {}),
+      dnc_screening_enabled: d.dncScreeningEnabled,
+      ...hoursToPayload(d.hours, CAMPAIGN_PREFIX),
+      ...retryToPayload(d.retry),
     });
-    if (error) return toast.error(error);
+    if (error) { toast.error(error); return false; }
     toast.success("Campaign updated");
-    setSettingsTarget(null);
     fetchCampaigns();
+    return true;
   };
 
   /** Deletes a campaign via the row actions menu. */
@@ -420,6 +442,52 @@ const Outbound = () => {
                   </p>
                 )}
 
+                {/* Auto redial: one panel with the settings and, once calls have been placed, the counts */}
+                {(c.retry_enabled || (c.retry_stats?.total_attempts ?? 0) > 0) && (() => {
+                  const retry = retryFromRow(c as unknown as Record<string, unknown>);
+                  const stats = c.retry_stats;
+                  const note = c.retry_enabled ? retryOutcomesNote(retry) : null;
+                  const waiting = stats?.pending_retries ?? 0;
+                  return (
+                    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted/20">
+                      {c.retry_enabled && (
+                        <div className="space-y-0.5 px-3 py-2">
+                          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-xs">
+                            <span className="flex items-center gap-1.5 font-medium text-foreground">
+                              <Repeat className="h-3.5 w-3.5 text-primary" /> Auto redial
+                            </span>
+                            <span className="text-muted-foreground">{describeRetryShort(retry)}</span>
+                          </div>
+                          {note && <p className="text-[11px] text-muted-foreground">{note}</p>}
+                          {waiting > 0 && (
+                            <p className="text-[11px] font-medium text-foreground">
+                              {waiting} waiting{c.status !== "Active" ? " (campaign paused)" : ""}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {(stats?.total_attempts ?? 0) > 0 && (
+                        <dl
+                          aria-label="Call attempts"
+                          className={`grid grid-cols-4 divide-x divide-border text-center ${c.retry_enabled ? "border-t border-border" : ""}`}
+                        >
+                          {([
+                            ["Attempts", stats!.total_attempts],
+                            ["Redials", stats!.retries_placed],
+                            ["Answered on redial", stats!.answered_on_retry],
+                            ["Max attempts", stats!.max_attempts_reached],
+                          ] as const).map(([label, value]) => (
+                            <div key={label} className="flex min-w-0 flex-col items-center px-1 py-2">
+                              <dd className="text-base font-semibold leading-none text-foreground">{value.toLocaleString()}</dd>
+                              <dt className="mt-1 text-[10px] leading-tight text-muted-foreground">{label}</dt>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Progress */}
                 <div className="mt-4">
                   <div className="flex items-center justify-between text-xs mb-1">
@@ -454,7 +522,14 @@ const Outbound = () => {
                         : <><Play className="mr-1.5 h-3.5 w-3.5" /> Start</>}
                     </Button>
                   )}
-                  <RowActions onSettings={() => openSettings(c)} onDelete={() => handleDelete(c)} />
+                  <div className="flex items-center gap-1">
+                    {(c.retry_stats?.total_attempts ?? 0) > 0 && (
+                      <Button size="sm" variant="ghost" onClick={() => setNumbersTarget(c)}>
+                        <ListChecks className="mr-1.5 h-3.5 w-3.5" /> Numbers
+                      </Button>
+                    )}
+                    <RowActions onSettings={() => openSettings(c)} onDelete={() => handleDelete(c)} />
+                  </div>
                 </div>
               </div>
             );
@@ -473,6 +548,7 @@ const Outbound = () => {
             phone_number_id: d.phoneNumberId || null,
             dnc_screening_enabled: d.dncScreeningEnabled,
             ...hoursToPayload(d.hours, CAMPAIGN_PREFIX),
+            ...retryToPayload(d.retry),
           });
           if (error) return toast.error(error);
           toast.success(`Campaign "${d.name}" created`);
@@ -522,61 +598,22 @@ const Outbound = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Settings Dialog */}
-      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && setSettingsTarget(null)}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Campaign Settings</DialogTitle>
-            <DialogDescription>Update campaign details.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input value={settingsForm.name} onChange={(e) => setSettingsForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Agent</Label>
-                <select
-                  value={settingsForm.agent_id}
-                  onChange={(e) => setSettingsForm((f) => ({ ...f, agent_id: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="">Select agent…</option>
-                  {Array.from(agentsById.entries()).map(([id, name]) => (
-                    <option key={id} value={id}>{name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Active">Active</SelectItem>
-                    <SelectItem value="Paused">Paused</SelectItem>
-                    <SelectItem value="Inactive">Inactive</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <CallingHoursFields
-              advanced
-              idPrefix="campaign-settings-hours"
-              value={settingsHours}
-              onChange={setSettingsHours}
-              switchLabel="Only call during set hours"
-              description="Off: the campaign can place calls at any time. On: calls are only placed on these days, between these times. A run that is still going when they end, or when a break begins, stops and carries on by itself from the next contact when the hours (or the break) are over."
-              startLabel="Calls start"
-              endLabel="Calls stop"
-            />
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setSettingsTarget(null)}>Cancel</Button>
-            <Button onClick={saveSettings}>Save Changes</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CampaignNumbersDialog
+        campaignId={numbersTarget?.id ?? null}
+        campaignName={numbersTarget?.name}
+        timezone={numbersTarget?.call_hours_timezone}
+        onOpenChange={(o) => { if (!o) setNumbersTarget(null); }}
+      />
+
+      {/* Edit wizard: the same steps as creating a campaign, starting from its current values */}
+      {settingsTarget && (
+        <EditCampaignDialog
+          open
+          onOpenChange={(o) => { if (!o) setSettingsTarget(null); }}
+          initial={formOf(settingsTarget)}
+          onSave={saveSettings}
+        />
+      )}
     </div>
   );
 };

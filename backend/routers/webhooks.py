@@ -34,6 +34,7 @@ from database import supabase
 from services.gemini import summarize_transcript
 from services.automation_engine import run_post_call_automations
 from services.call_events import finalize_call_events
+from services import call_retry
 from services.caller_verification import answered_calls, handle_assistant_request
 from routers.billing import record_call_cost
 
@@ -484,6 +485,9 @@ def import_vapi_call(call: dict, user_id: str, agent_id: str | None = None) -> s
     # Link call-event hits to the conversation and record the final call outcome.
     # The id is looked up again because a freshly inserted row's id is not captured above.
     finalize_call_events(vapi_call_id, _conversation_id_for(vapi_call_id))
+    # Only a call that has ended settles its number: the manual sync also imports calls still in progress.
+    if call.get("endedAt") or call.get("endedReason") or (call.get("status") or "").lower() == "ended":
+        _settle_campaign_attempt(vapi_call_id, call.get("endedAt"))
 
     # Set the displayed call_cost and charge the wallet once (idempotent).
     if dur:
@@ -493,6 +497,16 @@ def import_vapi_call(call: dict, user_id: str, agent_id: str | None = None) -> s
                          vapi_cost=_extract_vapi_cost(payload), direction=direction,
                          is_byot=_is_byot_call(payload))
     return result
+
+
+def _settle_campaign_attempt(vapi_call_id: str, ended_at=None) -> None:
+    """A finished call that a campaign placed settles its number (services/call_retry.on_call_ended): done,
+    or due for a redial. Called after the conversation row is final, from both the end-of-call webhook and
+    the VAPI sync. Best-effort: it must never stop a call from being logged."""
+    try:
+        call_retry.on_call_ended(vapi_call_id, ended_at)
+    except Exception:  # noqa: BLE001
+        logger.exception("could not settle the campaign attempt of call %s", vapi_call_id)
 
 
 def _conversation_id_for(vapi_call_id: str) -> str | None:
@@ -688,18 +702,23 @@ async def _handle_call_ended(payload: dict):
     # Charge only when the owner is known and the call had a positive duration.
     # record_call_cost debits the wallet at most once per call, so webhook retries or a
     # later re-import by the sync loop cannot double-charge.
-    if user_id and duration_seconds:
-        dur_int = int(float(duration_seconds))
-        if dur_int > 0:
-            # Anything that is not an inbound call type (including web calls) is treated as outbound.
-            direction = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
-            cost = record_call_cost(user_id, vapi_call_id, dur_int,
-                                    vapi_cost=_extract_vapi_cost(payload), direction=direction,
-                                    is_byot=_is_byot_call(payload))
-            logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
+    try:
+        if user_id and duration_seconds:
+            dur_int = int(float(duration_seconds))
+            if dur_int > 0:
+                # Anything that is not an inbound call type (including web calls) is treated as outbound.
+                direction = "inbound" if "inbound" in (call_obj.get("type") or "").lower() else "outbound"
+                cost = record_call_cost(user_id, vapi_call_id, dur_int,
+                                        vapi_cost=_extract_vapi_cost(payload), direction=direction,
+                                        is_byot=_is_byot_call(payload))
+                logger.info(f"Call cost recorded: {vapi_call_id} — {dur_int}s, ${cost}")
 
-    # Link call-event hits to this conversation and write the final call outcome.
-    finalize_call_events(vapi_call_id, conv_id)
+        # Link call-event hits to this conversation and write the final call outcome.
+        finalize_call_events(vapi_call_id, conv_id)
+    finally:
+        # The campaign number is settled even if billing failed above: otherwise its attempt would stay open
+        # until the stale-call reaper closes it, and a call that was answered could be redialed.
+        _settle_campaign_attempt(vapi_call_id, msg.get("endedAt") or call_obj.get("endedAt"))
 
     # Run the slow AI summary and automations in the background instead of making the
     # webhook response wait for them; _post_call_ai catches and logs its own errors.

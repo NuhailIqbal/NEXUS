@@ -216,6 +216,12 @@ class ZoneBase(Base):
     def at(self, instant):
         FakeDateTime.instant = instant
 
+    def hang_up_all(self):
+        """Every campaign call placed so far has ended. A number holds one open call at a time (services/
+        call_retry.py), so a test that starts a campaign again on the same contacts hangs up first, as the
+        end-of-call report would have in real life."""
+        H.sql("UPDATE public.campaign_attempts SET ended_at = now(), outcome = 'answered' WHERE ended_at IS NULL")
+
     def api(self, method, path, **kw):
         return getattr(H.client, method)(path, headers=H.auth(self.user), **kw)
 
@@ -274,6 +280,7 @@ class OutboundEveryZoneTests(ZoneBase):
                     self.assertEqual(r.status_code, 200, f"{zone} {label}: {r.text}")
                     self.assertEqual(r.json()["data"]["dialed"], 3)
                     self.assertEqual(self.create_call.await_count, before + 3)
+                    self.hang_up_all()
 
     def test_the_hours_of_two_campaigns_in_different_zones_do_not_leak_into_each_other(self):
         y, m, d = DAY

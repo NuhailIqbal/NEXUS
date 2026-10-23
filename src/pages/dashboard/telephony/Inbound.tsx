@@ -16,23 +16,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog, DialogContent, DialogDescription,
-  DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select, SelectContent, SelectItem,
-  SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { CallerVerificationSwitch } from "@/components/telephony/CallerVerificationSwitch";
 import { isCallerVerificationStatus, type CallerVerificationStatus } from "@/lib/callerVerification";
-import { CallingHoursFields } from "@/components/hours/CallingHoursFields";
-import { CreateReceptionistDialog, type NewReceptionist } from "@/components/telephony/CreateReceptionistDialog";
 import {
-  NUMBER_PREFIX, defaultHours, describeNextOpen, hoursFromRow, hoursToPayload, sameHours, validateHours,
-  type CallingHours, type HoursState,
+  CreateReceptionistDialog, EditReceptionistDialog, type NewReceptionist, type ReceptionistEdit,
+} from "@/components/telephony/CreateReceptionistDialog";
+import {
+  NUMBER_PREFIX, describeNextOpen, hoursFromRow, hoursToPayload, sameHours,
+  type HoursState,
 } from "@/components/hours/callingHours";
 import { api } from "@/services/api";
 import { toast } from "sonner";
@@ -116,11 +107,6 @@ const Inbound = () => {
   const availableNumbers = phones.filter((p) => !p.agent_id && p.vapi_phone_id);
 
   const [settingsTarget, setSettingsTarget] = useState<Receptionist | null>(null);
-  const [settingsForm, setSettingsForm] = useState({ name: "", agent_id: "", status: "" });
-  // The receptionist's answering hours as the dialog edits them, and as they were when it opened.
-  const [settingsHours, setSettingsHours] = useState<CallingHours>(defaultHours());
-  const [savedHours, setSavedHours] = useState<CallingHours>(defaultHours());
-  const [savingSettings, setSavingSettings] = useState(false);
 
   const agentsMap = new Map(agents.map((a) => [a.id, a]));
   const phonesMap = new Map(phones.map((p) => [p.id, p]));
@@ -252,41 +238,37 @@ const Inbound = () => {
     fetchAll();
   };
 
-  /** Opens the settings dialog, prefilling the form with the receptionist's current values. */
-  const openSettings = (r: Receptionist) => {
-    setSettingsTarget(r);
-    setSettingsForm({ name: r.name, agent_id: r.agent_id, status: r.status });
+  /** Opens the edit wizard, which starts from the receptionist's current values. */
+  const openSettings = (r: Receptionist) => setSettingsTarget(r);
+
+  /** The receptionist as the edit wizard's form (its hours are the ones stored on its number). */
+  const formOf = (r: Receptionist): ReceptionistEdit => {
     const phone = r.phone_number_id ? phonesMap.get(r.phone_number_id) : undefined;
-    const hours = hoursFromRow(phone as unknown as Record<string, unknown> | undefined, NUMBER_PREFIX);
-    setSettingsHours(hours);
-    setSavedHours(hours);
+    return {
+      name: r.name, agent_id: r.agent_id, status: r.status,
+      hours: hoursFromRow(phone as unknown as Record<string, unknown> | undefined, NUMBER_PREFIX),
+    };
   };
 
   /**
    * Saves name, agent and status via api.updateInboundQueue, and the answering hours (stored on the
-   * receptionist's number) via api.updatePhoneNumber when they were changed, then closes the dialog
-   * and reloads. The hours go first: they are the part the server can refuse (for instance when it
-   * cannot route calls), and a refusal then leaves everything as it was.
+   * receptionist's number) via api.updatePhoneNumber when they were changed. The hours go first: they are
+   * the part the server can refuse (for instance when it cannot route calls), and a refusal then leaves
+   * everything as it was. Resolves false (the wizard stays open, with the reason in a toast) on a refusal.
    */
-  const saveSettings = async () => {
-    if (!settingsTarget) return;
+  const saveSettings = async (d: ReceptionistEdit): Promise<boolean> => {
+    if (!settingsTarget) return false;
     const phone = settingsTarget.phone_number_id ? phonesMap.get(settingsTarget.phone_number_id) : undefined;
-    const hoursChanged = !!phone && !sameHours(settingsHours, savedHours);
-    if (hoursChanged) {
-      const problem = validateHours(settingsHours);
-      if (problem) return toast.error(problem);
-    }
-    setSavingSettings(true);
+    const hoursChanged = !!phone && !sameHours(d.hours, formOf(settingsTarget).hours);
     if (hoursChanged && phone) {
-      const { error } = await api.updatePhoneNumber(phone.id, hoursToPayload(settingsHours, NUMBER_PREFIX));
-      if (error) { setSavingSettings(false); return toast.error(error); }
+      const { error } = await api.updatePhoneNumber(phone.id, hoursToPayload(d.hours, NUMBER_PREFIX));
+      if (error) { toast.error(error); return false; }
     }
-    const { error } = await api.updateInboundQueue(settingsTarget.id, settingsForm);
-    setSavingSettings(false);
-    if (error) { fetchAll(); return toast.error(error); }
+    const { error } = await api.updateInboundQueue(settingsTarget.id, { name: d.name, agent_id: d.agent_id, status: d.status });
+    if (error) { fetchAll(); toast.error(error); return false; }
     toast.success("Receptionist updated");
-    setSettingsTarget(null);
     fetchAll();
+    return true;
   };
 
   /**
@@ -480,68 +462,18 @@ const Inbound = () => {
         onCreate={handleCreate}
       />
 
-      {/* Settings Dialog */}
-      <Dialog open={!!settingsTarget} onOpenChange={(o) => !o && !savingSettings && setSettingsTarget(null)}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
-          <DialogHeader className="text-left">
-            <DialogTitle className="flex items-center gap-2 pr-6">
-              <SettingsIcon className="h-5 w-5 shrink-0 text-primary" />
-              Receptionist Settings
-            </DialogTitle>
-            <DialogDescription>Update name, agent, status, and when it answers.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input value={settingsForm.name} onChange={(e) => setSettingsForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>AI Agent</Label>
-                <Select value={settingsForm.agent_id} onValueChange={(v) => setSettingsForm((f) => ({ ...f, agent_id: v }))}>
-                  <SelectTrigger><SelectValue placeholder="Select an agent…" /></SelectTrigger>
-                  <SelectContent>
-                    {agents.filter((a) => a.vapi_assistant_id).map((a) => (
-                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select value={settingsForm.status} onValueChange={(v) => setSettingsForm((f) => ({ ...f, status: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Active">Active</SelectItem>
-                    <SelectItem value="Inactive">Inactive</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {settingsTarget?.phone_number_id ? (
-              <CallingHoursFields
-                idPrefix="receptionist-hours"
-                value={settingsHours}
-                onChange={setSettingsHours}
-                disabled={savingSettings}
-                switchLabel="Only answer during set hours"
-                description="Off: the receptionist answers every call, at any time. On: it answers only on these days, between these times. Callers outside them hear that you are closed and the call ends."
-                startLabel="Answers from"
-                endLabel="Answers until"
-                unavailableReason={hoursStatus && !hoursStatus.available ? hoursStatus.reason : null}
-              />
-            ) : (
-              <p className="text-xs text-muted-foreground">Answering hours can be set once this receptionist has a phone number.</p>
-            )}
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setSettingsTarget(null)} disabled={savingSettings}>Cancel</Button>
-            <Button onClick={saveSettings} disabled={savingSettings}>
-              {savingSettings && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Edit wizard: the same steps as creating a receptionist, starting from its current values */}
+      {settingsTarget && (
+        <EditReceptionistDialog
+          open
+          onOpenChange={(o) => { if (!o) setSettingsTarget(null); }}
+          agents={agents.filter((a) => a.vapi_assistant_id)}
+          initial={formOf(settingsTarget)}
+          phoneLabel={settingsTarget.phone_number_id ? phonesMap.get(settingsTarget.phone_number_id)?.number ?? null : null}
+          hoursUnavailableReason={hoursStatus && !hoursStatus.available ? hoursStatus.reason : null}
+          onSave={saveSettings}
+        />
+      )}
     </div>
   );
 };

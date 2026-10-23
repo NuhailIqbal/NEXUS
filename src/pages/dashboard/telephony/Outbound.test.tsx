@@ -10,7 +10,7 @@ vi.mock("@/services/api", () => ({
     getCampaigns: vi.fn(), getAgents: vi.fn(), getPhoneNumbers: vi.fn(), getAnalyticsOverview: vi.fn(), getContacts: vi.fn(),
     getLists: vi.fn(), getDncStatus: vi.fn(),
     createCampaign: vi.fn(), updateCampaign: vi.fn(), deleteCampaign: vi.fn(),
-    startCampaign: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn(),
+    startCampaign: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn(), getCampaignNumbers: vi.fn(),
   },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
@@ -204,10 +204,17 @@ describe("Outbound campaigns: starting", () => {
 });
 
 describe("Outbound campaigns: hours in the settings", () => {
+  // The settings are the same wizard as creating a campaign: step 3 is the Calling Hours.
   const openSettings = async () => {
     await screen.findByText("Spring Push");
     fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
-    return screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
+    await screen.findByText("Campaign Basics");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the campaign may call");
+    await screen.findByRole("switch", { name: "Only call during set hours" });
+    return dialog;
   };
   const hoursSwitch = () => screen.getByRole("switch", { name: "Only call during set hours" });
 
@@ -292,6 +299,8 @@ describe("Outbound campaigns: creating one with hours", () => {
       await pick("Timezone", "karachi");                                        // none is pre-selected
     }
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Call again when a number does not pick up");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
   }
@@ -324,10 +333,17 @@ describe("Outbound campaigns: creating one with hours", () => {
 describe("Outbound campaigns: no time zone is pre-selected", () => {
   // A campaign nobody configured holds the server's untouched "UTC"; it must not look chosen.
   const untouched = () => campaign({ call_hours_timezone: "UTC" });
+  // The settings are the same wizard as creating a campaign: step 3 is the Calling Hours.
   const openSettings = async () => {
     await screen.findByText("Spring Push");
     fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
-    return screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
+    await screen.findByText("Campaign Basics");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the campaign may call");
+    await screen.findByRole("switch", { name: "Only call during set hours" });
+    return dialog;
   };
   const hoursSwitch = () => screen.getByRole("switch", { name: "Only call during set hours" });
   const saveButton = () => screen.getByRole("button", { name: "Save Changes" });
@@ -476,10 +492,17 @@ describe("Outbound campaigns: a person's Pause while it runs, and a running camp
 });
 
 describe("Outbound campaigns: breaks and a custom schedule in the settings", () => {
+  // The settings are the same wizard as creating a campaign: step 3 is the Calling Hours.
   const openSettings = async () => {
     await screen.findByText("Spring Push");
     fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
-    return screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog");
+    await screen.findByText("Campaign Basics");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Days and times the campaign may call");
+    await screen.findByRole("switch", { name: "Only call during set hours" });
+    return dialog;
   };
   const save = () => fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
   const sentSchedule = () => (fn(api.updateCampaign).mock.calls[0][1] as Record<string, unknown>).call_hours_schedule;
@@ -603,11 +626,332 @@ describe("Outbound campaigns: breaks and a custom schedule in the settings", () 
     await pick("Timezone", "karachi");
     fireEvent.click(screen.getByRole("button", { name: "Add break" }));
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Call again when a number does not pick up");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     await waitFor(() => expect(api.createCampaign).toHaveBeenCalled());
     expect(fn(api.createCampaign).mock.calls[0][0]).toMatchObject({
       call_hours_schedule: { mode: "same", breaks: [{ start: "13:00", end: "14:00" }] },
     });
+  });
+});
+
+describe("Outbound campaigns: auto redial", () => {
+  const STATS = { total_attempts: 12, retries_placed: 5, answered_on_retry: 3, max_attempts_reached: 2, pending_retries: 4, numbers: 7 };
+  const retryCampaign = (over: Record<string, unknown> = {}) => campaign({
+    retry_enabled: true, retry_max_attempts: 3, retry_interval_minutes: 10, retry_on: ["no_answer", "busy"],
+    retry_stats: STATS, status: "Active", ...over,
+  });
+  // The settings are the same wizard as creating a campaign: step 4 is the Auto Redial.
+  const openSettings = async () => {
+    await screen.findByText("Spring Push");
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
+    const dialog = await screen.findByRole("dialog");
+    await screen.findByText("Campaign Basics");
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Call again when a number does not pick up");
+    await screen.findByRole("switch", { name: "Enable auto redial" });
+    return dialog;
+  };
+  const retrySwitch = () => screen.getByRole("switch", { name: "Enable auto redial" });
+
+  it("a campaign without retry shows no retry line and no counts", async () => {
+    mock([campaign({ retry_enabled: false, retry_stats: { ...STATS, total_attempts: 0, pending_retries: 0 } })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push")).not.toHaveTextContent(/Retry:/);
+    expect(within(cardOf("Spring Push")).queryByLabelText("Call attempts")).not.toBeInTheDocument();
+    expect(within(cardOf("Spring Push")).queryByRole("button", { name: /Numbers/ })).not.toBeInTheDocument();
+  });
+
+  it("the card shows the settings, the waiting retries and the four counts", async () => {
+    mock([retryCampaign()]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    const card = cardOf("Spring Push");
+    expect(card).toHaveTextContent("Auto redial");
+    expect(card).toHaveTextContent("Up to 3 calls · every 10 min");
+    expect(card).toHaveTextContent("Redials on: no answer, busy");
+    expect(card).toHaveTextContent("4 waiting");
+    const counts = within(card).getByLabelText("Call attempts");
+    expect(counts).toHaveTextContent(/12\s*Attempts/);
+    expect(counts).toHaveTextContent(/5\s*Redials/);
+    expect(counts).toHaveTextContent(/3\s*Answered on redial/);
+    expect(counts).toHaveTextContent(/2\s*Max attempts/);
+  });
+
+  it("does not list the outcomes when every one is ticked", async () => {
+    mock([retryCampaign({ retry_on: ["no_answer", "busy", "voicemail", "failed"] })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push")).toHaveTextContent("Up to 3 calls · every 10 min");
+    expect(cardOf("Spring Push")).not.toHaveTextContent(/Retries on:/);
+  });
+
+  it("shows the counts of a campaign that has retry switched off but has placed calls, without the retry header", async () => {
+    mock([campaign({ retry_enabled: false, retry_stats: STATS })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    const card = cardOf("Spring Push");
+    expect(within(card).getByLabelText("Call attempts")).toHaveTextContent(/12\s*Attempts/);
+    expect(card).not.toHaveTextContent("Auto redial");
+  });
+
+  it("says the waiting retries are on hold while the campaign is paused", async () => {
+    mock([retryCampaign({ status: "Paused" })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    expect(cardOf("Spring Push")).toHaveTextContent("4 waiting (campaign paused)");
+  });
+
+  it("the Numbers button opens the lead/number view of that campaign", async () => {
+    mock([retryCampaign()]);
+    fn(api.getCampaignNumbers).mockResolvedValue({
+      data: { rows: [{ id: "n1", contact_id: "k1", name: "Ada", phone: "+15550002222", attempts: 2, round: 1, max_attempts: 3,
+        last_outcome: "busy", last_attempt_at: "2026-10-14T12:00:00Z", next_attempt_at: "2026-10-14T12:10:00Z",
+        final_status: null, status: "retry_scheduled", history: [] }], total: 1, retry: { enabled: true, max_attempts: 3, interval_minutes: 10 } },
+      error: null,
+    });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: /Numbers/ }));
+    expect(await screen.findByText("+15550002222")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3")).toBeInTheDocument();
+    expect(api.getCampaignNumbers).toHaveBeenCalledWith("c1", { status: "all", limit: 100, offset: 0 });
+  });
+
+  it("the settings open with the stored retry settings", async () => {
+    mock([retryCampaign({ retry_max_attempts: 6, retry_interval_minutes: 25, retry_on: ["voicemail"] })]);
+    render(<Outbound />);
+    await openSettings();
+    expect(retrySwitch()).toBeChecked();
+    expect(screen.getByLabelText("Calls per number")).toHaveTextContent("6 calls");
+    expect(screen.getByLabelText("Wait between calls")).toHaveTextContent("25 minutes");
+    expect(screen.getByRole("checkbox", { name: "Voicemail / Answering Machine" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Busy" })).not.toBeChecked();
+    expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
+  });
+
+  it("changing the settings and saving sends all four retry fields", async () => {
+    mock([retryCampaign()]);
+    render(<Outbound />);
+    await openSettings();
+    await choose("Calls per number", "8 calls");
+    await choose("Wait between calls", "20 minutes");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Call Failed / Network Error" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({
+      retry_enabled: true, retry_max_attempts: 8, retry_interval_minutes: 20, retry_on: ["no_answer", "busy", "failed"],
+    });
+  });
+
+  it("switching retry on for a campaign that had it off, and saving, sends it", async () => {
+    mock([campaign()]);
+    render(<Outbound />);
+    await openSettings();
+    expect(retrySwitch()).not.toBeChecked();
+    fireEvent.click(retrySwitch());
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({ retry_enabled: true, retry_max_attempts: 3, retry_interval_minutes: 10 });
+  });
+
+  it("will not save retry with nothing to retry on", async () => {
+    mock([retryCampaign({ retry_on: ["busy"] })]);
+    render(<Outbound />);
+    await openSettings();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Busy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(toast.error).toHaveBeenCalledWith("Choose at least one outcome to redial on.");
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("the launch toast mentions numbers skipped because they were already on a call", async () => {
+    mock([campaign()]);
+    fn(api.startCampaign).mockResolvedValue({ data: { dialed: 9, errors: 0, suppressed: 0, already_on_call: 1 }, error: null });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).not.toBeDisabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("1 skipped (already on a call)")));
+  });
+});
+
+describe("Outbound campaigns: the edit wizard", () => {
+  // The settings open the same five-step wizard as creating a campaign, starting from the campaign.
+  const full = (over: Record<string, unknown> = {}) => campaign({
+    status: "Paused", list_id: "l1", phone_number_id: "p1", dnc_screening_enabled: true,
+    retry_enabled: true, retry_max_attempts: 4, retry_interval_minutes: 15, retry_on: ["busy", "failed"], ...over,
+  });
+  const openEdit = async () => {
+    await screen.findByText("Spring Push");
+    fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
+    await screen.findByText("Campaign Basics");
+  };
+  const nextBtn = () => fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  const saveBtn = () => screen.getByRole("button", { name: /Save Changes/ });
+  const withLists = () => {
+    mock([full()]);
+    fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
+  };
+
+  it("is the creation wizard in edit mode: five steps, starting from the campaign", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Spring Push")).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Paused");
+    expect(screen.queryByText("Description")).not.toBeInTheDocument();
+    // comboboxes on step 1, top to bottom: Status, Agent, From Number
+    await waitFor(() => expect(screen.getAllByRole("combobox")[2]).toHaveTextContent("+15550001111"));
+    expect(screen.getAllByRole("combobox")[1]).toHaveTextContent("Sara");
+  });
+
+  it("every step shows the campaign's stored values", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    nextBtn();
+    await waitFor(() => expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("Leads (4 contacts)"));
+    nextBtn();
+    await screen.findByText("Days and times the campaign may call");
+    nextBtn();
+    await screen.findByText("Call again when a number does not pick up");
+    expect(screen.getByRole("switch", { name: "Enable auto redial" })).toBeChecked();
+    expect(screen.getByLabelText("Calls per number")).toHaveTextContent("4 calls");
+    expect(screen.getByLabelText("Wait between calls")).toHaveTextContent("15 minutes");
+    expect(screen.getByRole("checkbox", { name: "Busy" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "No Answer" })).not.toBeChecked();
+    nextBtn();
+    expect(await screen.findByText("Review & Save")).toBeInTheDocument();
+    expect(screen.getByText("Confirm your changes")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("Paused")).toBeInTheDocument();   // the Status tile
+    expect(screen.getByText(/Up to 4 calls per number, 15 min apart, on busy, call failed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Launch Campaign/ })).not.toBeInTheDocument();
+  });
+
+  it("saves from the very first step, sending everything the wizard shows", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Spring Push"), { target: { value: "Summer Push" } });
+    await choose("Status", "Active");
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    const [id, body] = fn(api.updateCampaign).mock.calls[0];
+    expect(id).toBe("c1");
+    expect(body).toMatchObject({
+      name: "Summer Push", status: "Active", agent_id: "a1", list_id: "l1", phone_number_id: "p1", dnc_screening_enabled: true,
+      call_hours_enabled: false, retry_enabled: true, retry_max_attempts: 4, retry_interval_minutes: 15, retry_on: ["busy", "failed"],
+    });
+    expect(toast.success).toHaveBeenCalledWith("Campaign updated");
+    await waitFor(() => expect(screen.queryByText("Campaign Basics")).not.toBeInTheDocument());
+  });
+
+  it("saves from the last step too, with the same Save Changes button", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    for (let i = 0; i < 4; i++) nextBtn();
+    await screen.findByText("Review & Save");
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalledTimes(1));
+  });
+
+  it("a name that is cleared is refused", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Spring Push"), { target: { value: "  " } });
+    fireEvent.click(saveBtn());
+    expect(toast.error).toHaveBeenCalledWith("Campaign name is required");
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a problem on a later step is found from the first one: the wizard jumps there and says why", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    nextBtn(); nextBtn();
+    await screen.findByText("Days and times the campaign may call");
+    fireEvent.click(screen.getByRole("switch", { name: "Only call during set hours" }));
+    await pick("Timezone", "karachi");
+    for (const d of ["Mon", "Tue", "Wed", "Thu", "Fri"]) fireEvent.click(screen.getByRole("button", { name: d }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByText("Campaign Basics");
+    fireEvent.click(saveBtn());
+    expect(toast.error).toHaveBeenCalledWith("Pick at least one day.");
+    expect(await screen.findByText("Days and times the campaign may call")).toBeInTheDocument();
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("retry on with nothing ticked sends the wizard back to the retry step", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    for (let i = 0; i < 3; i++) nextBtn();
+    await screen.findByText("Call again when a number does not pick up");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Busy" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Call Failed / Network Error" }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByText("Campaign Basics");
+    fireEvent.click(saveBtn());
+    expect(toast.error).toHaveBeenCalledWith("Choose at least one outcome to redial on.");
+    expect(await screen.findByText("Call again when a number does not pick up")).toBeInTheDocument();
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a refusal from the server keeps the wizard open with the reason, and nothing is announced as saved", async () => {
+    withLists();
+    fn(api.updateCampaign).mockResolvedValue({ data: null, error: "Select a time zone." });
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Select a time zone."));
+    expect(screen.getByText("Campaign Basics")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalledWith("Campaign updated");
+  });
+
+  it("an unsaved edit is gone the next time it is opened, and it starts on the first step again", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Spring Push"), { target: { value: "Changed" } });
+    nextBtn();
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]);
+    await waitFor(() => expect(screen.queryByText("Campaign Basics")).not.toBeInTheDocument());
+    expect(api.updateCampaign).not.toHaveBeenCalled();
+    await openEdit();
+    expect(screen.getByDisplayValue("Spring Push")).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+  });
+
+  it("a campaign that never got a list or a number can still be saved; those are then left out of the update", async () => {
+    mock([campaign({ list_id: null, phone_number_id: null })]);
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    const body = fn(api.updateCampaign).mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("list_id");
+    expect(body).not.toHaveProperty("phone_number_id");
+    expect(body).toMatchObject({ name: "Spring Push", agent_id: "a1" });
+  });
+
+  it("the retry step says that changes apply to calls placed from now on", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    for (let i = 0; i < 3; i++) nextBtn();
+    await screen.findByText("Call again when a number does not pick up");
+    expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
   });
 });

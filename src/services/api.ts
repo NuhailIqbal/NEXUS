@@ -303,6 +303,14 @@ export const api = {
   getCampaigns: () => get("/telephony/campaigns"),
   createCampaign: (data: any) => post("/telephony/campaigns", data),
   getCampaign: (id: string) => get(`/telephony/campaigns/${id}`),
+  // The lead/number view: every number with its attempt count, next retry time and status.
+  getCampaignNumbers: (id: string, params: { status?: string; limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.status) q.set("status", params.status);
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    return get(`/telephony/campaigns/${id}/numbers${q.toString() ? `?${q}` : ""}`);
+  },
   updateCampaign: (id: string, data: any) => patch(`/telephony/campaigns/${id}`, data),
   deleteCampaign: (id: string) => del(`/telephony/campaigns/${id}`),
   startCampaign: (id: string) => post(`/telephony/campaigns/${id}/start`),

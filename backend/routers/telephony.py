@@ -25,7 +25,7 @@ from models.schemas import (
     OutboundCallCreate,
     TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, twilio_byot_service, carriers, whitelist_service, caller_verification, call_hours
+from services import vapi_client, twilio_service, twilio_byot_service, carriers, whitelist_service, caller_verification, call_hours, call_retry
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -1063,6 +1063,21 @@ def _attach_hours_state(campaigns: list[dict]) -> None:
         camp["auto_resume"] = {"pending": waiting, "next_at": st["next_open_at"] if waiting else None}
 
 
+def _attach_retry_stats(owner_id: str, campaigns: list[dict]) -> None:
+    """Give each campaign a `retry_stats` (services/call_retry.stats): total attempts, retries placed, numbers
+    answered on a retry, numbers that hit the maximum and redials waiting. A failure here must never break
+    the campaign list, so the counts are zeros then."""
+    try:
+        found = call_retry.stats(owner_id, [c["id"] for c in campaigns])
+    except Exception:  # noqa: BLE001
+        logger.warning("could not read the retry stats", exc_info=True)
+        found = {}
+    empty = {"total_attempts": 0, "retries_placed": 0, "answered_on_retry": 0, "max_attempts_reached": 0,
+             "pending_retries": 0, "numbers": 0}
+    for camp in campaigns:
+        camp["retry_stats"] = found.get(camp["id"], dict(empty))
+
+
 @router.get("/campaigns")
 async def list_campaigns(user=Depends(get_current_user)):
     """List the account's outbound campaigns, newest first, each with live
@@ -1078,6 +1093,7 @@ async def list_campaigns(user=Depends(get_current_user)):
     campaigns = result.data or []
     _enrich_campaign_progress(owner_id, campaigns)
     _attach_hours_state(campaigns)
+    _attach_retry_stats(owner_id, campaigns)
     return {"data": campaigns, "error": None}
 
 
@@ -1090,7 +1106,8 @@ async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
     row["user_id"] = owner_id
     try:
         row.update(call_hours.validate(call_hours.CAMPAIGN, None, row))
-    except call_hours.HoursError as e:
+        row.update(call_retry.validate(None, row))
+    except (call_hours.HoursError, call_retry.RetryError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     if body.list_id:
@@ -1124,7 +1141,30 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
     camp = result.data
     _enrich_campaign_progress(owner_id, [camp])
     _attach_hours_state([camp])
+    _attach_retry_stats(owner_id, [camp])
     return {"data": camp, "error": None}
+
+
+@router.get("/campaigns/{campaign_id}/numbers")
+async def campaign_numbers(campaign_id: str, status: str = "all", limit: int = 100, offset: int = 0,
+                           user=Depends(get_current_user)):
+    """The lead/number view of one campaign (services/call_retry.numbers): every number with its attempt
+    count, last outcome, next retry time, status and the history of its calls. `status` filters: all,
+    pending (still going), finished, or one final status (e.g. max_attempts); 404 if the campaign isn't
+    this account's."""
+    owner_id = resolve_owner_id(user["user_id"])
+    camp = (
+        supabase.table("outbound_campaigns").select("*")
+        .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
+    ).data
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        data = call_retry.numbers(camp, status, limit, offset)
+    except call_retry.RetryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    data["retry"] = call_retry.settings_of(camp)
+    return {"data": data, "error": None}
 
 
 @router.patch("/campaigns/{campaign_id}")
@@ -1136,7 +1176,8 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         return {"data": None, "error": "No fields to update"}
     owner_id = resolve_owner_id(user["user_id"])
     hours_touched = call_hours.touched(call_hours.CAMPAIGN, updates)
-    if hours_touched or "list_id" in updates or "status" in updates:
+    retry_touched = call_retry.touched(updates)
+    if hours_touched or retry_touched or "list_id" in updates or "status" in updates:
         existing = (
             supabase.table("outbound_campaigns").select("*")
             .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
@@ -1149,6 +1190,13 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
             try:
                 updates.update(call_hours.validate(call_hours.CAMPAIGN, existing, updates))
             except call_hours.HoursError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        if retry_touched:
+            # Same for the retry settings. They govern calls from now on: a call already in progress is
+            # settled with the settings it was placed under (see services/call_retry.py).
+            try:
+                updates.update(call_retry.validate(existing, updates))
+            except call_retry.RetryError as e:
                 raise HTTPException(status_code=400, detail=str(e))
         # dial_cursor (where a run stopped when the hours closed) only means something for the
         # same list; with another list the next start begins at the top.
@@ -1171,6 +1219,9 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         .eq("user_id", owner_id)
         .execute()
     )
+    if retry_touched and result.data and not updates["retry_enabled"]:
+        # Switching retries off cancels the redials still waiting (they are future attempts).
+        call_retry.cancel_pending(campaign_id)
     return {"data": result.data[0] if result.data else None, "error": None}
 
 
@@ -1185,7 +1236,7 @@ async def delete_campaign(campaign_id: str, user=Depends(get_current_user)):
 # crashed or was killed leaves its lease behind; after this long a new Start may take it over.
 RUN_LEASE_STALE_SECONDS = 600
 _HOURS_COLUMNS = ("call_hours_enabled", "call_hours_timezone", "call_hours_days", "call_hours_start", "call_hours_end", "call_hours_schedule")
-_RUN_COLUMNS = "status, list_id, run_token, " + ", ".join(_HOURS_COLUMNS)
+_RUN_COLUMNS = "status, list_id, run_token, " + ", ".join(_HOURS_COLUMNS + call_retry.FIELDS)
 
 
 def _iso_now(offset_seconds: int = 0) -> str:
@@ -1235,6 +1286,76 @@ def _release_run(campaign_id: str, token: str) -> None:
     """Give the lease back. Does nothing if it is no longer this run's (already given back, or taken over)."""
     supabase.table("outbound_campaigns").update({"run_token": None, "run_heartbeat_at": None}) \
         .eq("id", campaign_id).eq("run_token", token).execute()
+
+
+async def _place_call(camp: dict, owner_id: str, contact: dict, vapi_assistant_id: str, vapi_phone_id: str | None,
+                      *, cached_verdict=None, new_round: bool, lead: dict | None = None) -> dict:
+    """Place ONE campaign call to `contact` (used by the campaign's run and by the redial sweep), returning a
+    result dict instead of raising for dial problems:
+      {"success": True, "phone"}                       the call was placed
+      {"success": False, "suppressed": True, ...}      DNC screening blocked the number (a redial settles it as do-not-call)
+      {"success": False, "busy": True, "phone"}        the number is on another call right now: nothing was placed
+      {"success": False, "phone", "error"}             the provider could not place the call (that counts as a failed attempt)
+
+    Every placed call takes an attempt first (services/call_retry.begin_attempt): its unique index is what keeps
+    a number from ever being on two campaign calls at once. `new_round` starts the number again at attempt 1
+    (the campaign's own run); a redial passes the due `lead` and continues at attempts + 1.
+    """
+    campaign_id = camp["id"]
+    # Screen before dialing. A suppressed (or unverifiable) number is skipped, and the caller carries on
+    # with the rest of the list, rather than aborting the whole campaign. `cached_verdict` is a verdict
+    # pre-fetched for the batch (or None to let check_number look it up itself).
+    if camp.get("dnc_screening_enabled", True):
+        screen = await whitelist_service.check_number(owner_id, contact["phone"], cached=cached_verdict)
+        if not screen["allowed"]:
+            if lead:
+                if screen.get("suppressed"):
+                    call_retry.settle(lead, "do_not_call")
+                else:
+                    # The screening could not run (provider outage, unreadable number): that says nothing about the
+                    # number, so the redial stays due and is tried again by a later sweep.
+                    return {"success": False, "unscreened": True, "phone": contact["phone"], "error": screen["reason"]}
+            return {"success": False, "suppressed": True, "phone": contact["phone"], "error": screen["reason"] or "Suppressed"}
+
+    # Bookkeeping must never stop a call from being placed: if it breaks, the call goes out untracked.
+    attempt = None
+    try:
+        attempt = call_retry.begin_attempt({**camp, "user_id": owner_id}, contact, new_round=new_round, lead=lead)
+        if attempt is None:
+            return {"success": False, "busy": True, "phone": contact["phone"]}
+    except Exception:  # noqa: BLE001
+        logger.exception("could not record an attempt for campaign %s; placing the call untracked", campaign_id)
+
+    call_payload = {"assistantId": vapi_assistant_id, "customer": {"number": contact["phone"]}}
+    if vapi_phone_id:
+        call_payload["phoneNumberId"] = vapi_phone_id
+    try:
+        placed = await vapi_client.create_call(call_payload)
+    except Exception as e:
+        if attempt:
+            try:
+                call_retry.placement_failed(attempt, e)
+            except Exception:  # noqa: BLE001
+                logger.exception("could not close the failed attempt %s", attempt.get("id"))
+        return {"success": False, "phone": contact["phone"], "error": str(e)}
+    # Remember which campaign placed the call: it decides the time zone the call's times are shown
+    # in once the call is logged (conversations.campaign_id), and the call's attempt is matched to its end
+    # by the call id. Best-effort: it must never turn a placed call into a failure.
+    call_id = placed.get("id") if isinstance(placed, dict) else None
+    if call_id:
+        if attempt:
+            try:
+                call_retry.mark_placed(attempt, call_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("could not record the call id of attempt %s", attempt.get("id"), exc_info=True)
+        try:
+            supabase.table("campaign_calls").upsert(
+                {"vapi_call_id": str(call_id), "campaign_id": campaign_id, "user_id": owner_id},
+                on_conflict="vapi_call_id",
+            ).execute()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not record the campaign of call %s", call_id, exc_info=True)
+    return {"success": True, "phone": contact["phone"]}
 
 
 async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str, token: str,
@@ -1291,54 +1412,13 @@ async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str,
     campaign_dnc_enabled = camp.get("dnc_screening_enabled", True)
 
     async def dial_contact(contact, cached_verdict=None):
-        """Screen (when enabled) and dial one contact, returning a result dict instead
-        of raising for dial failures: {"success": True, "phone"} on success;
-        {"success": False, "suppressed": True, "phone", "error"} when DNC screening
-        blocked it; {"success": False, "phone", "error"} when the VAPI call failed.
-
-        `cached_verdict` is a suppression verdict pre-fetched for the batch (or None to
-        let check_number look it up itself).
-        """
-        # Screen before dialing. A suppressed (or unverifiable) number is skipped, and the
-        # loop below carries on with the rest of the list — matching how a failed dial is
-        # already handled, rather than aborting the whole campaign.
-        if campaign_dnc_enabled:
-            screen = await whitelist_service.check_number(
-                owner_id, contact["phone"], cached=cached_verdict
-            )
-            if not screen["allowed"]:
-                return {
-                    "success": False,
-                    "suppressed": True,
-                    "phone": contact["phone"],
-                    "error": screen["reason"] or "Suppressed",
-                }
-
-        call_payload = {
-            "assistantId": vapi_assistant_id,
-            "customer": {"number": contact["phone"]},
-        }
-        if phone_number_id:
-            call_payload["phoneNumberId"] = phone_number_id
-        try:
-            placed = await vapi_client.create_call(call_payload)
-        except Exception as e:
-            return {"success": False, "phone": contact["phone"], "error": str(e)}
-        # Remember which campaign placed the call: it decides the time zone the call's times are shown
-        # in once the call is logged (conversations.campaign_id). Best-effort: it must never turn a
-        # placed call into a failure.
-        call_id = placed.get("id") if isinstance(placed, dict) else None
-        if call_id:
-            try:
-                supabase.table("campaign_calls").upsert(
-                    {"vapi_call_id": str(call_id), "campaign_id": campaign_id, "user_id": owner_id},
-                    on_conflict="vapi_call_id",
-                ).execute()
-            except Exception:  # noqa: BLE001
-                logger.warning("could not record the campaign of call %s", call_id, exc_info=True)
-        return {"success": True, "phone": contact["phone"]}
+        """Screen (when enabled), take an attempt and dial one contact: see _place_call. The contact starts
+        a new round (attempt 1) of its number in this campaign."""
+        return await _place_call(camp, owner_id, contact, vapi_assistant_id, phone_number_id,
+                                 cached_verdict=cached_verdict, new_round=True)
 
     dialed = 0
+    already_on_call = 0     # numbers skipped because they were on another call at that moment
     suppressed = []
     errors = []
     all_contacts = contacts.data
@@ -1355,7 +1435,8 @@ async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str,
                 or now_row.get("list_id") != camp.get("list_id")):
             stopped_at, stopped_by = i, "person"
             break
-        camp.update({k: now_row[k] for k in _HOURS_COLUMNS})
+        # The retry settings too: a change applies to the calls placed from this batch on.
+        camp.update({k: now_row[k] for k in _HOURS_COLUMNS + call_retry.FIELDS})
         # Checked before every batch, so a run that outlasts the hours stops at the next boundary
         # instead of calling people after closing time.
         if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
@@ -1392,6 +1473,8 @@ async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str,
                 dialed += 1
             elif r.get("suppressed"):
                 suppressed.append({"phone": r["phone"], "reason": r.get("error", "Suppressed")})
+            elif r.get("busy"):
+                already_on_call += 1
             else:
                 errors.append({"phone": r["phone"], "error": r.get("error", "unknown")})
 
@@ -1435,6 +1518,7 @@ async def _run_campaign(campaign_id: str, owner_id: str, vapi_assistant_id: str,
         "error_details": errors[:5],
         "suppressed": len(suppressed),
         "suppressed_details": suppressed[:5],
+        "already_on_call": already_on_call,
     }
     if stopped_at is not None and stopped_by == "hours" and not person_took_over:
         nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN)

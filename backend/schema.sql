@@ -641,6 +641,13 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     -- save the place or change the campaign at the end; a lease not refreshed for ten minutes is stale.
     run_token uuid,
     run_heartbeat_at timestamp with time zone,
+    -- Call retry / redial (services/call_retry.py): off = a number is called once. retry_on = the outcomes
+    -- (no_answer, busy, voicemail, failed) that trigger another call after retry_interval_minutes, up to
+    -- retry_max_attempts calls in all (the first one included).
+    retry_enabled boolean DEFAULT false NOT NULL,
+    retry_max_attempts integer DEFAULT 3 NOT NULL,
+    retry_interval_minutes integer DEFAULT 10 NOT NULL,
+    retry_on text[] DEFAULT '{no_answer,busy,voicemail,failed}'::text[] NOT NULL,
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 
