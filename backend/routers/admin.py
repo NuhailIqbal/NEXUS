@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_admin_user
 from database import supabase
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 from typing import Optional
 from routers.billing import (
     DEFAULT_RATE_PER_MINUTE, DEFAULT_COST_MULTIPLIER, PHONE_NUMBER_MONTHLY_COST,
@@ -101,6 +101,24 @@ class UserUpdate(BaseModel):
     cost_multiplier: Optional[float] = None
     total_charges: Optional[float] = None
     balance: Optional[float] = None
+    # Most campaign calls the account may have open at once (>= 1). Sent as null it CLEARS the account's own
+    # cap, so the platform default applies (services/dial_limits.py); absent it is left alone.
+    max_concurrent_calls: Optional[StrictInt] = None
+
+
+def _cap_updates(body: BaseModel, names: tuple[str, ...]) -> dict:
+    """The cap fields `body` actually carries, validated (a whole number >= 1, or null = no cap / use the
+    default). Needed because the usual "drop the None fields" would make a cap impossible to clear. 400 on
+    a bad value."""
+    out = {}
+    for name in names:
+        if name not in body.model_fields_set:
+            continue
+        v = getattr(body, name)
+        if v is not None and v < 1:
+            raise HTTPException(status_code=400, detail=f"{name} must be a whole number of at least 1, or empty for no cap.")
+        out[name] = v
+    return out
 
 
 class AdminUserCreate(BaseModel):
@@ -210,6 +228,7 @@ async def list_users(admin=Depends(get_admin_user)):
             "total_conversations": conversation_counts.get(uid, 0),
             "phone_numbers": phone_counts.get(uid, 0),
             "stripe_customer_id": b.get("stripe_customer_id"),
+            "max_concurrent_calls": b.get("max_concurrent_calls"),
         })
 
     # created_at comes from the profile; users with no profile have "" and sort last.
@@ -297,6 +316,8 @@ async def update_user(user_id: str, body: UserUpdate, admin=Depends(get_admin_us
     derived from credit_grants and re-synced on the next read, so use
     POST /users/{user_id}/balance to actually add or remove funds."""
     updates = body.model_dump(exclude_none=True)
+    updates.pop("max_concurrent_calls", None)
+    updates.update(_cap_updates(body, ("max_concurrent_calls",)))
     if not updates:
         return {"data": None, "error": "No fields to update"}
 
@@ -742,6 +763,15 @@ async def admin_stats(admin=Depends(get_admin_user)):
     }
 
 
+@router.get("/dialer/health")
+async def dialer_health(admin=Depends(get_admin_user)):
+    """The dialing engine at a glance: last dispatch, stalled campaigns, calls open for over 10 minutes, the
+    capacity limit the provider last taught the engine."""
+    from services import dialer
+
+    return {"data": dialer.health(), "error": None}
+
+
 # ── Platform settings (promo controls) ──
 
 class PromoSettingsUpdate(BaseModel):
@@ -749,6 +779,10 @@ class PromoSettingsUpdate(BaseModel):
     promo_enabled: Optional[bool] = None
     promo_amount: Optional[float] = None
     promo_expiry_days: Optional[int] = None
+    # Dialing caps (services/dial_limits.py), in calls open at the same time. dial_account_default applies to
+    # every account without its own cap; dial_platform_max to the platform as a whole. Sent as null = no cap.
+    dial_account_default: Optional[StrictInt] = None
+    dial_platform_max: Optional[StrictInt] = None
 
 
 def _get_settings_row() -> dict:
@@ -775,6 +809,9 @@ async def update_platform_settings(body: PromoSettingsUpdate, admin=Depends(get_
     bonus, so changes apply to bonuses granted after the update."""
     _get_settings_row()  # ensure the singleton row exists
     updates = body.model_dump(exclude_none=True)
+    for name in ("dial_account_default", "dial_platform_max"):
+        updates.pop(name, None)
+    updates.update(_cap_updates(body, ("dial_account_default", "dial_platform_max")))
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         supabase.table("platform_settings").update(updates).eq("id", 1).execute()

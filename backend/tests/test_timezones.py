@@ -13,6 +13,7 @@ Time zones: whatever zone the user picks must drive everything time-related, for
 
 Run from the backend folder:  python -m unittest discover -s tests -v
 """
+import asyncio
 import json
 import unittest
 import uuid
@@ -25,7 +26,7 @@ import byot_harness as H
 from database import supabase
 from routers import telephony
 from routers.webhooks import import_vapi_call
-from services import call_hours, vapi_client
+from services import call_hours, call_retry, campaign_scheduler, dialer, vapi_client
 
 from test_caller_verification import Base, make_agent, make_number, screenings
 from services import caller_verification as cv
@@ -186,6 +187,12 @@ class FakeDateTime(datetime):
         return cls.instant.astimezone(tz) if tz else cls.instant.replace(tzinfo=None)
 
 
+def reset_dial_state():
+    """No campaign of any test is mid-pass, claimed, stalled or waiting for a wake-up."""
+    H.sql("UPDATE public.outbound_campaigns SET dial_running = false, dial_stall = NULL, dial_next_at = NULL, "
+          "run_token = NULL, run_heartbeat_at = NULL")
+
+
 class ZoneBase(Base):
     """An account with a funded wallet, an agent, a list of contacts, a mocked call placer and a clock
     that can be put at any instant."""
@@ -206,12 +213,26 @@ class ZoneBase(Base):
             self.placed.append(call_id)
             return {"id": call_id}
         self.create_call = AsyncMock(side_effect=create_call)
+        # reap_stale asks the provider about a call before closing its attempt: by default the provider does not know
+        # the calls these tests "placed" (404), which is the case the reaper closes as failed. A test of the other
+        # answers replaces this mock.
+        self.get_call = AsyncMock(side_effect=vapi_client.VapiAPIError("404 Not Found", 404, "not found"))
+        p = patch.object(vapi_client, "get_call", self.get_call)
+        p.start()
+        self.addCleanup(p.stop)
+        # every module the dialing engine reads the clock in must agree (a frozen-October placed_at would look
+        # 90+ minutes old to the reaper against the real clock)
         for target, name, value in ((vapi_client, "create_call", self.create_call),
-                                    (call_hours, "datetime", FakeDateTime), (telephony, "datetime", FakeDateTime)):
+                                    (call_hours, "datetime", FakeDateTime), (telephony, "datetime", FakeDateTime),
+                                    (dialer, "datetime", FakeDateTime), (call_retry, "datetime", FakeDateTime),
+                                    (campaign_scheduler, "datetime", FakeDateTime)):
             p = patch.object(target, name, value)
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(lambda: H.sql("UPDATE public.phone_numbers SET answer_hours_enabled = false"))
+        # a clean dialing-engine slate: another test's leftovers must be neither dispatched nor counted
+        reset_dial_state()
+        self.addCleanup(reset_dial_state)
 
     def at(self, instant):
         FakeDateTime.instant = instant
@@ -222,12 +243,49 @@ class ZoneBase(Base):
         end-of-call report would have in real life."""
         H.sql("UPDATE public.campaign_attempts SET ended_at = now(), outcome = 'answered' WHERE ended_at IS NULL")
 
+    # ── dialing-engine helpers (the engine is driven by an injected clock: no sleeps, no real loops) ──
+    def tick(self, cid, instant=None, **kw):
+        """One dispatch of the campaign at `instant` (default: the frozen clock), placing what the strategy allows."""
+        if instant is not None:
+            self.at(instant)
+        res = asyncio.run(dialer.dispatch_once(FakeDateTime.instant, campaign_id=cid, wait=True, **kw))
+        return res["results"].get(cid)
+
+    def active(self, cid):
+        """How many calls of the campaign are open."""
+        return len(supabase.table("campaign_attempts").select("id").eq("campaign_id", cid).is_("ended_at", "null").execute().data)
+
+    def end_oldest(self, cid, n=None, at=None, outcome="answered", reason="customer-ended-call"):
+        """The `n` oldest open calls of the campaign (all when n is None) end, through the same code every end
+        signal goes through (the webhook route is rate limited and stamps the real clock)."""
+        at = at or FakeDateTime.instant
+        rows = sorted(supabase.table("campaign_attempts").select("*").eq("campaign_id", cid).is_("ended_at", "null").execute().data,
+                      key=lambda a: a["placed_at"])
+        closed = 0
+        for a in rows[:n]:
+            if call_retry.finish_attempt(a, outcome, reason, at):
+                closed += 1
+        return closed
+
+    def drain(self, cid, instant=None, limit=60):
+        """Tick, hang up every open call, tick again, until the campaign is parked or its pass is over."""
+        if instant is not None:
+            self.at(instant)
+        for _ in range(limit):
+            self.tick(cid)
+            row = supabase.table("outbound_campaigns").select("status, dial_running").eq("id", cid).execute().data[0]
+            if row["status"] != "Active":
+                return
+            if not self.end_oldest(cid) and not row["dial_running"]:
+                return
+        raise AssertionError("the campaign never drained")
+
     def api(self, method, path, **kw):
         return getattr(H.client, method)(path, headers=H.auth(self.user), **kw)
 
     def make_campaign(self, zone, **extra):
         body = {"name": f"C {zone}", "agent_id": self.agent["id"], "list_id": self.list["id"],
-                "phone_number_id": self.out_number["id"], "dnc_screening_enabled": False,
+                "phone_number_id": self.out_number["id"], "dnc_screening_enabled": False, **H.LEGACY_DIAL,
                 "call_hours_enabled": True, "call_hours_timezone": zone, "call_hours_days": [2],
                 "call_hours_start": "09:00", "call_hours_end": "17:00", **extra}
         r = self.api("post", "/telephony/campaigns", json=body)

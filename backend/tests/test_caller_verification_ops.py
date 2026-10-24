@@ -1116,11 +1116,20 @@ class InboundRateLimitTests(Base):
         codes = {self.send(self.SECRET).status_code for _ in range(200)}
         self.assertEqual(codes, {200})
 
-    def test_the_events_route_keeps_its_own_limit(self):
-        codes = [H.client.post("/webhooks/vapi", json={"message": {"type": "transcript"}},
-                               headers={"X-Vapi-Secret": self.SECRET}).status_code for _ in range(125)]
-        self.assertEqual(set(codes[120:]), {429})
-        self.assertEqual(self.send(self.SECRET).status_code, 200)  # a separate allowance
+    def test_the_events_route_throttles_only_unauthenticated_requests(self):
+        # Re-pinned (dialing stage D): end-of-call reports at campaign concurrency 10-20 outran a blanket 120/minute,
+        # so a request that carries a valid credential is never counted; failed ones keep the 120/minute allowance.
+        good = [H.client.post("/webhooks/vapi", json={"message": {"type": "transcript"}},
+                              headers={"X-Vapi-Secret": self.SECRET}).status_code for _ in range(130)]
+        self.assertEqual(set(good), {200})
+        bad = [H.client.post("/webhooks/vapi", json={"message": {"type": "transcript"}},
+                             headers={"X-Vapi-Secret": "wrong"}).status_code for _ in range(125)]
+        self.assertEqual(set(bad[:120]), {401})
+        self.assertEqual(set(bad[120:]), {429})
+        # a real report still gets through while forged ones are throttled, and the inbound route has its own allowance
+        self.assertEqual(H.client.post("/webhooks/vapi", json={"message": {"type": "transcript"}},
+                                       headers={"X-Vapi-Secret": self.SECRET}).status_code, 200)
+        self.assertEqual(self.send(self.SECRET).status_code, 200)
 
     def test_the_inbound_route_carries_no_blanket_limit(self):
         route = next(r for r in main.app.routes if getattr(r, "path", "") == "/webhooks/vapi/inbound")

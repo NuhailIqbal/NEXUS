@@ -1,15 +1,15 @@
 /**
  * Campaign wizard dialog, opened from the Outbound campaigns page: CreateCampaignDialog to make a campaign
- * and EditCampaignDialog to change one. Both are the same five steps (basics, contact list, calling hours,
- * call retry, review); the edit one starts from the campaign's current values, adds a Status field and
- * offers "Save Changes" on every step, so a small change does not need five clicks.
- * Reads api.getAgents, getLists, getPhoneNumbers and getDncStatus; the parent performs the actual
- * createCampaign / updateCampaign call.
+ * and EditCampaignDialog to change one. Both are the same six steps (basics, contact list, calling hours,
+ * call retry, dialing strategy, review); the edit one starts from the campaign's current values, adds a
+ * Status field and offers "Save Changes" on every step, so a small change does not need six clicks.
+ * Reads api.getAgents, getLists, getPhoneNumbers, getDncStatus and getDialingLimits; the parent performs
+ * the actual createCampaign / updateCampaign call.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   X, Rocket, Mic, Phone, Clipboard, BookOpen, Check, ChevronsUpDown,
-  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert, Clock, Repeat,
+  ChevronLeft, ChevronRight, Loader2, ShieldCheck, ShieldAlert, Clock, Repeat, Gauge, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -30,6 +30,10 @@ import {
 import { DAY_LABELS } from "@/components/integrations/calendarTypes";
 import { RetryFields } from "@/components/telephony/RetryFields";
 import { defaultRetry, describeRetry, validateRetry, type RetrySettings } from "@/lib/callRetry";
+import { DialingFields } from "@/components/telephony/DialingFields";
+import {
+  defaultDialing, describeDialing, limitWarning, validateDialing, type DialingLimits, type DialingSettings,
+} from "@/lib/dialingStrategy";
 
 /** open/onOpenChange control the dialog; onCreate receives the final form data on launch. */
 type Props = {
@@ -61,20 +65,24 @@ export type CampaignData = {
   hours: CallingHours;
   /** Call another time when a number does not pick up (see RetryFields). */
   retry: RetrySettings;
+  /** How the campaign places its calls: one at a time, several at once or at a steady rate (see DialingFields). */
+  dialing: DialingSettings;
 };
 
 type Agent       = { id: string; name: string };
 type ListRow     = { id: string; name: string; contact_count?: number };
 type PhoneNumber = { id: string; number: string };
 
-/** Wizard step metadata; index matches the step state (0 basics, 1 list, 2 hours, 3 retry, 4 review). */
+/** The wizard's steps, in order. Everything below keys off the id, so adding or moving a step is one line here. */
 const STEPS = [
-  { title: "Campaign Basics", subtitle: "Name, agent, phone number" },
-  { title: "Contact List",    subtitle: "Pick the list to dial" },
-  { title: "Calling Hours",   subtitle: "Days and times the campaign may call" },
-  { title: "Auto Redial",      subtitle: "Call again when a number does not pick up" },
-  { title: "Review & Launch", subtitle: "Confirm and launch" },
-];
+  { id: "basics",  title: "Campaign Basics", subtitle: "Name, agent, phone number" },
+  { id: "list",    title: "Contact List",    subtitle: "Pick the list to dial" },
+  { id: "hours",   title: "Calling Hours",   subtitle: "Days and times the campaign may call" },
+  { id: "retry",   title: "Auto Redial",      subtitle: "Call again when a number does not pick up" },
+  { id: "dialing", title: "Dialing Strategy", subtitle: "Choose how the campaign places its calls" },
+  { id: "review",  title: "Review & Launch", subtitle: "Confirm and launch" },
+] as const;
+type StepId = (typeof STEPS)[number]["id"];
 
 /** Fresh form state; DNC screening defaults to on for new campaigns. */
 const emptyData = (): CampaignData => ({
@@ -82,6 +90,7 @@ const emptyData = (): CampaignData => ({
   dncScreeningEnabled: true,
   hours: defaultHours(),
   retry: defaultRetry(),
+  dialing: defaultDialing(),
 });
 
 /** Wizard for creating an outbound campaign: hands the data to onCreate and closes. */
@@ -103,8 +112,8 @@ type WizardProps = {
 };
 
 /**
- * The five-step wizard behind both dialogs. Loads agents, lists, phone numbers and DNC status each time it
- * opens. It does not call the API itself: it hands the data to onSubmit (and closes, unless that returns false).
+ * The six-step wizard behind both dialogs. Loads agents, lists, phone numbers, DNC status and the account's
+ * call limit each time it opens. It does not call the API itself: it hands the data to onSubmit (and closes, unless that returns false).
  */
 function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardProps) {
   const editing = mode === "edit";
@@ -117,6 +126,7 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
   const [dncEnabled, setDncEnabled] = useState(false);
   const [dncIntegrationId, setDncIntegrationId] = useState<string | null>(null);
+  const [limits, setLimits] = useState<DialingLimits | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Every opening starts from the first step: editing from the campaign's values, creating from an empty form.
@@ -130,13 +140,14 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    Promise.all([api.getAgents(), api.getLists(), api.getPhoneNumbers(), api.getDncStatus()])
-      .then(([a, l, p, d]) => {
+    Promise.all([api.getAgents(), api.getLists(), api.getPhoneNumbers(), api.getDncStatus(), api.getDialingLimits()])
+      .then(([a, l, p, d, dl]) => {
         setAgents(Array.isArray(a.data) ? a.data : []);
         setLists(Array.isArray(l.data) ? l.data : []);
         setPhoneNumbers(Array.isArray(p.data) ? p.data : []);
         setDncEnabled(Boolean((d.data as any)?.enabled));
         setDncIntegrationId((d.data as any)?.integration_id ?? null);
+        setLimits(dl.data && typeof dl.data === "object" && "account_limit" in dl.data ? (dl.data as DialingLimits) : null);
       })
       .finally(() => setLoading(false));
   }, [open]);
@@ -149,6 +160,7 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
   const close = (next: boolean) => { if (!saving) onOpenChange(next); };
 
   const progress = ((step + 1) / STEPS.length) * 100;
+  const stepId: StepId = STEPS[step].id;
   // The last step reads "Review & Save" when editing.
   const meta = editing && step === STEPS.length - 1 ? { title: "Review & Save", subtitle: "Confirm your changes" } : STEPS[step];
 
@@ -156,21 +168,22 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
    * What is wrong with a step's fields, in words, or null. Creating needs an agent, a number and a list; an
    * existing campaign may not have them yet (it could always be saved without), so editing only needs a name.
    */
-  const problemOf = (s: number): string | null => {
-    if (s === 0) {
+  const problemOf = (id: StepId): string | null => {
+    if (id === "basics") {
       if (!data.name.trim()) return "Campaign name is required";
       if (!editing && !data.agentId) return "Select an agent";
       if (!editing && !data.phoneNumberId) return "Select a phone number";
     }
-    if (s === 1 && !editing && !data.listId) return "Select a contact list";
-    if (s === 2) return data.hours.enabled ? validateHours(data.hours) : null;
-    if (s === 3) return validateRetry(data.retry);
+    if (id === "list" && !editing && !data.listId) return "Select a contact list";
+    if (id === "hours") return data.hours.enabled ? validateHours(data.hours) : null;
+    if (id === "retry") return validateRetry(data.retry);
+    if (id === "dialing") return validateDialing(data.dialing);
     return null;
   };
 
   /** Validates the current step's required fields and advances. */
   const next = () => {
-    const problem = problemOf(step);
+    const problem = problemOf(stepId);
     if (problem) return toast.error(problem);
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
@@ -180,7 +193,7 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
   /** Checks every step (jumping to the first one with a problem), then hands the data to the parent. */
   const submit = async () => {
     for (let s = 0; s < STEPS.length; s++) {
-      const problem = problemOf(s);
+      const problem = problemOf(STEPS[s].id);
       if (problem) { setStep(s); return toast.error(problem); }
     }
     setSaving(true);
@@ -200,7 +213,7 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
         <VisuallyHidden>
           <DialogTitle>{editing ? "Edit Outbound Campaign" : "Create Outbound Campaign"}</DialogTitle>
           <DialogDescription>
-            {editing ? "Change an outbound dialing campaign in 5 steps." : "Configure and launch an outbound dialing campaign in 5 steps."}
+            {editing ? `Change an outbound dialing campaign in ${STEPS.length} steps.` : `Configure and launch an outbound dialing campaign in ${STEPS.length} steps.`}
           </DialogDescription>
         </VisuallyHidden>
 
@@ -236,11 +249,12 @@ function CampaignWizard({ mode, open, onOpenChange, initial, onSubmit }: WizardP
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your agents, lists, and numbers…
             </div>
           )}
-          {!loading && step === 0 && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} editing={editing} />}
-          {!loading && step === 1 && <Step3 data={data} update={update} lists={lists} />}
-          {!loading && step === 2 && <StepHours data={data} update={update} />}
-          {!loading && step === 3 && <StepRetry data={data} update={update} editing={editing} />}
-          {!loading && step === 4 && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} editing={editing} />}
+          {!loading && stepId === "basics" && <Step1 data={data} update={update} agents={agents} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} dncIntegrationId={dncIntegrationId} editing={editing} />}
+          {!loading && stepId === "list" && <Step3 data={data} update={update} lists={lists} />}
+          {!loading && stepId === "hours" && <StepHours data={data} update={update} />}
+          {!loading && stepId === "retry" && <StepRetry data={data} update={update} editing={editing} />}
+          {!loading && stepId === "dialing" && <StepDialing data={data} update={update} limits={limits} editing={editing} />}
+          {!loading && stepId === "review" && <Step4 data={data} agents={agents} lists={lists} phoneNumbers={phoneNumbers} dncEnabled={dncEnabled} limits={limits} editing={editing} />}
         </div>
 
         <div className="flex flex-col-reverse gap-2 border-t border-border bg-card px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -417,6 +431,24 @@ function StepRetry({
   );
 }
 
+/** Step 5 of the wizard: the dialing strategy (how many calls at once, or at what rate) and the delay between calls. */
+function StepDialing({
+  data, update, limits, editing,
+}: {
+  data: CampaignData;
+  update: <K extends keyof CampaignData>(k: K, v: CampaignData[K]) => void;
+  limits: DialingLimits | null;
+  editing?: boolean;
+}) {
+  return (
+    <div className="space-y-6">
+      <Section icon={Gauge} title="Dialing Strategy">
+        <DialingFields idPrefix="campaign-dialing" value={data.dialing} onChange={(v) => update("dialing", v)} limits={limits} editing={editing} />
+      </Section>
+    </div>
+  );
+}
+
 /** Step 2 of the wizard (named Step3): contact list picker. */
 function Step3({
   data, update, lists,
@@ -451,17 +483,19 @@ function Step3({
   );
 }
 
-/** Step 5 of the wizard (named Step4): read-only review of the chosen options. */
+/** The last step of the wizard (named Step4): read-only review of the chosen options. */
 function Step4({
-  data, agents, lists, phoneNumbers, dncEnabled, editing,
+  data, agents, lists, phoneNumbers, dncEnabled, limits, editing,
 }: {
   data: CampaignData;
   agents: Agent[];
   lists: ListRow[];
   phoneNumbers: PhoneNumber[];
   dncEnabled: boolean;
+  limits: DialingLimits | null;
   editing?: boolean;
 }) {
+  const capWarning = limitWarning(data.dialing, limits);
   const agentName    = useMemo(() => agents.find((a) => a.id === data.agentId)?.name ?? " ", [agents, data.agentId]);
   const listName     = useMemo(() => lists.find((l) => l.id === data.listId)?.name ?? " ", [lists, data.listId]);
   const numberLabel  = useMemo(() => phoneNumbers.find((p) => p.id === data.phoneNumberId)?.number ?? "Default number", [phoneNumbers, data.phoneNumberId]);
@@ -477,7 +511,15 @@ function Step4({
           <ReviewItem label="From Number"      value={numberLabel} />
           <ReviewItem label="Calling Hours"     value={data.hours.enabled ? describeHours(data.hours, DAY_LABELS) : "Any time"} />
           <ReviewItem label="Auto Redial"        value={describeRetry(data.retry)} />
+          <ReviewItem label="Dialing Strategy"   value={describeDialing(data.dialing)} />
         </div>
+
+        {capWarning && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {capWarning}
+          </div>
+        )}
 
         {/* Combines the account-wide WhitelistData status with this campaign's own
             opt-in/opt-out choice from Step 1 — both have to be on for screening to run. */}

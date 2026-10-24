@@ -418,6 +418,15 @@ class CampaignCreate(BaseModel):
     retry_max_attempts: int = 3
     retry_interval_minutes: int = 10
     retry_on: list[str] = ["no_answer", "busy", "voicemail", "failed"]
+    # Dialing strategy (services/dial_settings.py): how the campaign places its calls. "sequential" = one call
+    # at a time, the next once it ends; "concurrent" = `dial_concurrent_calls` calls in progress at once;
+    # "paced" = `dial_calls_per_minute` calls started per minute. `dial_delay_seconds` is the gap between
+    # calls. The router validates the ranges (1-20 / 1-60 / 0-60) and answers 400 with a message. Both the
+    # column and this field are needed: an unknown body key is silently dropped.
+    dial_strategy: str = "sequential"
+    dial_concurrent_calls: int = 5
+    dial_calls_per_minute: int = 10
+    dial_delay_seconds: int = 0
 
 
 class CampaignUpdate(BaseModel):
@@ -441,6 +450,11 @@ class CampaignUpdate(BaseModel):
     retry_max_attempts: Optional[int] = None
     retry_interval_minutes: Optional[int] = None
     retry_on: Optional[list[str]] = None
+    # Dialing strategy settings (see CampaignCreate); any subset may be sent. They apply to calls placed from now on.
+    dial_strategy: Optional[str] = None
+    dial_concurrent_calls: Optional[int] = None
+    dial_calls_per_minute: Optional[int] = None
+    dial_delay_seconds: Optional[int] = None
 
 
 # ── Inbound Queues ──

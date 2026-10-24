@@ -648,6 +648,12 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     retry_max_attempts integer DEFAULT 3 NOT NULL,
     retry_interval_minutes integer DEFAULT 10 NOT NULL,
     retry_on text[] DEFAULT '{no_answer,busy,voicemail,failed}'::text[] NOT NULL,
+    -- Dialing strategy (dial_strategy, dial_concurrent_calls, dial_calls_per_minute, dial_delay_seconds) and the
+    -- dialing engine's state (dial_running, dial_seq, dial_next_at, ...) are deliberately NOT declared here: they
+    -- are added by migrate._DIALING_STATEMENTS, whose back-fill must tell campaigns that existed before the
+    -- feature (they become Concurrent / 20) from new ones (Sequential / 5 / 10 / 0). The same migration adds
+    -- contacts.seq, the dial_* columns of campaign_attempts, billing.max_concurrent_calls and the dial_*
+    -- columns of platform_settings.
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 

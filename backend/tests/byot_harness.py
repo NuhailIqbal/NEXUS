@@ -21,6 +21,12 @@ from services import vapi_client, twilio_service, vonage_service, telnyx_service
 from routers import billing as billing_router
 
 
+# The dialing strategy every campaign built by the pre-dialing-strategy tests asks for: dial the whole list
+# (up to 20 calls at once), which is what a campaign did before a strategy could be chosen. New campaigns
+# default to Sequential / 5, so a test that expects "Start dials the list" sends these two settings.
+LEGACY_DIAL = {"dial_strategy": "concurrent", "dial_concurrent_calls": 20}
+
+
 class VapiPhoneMock:
     """Replaces every VAPI phone-number (and assistant, for the fallback-assistant
     lazy-create path) network function used by telephony.py."""

@@ -28,8 +28,16 @@ def _headers():
 
 
 class VapiAPIError(Exception):
-    """Raised when VAPI returns a non-2xx response, with the body included."""
-    pass
+    """Raised when VAPI returns a non-2xx response, with the body included.
+
+    `status_code` is the HTTP status and `body` the (cut) response text, so callers can tell a capacity
+    rejection (429) from a bad key without parsing the message; both are None / "" when the error was
+    not built from a response."""
+
+    def __init__(self, message: str = "", status_code: int | None = None, body: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 def _check(response: httpx.Response) -> None:
@@ -42,7 +50,7 @@ def _check(response: httpx.Response) -> None:
     if 200 <= response.status_code < 300:
         return
     body = response.text[:500] if response.text else ""
-    raise VapiAPIError(f"{response.status_code} {response.reason_phrase} — {body}")
+    raise VapiAPIError(f"{response.status_code} {response.reason_phrase} — {body}", response.status_code, body)
 
 
 async def create_assistant(payload: dict) -> dict:
@@ -147,8 +155,10 @@ async def delete_file(file_id: str) -> None:
 async def create_call(payload: dict) -> dict:
     """POST /call: start an outbound call. The payload is assembled by the callers
     (routers/telephony.py, services/automation_engine.py, services/callback_scheduler.py);
-    the returned JSON's "id" is the VAPI call id, which get_call() accepts."""
-    async with httpx.AsyncClient() as client:
+    the returned JSON's "id" is the VAPI call id, which get_call() accepts. Times out after 20 seconds
+    (httpx's 5 s default is too short for a busy provider): a timeout raises httpx.TimeoutException, and
+    the call may or may not have been placed."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(f"{BASE_URL}/call", headers=_headers(), json=payload)
         _check(r)
         return r.json()

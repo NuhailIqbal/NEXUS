@@ -3,7 +3,8 @@ Places due callbacks. SAFE BY DEFAULT: it only touches accounts that explicitly 
 `callback_settings.auto_call`; every other account's callbacks stay plain records.
 
 Per callback, in order: needs a phone number -> inside the calling window (else postponed to the
-next opening, not counted as an attempt) -> wallet/plan allows an outbound call -> number is not on a
+next opening, not counted as an attempt) -> wallet/plan allows an outbound call -> number is not on another call right now (else moved a
+few minutes later) -> number is not on a
 DNC/litigator list -> agent is set up for calls -> place the call through the same VAPI path as
 campaigns. A callback is claimed atomically (pending -> calling) so two workers can never both call.
 """
@@ -16,11 +17,13 @@ from config import settings
 from database import supabase
 from routers.billing import check_call_quota, get_or_create_billing, outbound_call_block_reason
 from services import callback_service as cbs
-from services import vapi_client, whitelist_service
+from services import call_retry, vapi_client, whitelist_service
 
 logger = logging.getLogger(__name__)
 # Most callbacks picked up in a single sweep; a larger backlog is drained over several sweeps.
 BATCH = 50
+# A callback whose number is on another call right now moves this many minutes later (not an attempt).
+BUSY_DEFER_MINUTES = 2
 
 
 def _iso(dt: datetime) -> str:
@@ -103,6 +106,13 @@ async def _dispatch(cb: dict, s: dict, now: datetime) -> str:
     if reason:
         _finish(cb["id"], status="failed", last_error=reason)
         return "failed"
+
+    # Never two calls to one number at the same time: while the number is on a campaign call the callback waits a
+    # little (not an attempt). Callbacks are not counted toward a campaign's concurrency limit.
+    if call_retry.number_is_busy(user_id, phone):
+        _finish(cb["id"], status="pending", due_at=_iso(now + timedelta(minutes=BUSY_DEFER_MINUTES)),
+                last_error="That number is on another call right now, moved a few minutes later.")
+        return "deferred"
 
     # Number of this attempt. Deferrals, billing blocks and do-not-call skips leave the stored
     # count unchanged; it is written only when the dial succeeds or raises an error.

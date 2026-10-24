@@ -99,6 +99,33 @@ class Settings(BaseSettings):
     # when the hours open again. 0 disables automatic continuing (a person then presses Start).
     campaign_sweep_interval_seconds: int = 60
 
+    # Dialing engine (services/dialer.py): campaigns place calls according to their dialing strategy
+    # (sequential / concurrent / paced). The dispatcher wakes at least every `dialer_tick_seconds`
+    # (0 = the 2-second loop and the reconciler are OFF: campaigns then only advance at the 60-second
+    # sweep above, a degraded mode). `dialer_reconcile_seconds` is how often open calls are checked
+    # against the provider so a missed end-of-call report cannot hold a slot (see
+    # `dialer_reconcile_interval` for the value actually used). Open attempts that never got a call id
+    # are closed after `dialer_unplaced_reap_seconds`. `dialer_burst_stagger_ms` spaces the calls
+    # started together in one group. `dialer_paced_max_open` is the safety cap on calls open at once
+    # for a Paced campaign. `dial_reserve_minutes` is the wallet reserve per open call.
+    # `dialer_max_call_seconds` caps how long one call may last (0 = unlimited).
+    dialer_tick_seconds: float = 2.0
+    dialer_reconcile_seconds: float = 4.0
+    dialer_unplaced_reap_seconds: int = 120
+    dialer_burst_stagger_ms: int = 100
+    dialer_paced_max_open: int = 60
+    dial_reserve_minutes: float = 1.0
+    dialer_max_call_seconds: int = 0
+
+    @property
+    def dialer_reconcile_interval(self) -> float:
+        """Seconds between reconciliations of open calls with the provider: DIALER_RECONCILE_SECONDS when it
+        was set, else 4 s, or 30 s when PUBLIC_API_URL is set (end-of-call webhooks can reach this server,
+        so the reconciler is only a safety net). 0 or less = off."""
+        if "dialer_reconcile_seconds" in self.model_fields_set:
+            return self.dialer_reconcile_seconds
+        return 30.0 if self.public_api_url else self.dialer_reconcile_seconds
+
     # Inbound caller verification: before a number's agent picks up, the caller's number is
     # looked up with this provider and the call is refused when it is not a real number.
     # `code` and `api key` are the platform's own credentials for the lookup endpoint; the

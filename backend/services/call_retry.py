@@ -20,6 +20,11 @@ How it flows
   1. Every call a campaign places (the main run and the retries alike) first takes an attempt row. A
      partial unique index on (user_id, phone_key) WHERE ended_at IS NULL means a number can hold only ONE
      open attempt, so it is never called twice at the same time, even by two campaigns or two sweeps.
+     A second one, on (campaign_id, dial_slot) for open attempts, gives each concurrent call of a campaign its
+     own numbered slot (SlotTaken when two placements race for one). An attempt also records how its call was
+     placed (dial_strategy / dial_slot / dial_batch / dial_source, see services/dial_settings.py), can be taken
+     back when the provider has no room (`release_attempt`), and an attempt that never got a call id is closed
+     by `reap_unplaced`. Every close calls the `attempt_finished_hooks` (the dialer's wake-up).
   2. When the call ends (end-of-call webhook, or the periodic VAPI sync) `on_call_ended` classifies it
      (`classify`) and `finish_attempt` settles the number: a person talked / transferred / disqualified /
      asked not to be called / invalid number -> never redialed; no answer / busy / voicemail / failed ->
@@ -33,15 +38,18 @@ How it flows
 decided with the settings it was PLACED under (snapshot in `campaign_attempts.settings`). Redials not yet
 placed use the current maximum and on/off switch; their scheduled time is not recomputed.
 """
+import asyncio
+import concurrent.futures
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 
 import psycopg
 
+from config import settings
 from database import supabase
 from db_pg import _get_pool
-from services import call_hours
+from services import call_hours, dial_settings
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +103,24 @@ FINISHED_STATUSES = ("Completed", "Failed", "No Answer")
 
 class RetryError(ValueError):
     """A retry setting is invalid; the message is shown to the user."""
+
+
+class SlotTaken(Exception):
+    """begin_attempt: the dial slot asked for is already held by another open attempt of the same campaign (two
+    dispatch ticks raced for it). Nothing was written: the caller puts the number back and tries again on its
+    next tick."""
+
+
+# Functions called, with the attempt row, every time an attempt is closed by finish_attempt (an end-of-call
+# report, a sync, the reconciler, a reaper, a failed placement). The dialing engine registers its wake-up here,
+# so a slot that frees up is refilled at once; this module imports nothing from it. A hook runs on whichever
+# thread closed the attempt, must be quick and thread-safe, and an exception in it is logged and ignored.
+attempt_finished_hooks: list = []
+
+# The two unique indexes on campaign_attempts a placement can run into (see migrate.py): the number one is
+# "this number is on a call already" (busy), the slot one is "this slot of the campaign is taken" (SlotTaken).
+_NUMBER_INDEX = "campaign_attempts_one_open_call_idx"
+_SLOT_INDEX = "campaign_attempts_slot_idx"
 
 
 # ── clock ──
@@ -251,28 +277,53 @@ def _get_or_create_lead(camp: dict, contact: dict) -> dict:
         return _get_lead(camp["id"], contact["id"])
 
 
-def begin_attempt(camp: dict, contact: dict, *, new_round: bool, lead: dict | None = None) -> dict | None:
+def begin_attempt(camp: dict, contact: dict, *, new_round: bool, lead: dict | None = None,
+                  now: datetime | None = None, dial: dict | None = None) -> dict | None:
     """Take the next attempt for `contact`: returns the open attempt row, or None when the number is on
     another call right now (or the number's state changed under us), in which case NO call may be placed.
+    Raises SlotTaken when the dial slot in `dial` is already held by another open call of the campaign.
 
     `new_round` is for the campaign's own run: the number starts again at attempt 1 (its earlier rounds
-    stay in the history). A redial passes the due `lead` and continues at attempts + 1."""
+    stay in the history). A redial passes the due `lead` and continues at attempts + 1.
+
+    `now` is the placement time (default: the clock); every timestamp written comes from it, so a caller
+    with an injected clock gets a consistent record. `dial` says how the call is placed, for the log:
+    {"strategy", "slot", "batch", "source"} ("source" is "fresh" for the list, "redial" for a redial). Without
+    it the strategy is the campaign's own, there is no slot or batch, and the source follows `new_round`.
+    The campaign's dialing settings at this moment are kept on the attempt (settings.dial) like the retry ones.
+
+    The returned row also carries `lead_before` (not stored): the number's state before this attempt, which
+    release_attempt puts back."""
+    moment = now or _now()
     lead = lead or _get_or_create_lead(camp, contact)
     key = phone_key(contact["phone"])
-    reap_stale(camp["user_id"], key)
+    # No provider round trip here (this runs on the dialer's placement path): the periodic sweep and the reconciler ask the provider.
+    reap_stale(camp["user_id"], key, now=moment, check_provider=False)
     if new_round:
         round_no = lead["round"] + 1 if lead["attempts"] > 0 else lead["round"]
         number = 1
     else:
         round_no, number = lead["round"], lead["attempts"] + 1
+    dial = dial or {}
+    snapshot = {**settings_of(camp), "dial": dial_settings.describe(camp)}
     try:
         attempt = _table("campaign_attempts").insert({
             "lead_id": lead["id"], "campaign_id": camp["id"], "user_id": camp["user_id"], "phone_key": key,
-            "round": round_no, "attempt_number": number, "placed_at": iso(_now()), "settings": settings_of(camp),
+            "round": round_no, "attempt_number": number, "placed_at": iso(moment), "settings": snapshot,
+            "dial_strategy": dial.get("strategy") or snapshot["dial"]["strategy"],
+            "dial_slot": dial.get("slot"), "dial_batch": dial.get("batch"),
+            "dial_source": dial.get("source") or ("fresh" if new_round else "redial"),
         }).execute().data[0]
-    except psycopg.errors.UniqueViolation:       # the unique index: this number already has a call open
-        return None
-    fields = {"round": round_no, "attempts": number, "last_attempt_at": attempt["placed_at"], "updated_at": iso(_now()),
+    except psycopg.errors.UniqueViolation as e:
+        # Two unique indexes can refuse the row, and they mean different things: tell them apart by name.
+        name = getattr(getattr(e, "diag", None), "constraint_name", None)
+        if name == _SLOT_INDEX:
+            raise SlotTaken(f"slot {dial.get('slot')} of campaign {camp['id']} is taken") from e
+        if name not in (None, _NUMBER_INDEX):
+            logger.warning("begin_attempt: unexpected unique violation %r; treating the number as busy", name)
+        return None      # the number index: this number already has a call open
+    before = {k: lead.get(k) for k in LEAD_STATE_FIELDS}
+    fields = {"round": round_no, "attempts": number, "last_attempt_at": attempt["placed_at"], "updated_at": iso(moment),
               "phone": contact["phone"], "next_attempt_at": None}
     if new_round:
         fields.update({"final_status": None, "last_outcome": None})
@@ -285,7 +336,35 @@ def begin_attempt(camp: dict, contact: dict, *, new_round: bool, lead: dict | No
     if not won:
         _table("campaign_attempts").delete().eq("id", attempt["id"]).execute()
         return None
+    attempt["lead_before"] = before
     return attempt
+
+
+# What of a number's state an attempt changes: release_attempt puts these back.
+LEAD_STATE_FIELDS = ("round", "attempts", "last_attempt_at", "next_attempt_at", "final_status", "last_outcome")
+
+
+def release_attempt(attempt: dict) -> bool:
+    """Take back an attempt whose call was refused for lack of capacity (the provider has no room right now): the
+    open row is deleted and the number goes back to the state it had before begin_attempt, as if the call had
+    never been tried: no failed attempt, no retry burned, a redial stays due. A number that begin_attempt
+    created (it had no calls yet) is removed again with it.
+
+    Returns False, changing nothing, when the attempt was no longer open (it ended in the meantime). Only the
+    number's state as this attempt left it is restored: one that has moved on is not touched."""
+    gone = _table("campaign_attempts").delete().eq("id", attempt["id"]).is_("ended_at", "null").execute().data
+    if not gone:
+        return False
+    before = attempt.get("lead_before")
+    if before:
+        restored = (_table("campaign_leads").update({**before, "updated_at": iso(_now())})
+                    .eq("id", attempt["lead_id"]).eq("round", attempt["round"]).eq("attempts", attempt["attempt_number"])
+                    .execute().data)
+        if restored and not before.get("attempts"):
+            left = _table("campaign_attempts").select("id").eq("lead_id", attempt["lead_id"]).limit(1).execute().data
+            if not left:
+                _table("campaign_leads").delete().eq("id", attempt["lead_id"]).execute()
+    return True
 
 
 def mark_placed(attempt: dict, vapi_call_id: str | None) -> None:
@@ -338,7 +417,19 @@ def schedule(camp: dict, moment: datetime) -> datetime:
 
 def finish_attempt(attempt: dict, outcome: str, ended_reason: str | None = None, ended_at: datetime | None = None) -> bool:
     """Close an open attempt with its outcome and settle its number (see the module docstring). Returns
-    False when the attempt was already closed (a webhook delivered twice, or the sync got there first)."""
+    False when the attempt was already closed (a webhook delivered twice, or the sync got there first).
+    After a close, every function in `attempt_finished_hooks` is called with the attempt."""
+    closed = _finish_attempt(attempt, outcome, ended_reason, ended_at)
+    if closed:
+        for hook in list(attempt_finished_hooks):
+            try:
+                hook(attempt)
+            except Exception:  # noqa: BLE001 - a hook must never undo or break the close
+                logger.exception("attempt-finished hook failed for attempt %s", attempt.get("id"))
+    return closed
+
+
+def _finish_attempt(attempt: dict, outcome: str, ended_reason: str | None, ended_at: datetime | None) -> bool:
     ended = ended_at or _now()
     won = (_table("campaign_attempts")
            .update({"ended_at": iso(ended), "outcome": outcome, "ended_reason": ended_reason})
@@ -387,11 +478,76 @@ def on_call_ended(vapi_call_id: str | None, ended_at=None) -> None:
     finish_attempt(rows[0], outcome, c.get("ended_reason"), parse_time(ended_at))
 
 
-def reap_stale(user_id: str | None = None, key: str | None = None) -> int:
+# How long reap_stale waits for the provider's answer about one call (it may be called from a placement, which
+# holds up the event loop meanwhile, so this is short; a call it could not ask about is simply left for the next sweep).
+PROVIDER_CHECK_TIMEOUT_S = 8
+
+
+def _run_sync(coro_factory, timeout: float):
+    """Run the coroutine `coro_factory()` makes to completion from synchronous code, on an event loop of its own in a
+    worker thread (the caller may itself be running on the app's loop, where nothing can be awaited)."""
+    def runner():
+        return asyncio.run(asyncio.wait_for(coro_factory(), timeout))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(runner).result()
+
+
+def outcome_from_record(call: dict) -> tuple[str, str | None]:
+    """(outcome, ended reason) of a finished call from the provider's own record (a call whose conversation could
+    not be stored): the same classifier on_call_ended uses; "failed" when nothing in the record says better."""
+    reason = call.get("endedReason")
+    if not reason:
+        return "failed", None           # nothing in the record says how it ended: a redial-able failure, never "answered"
+    seconds = call.get("durationSeconds")
+    if seconds is None:
+        started, ended = parse_time(call.get("startedAt")), parse_time(call.get("endedAt"))
+        seconds = (ended - started).total_seconds() if started and ended and ended >= started else 0
+    try:
+        return classify(reason, None, seconds), reason
+    except Exception:  # noqa: BLE001
+        return "failed", reason
+
+
+async def _provider_settle(attempt: dict) -> str:
+    """Ask the provider about the call of an open attempt: "settled" (it had ended: stored, billed and the attempt
+    closed), "live" (still going), "unknown" (the provider has no such call) or "error" (could not tell)."""
+    from services import vapi_client, vapi_sync      # imported here: vapi_sync imports the webhook router, which imports this module
+
+    try:
+        full = await vapi_client.get_call(attempt["vapi_call_id"])
+    except vapi_client.VapiAPIError as e:
+        return "unknown" if e.status_code == 404 else "error"
+    if not vapi_sync._is_ended(full):
+        return "live"
+    await vapi_sync.import_and_automate(full, attempt["user_id"])
+    open_still = _table("campaign_attempts").select("ended_at").eq("id", attempt["id"]).execute().data
+    if open_still and open_still[0]["ended_at"] is None:
+        # Stored, but the attempt was not closed by it (no conversation status to go by): close it from the record.
+        outcome, reason = outcome_from_record(full)
+        finish_attempt(attempt, outcome, reason, parse_time(full.get("endedAt")))
+    return "settled"
+
+
+def settle_from_provider(attempt: dict) -> str:
+    """Synchronous wrapper of _provider_settle with a time limit. Never raises: any failure to ask is "error"."""
+    try:
+        return _run_sync(lambda: _provider_settle(attempt), PROVIDER_CHECK_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not ask the provider about call %s: %s", attempt.get("vapi_call_id"), e)
+        return "error"
+
+
+def reap_stale(user_id: str | None = None, key: str | None = None, *, now: datetime | None = None,
+               check_provider: bool = True) -> int:
     """Close attempts whose call never reported an end (older than STALE_ATTEMPT_MINUTES), so they stop
-    holding their number: first from the call's own conversation when it did finish, else as a failed call.
-    Limited to one account / number when given. Returns how many were closed."""
-    q = _table("campaign_attempts").select("*").is_("ended_at", "null").lt("placed_at", iso(_now() - timedelta(minutes=STALE_ATTEMPT_MINUTES)))
+    holding their number. An attempt that has a call id is first put to the provider (`check_provider`; skipped
+    when no provider key is configured): a call that has ended is imported (which closes the attempt), a call
+    still going is left open, and only a call the provider does not know is closed as failed. When the provider
+    cannot be asked (an error, a timeout) the attempt is left for the next sweep instead of being closed wrongly.
+    An attempt with no call id is closed from its own conversation if that finished, else as failed.
+    Limited to one account / number when given. `now` is the clock to measure the age by (default: the real
+    one). Returns how many were closed."""
+    q = _table("campaign_attempts").select("*").is_("ended_at", "null").lt("placed_at", iso((now or _now()) - timedelta(minutes=STALE_ATTEMPT_MINUTES)))
     if user_id:
         q = q.eq("user_id", user_id)
     if key:
@@ -399,12 +555,53 @@ def reap_stale(user_id: str | None = None, key: str | None = None) -> int:
     closed = 0
     for attempt in q.execute().data or []:
         try:
+            if check_provider and attempt.get("vapi_call_id") and settings.vapi_api_key:
+                verdict = settle_from_provider(attempt)
+                if verdict in ("live", "error"):
+                    continue            # still going, or the provider could not be asked: not ours to close
+                if verdict == "settled":
+                    closed += 1
+                    continue
             on_call_ended(attempt.get("vapi_call_id"))
             if _table("campaign_attempts").select("ended_at").eq("id", attempt["id"]).execute().data[0]["ended_at"] is None:
                 finish_attempt(attempt, "failed", "no end-of-call report received")
             closed += 1
         except Exception:  # noqa: BLE001 - one bad row must not stop the others
             logger.exception("could not close stale attempt %s", attempt.get("id"))
+    return closed
+
+
+def number_is_busy(user_id: str, phone) -> bool:
+    """True when `phone` has an open call attempt right now (any campaign of the account): another call source
+    (a callback, an automation, a single test call) must not dial it at the same time. Read-only."""
+    key = phone_key(phone)
+    if not key:
+        return False
+    rows = (_table("campaign_attempts").select("id").eq("user_id", user_id).eq("phone_key", key)
+            .is_("ended_at", "null").limit(1).execute().data)
+    return bool(rows)
+
+
+# An attempt that never got a call id: the provider's answer to "place the call" was lost (a timeout, a crash
+# between taking the attempt and placing the call), so nothing is known to be on the line. After this many
+# seconds it is closed as a failed call, which frees its number and its slot.
+UNPLACED_AFTER_SECONDS = 120
+
+
+def reap_unplaced(now: datetime | None = None, older_than_s: int = UNPLACED_AFTER_SECONDS) -> int:
+    """Close the open attempts that have no call id and were taken more than `older_than_s` seconds before `now`
+    (default: the clock), as failed calls. A call that is only being placed right now is younger than that
+    (placing is capped at 20 seconds). Returns how many were closed."""
+    moment = now or _now()
+    rows = (_table("campaign_attempts").select("*").is_("ended_at", "null").is_("vapi_call_id", "null")
+            .lt("placed_at", iso(moment - timedelta(seconds=older_than_s))).execute().data) or []
+    closed = 0
+    for attempt in rows:
+        try:
+            if finish_attempt(attempt, "failed", "the call was never confirmed as placed", moment):
+                closed += 1
+        except Exception:  # noqa: BLE001 - one bad row must not stop the others
+            logger.exception("could not close unplaced attempt %s", attempt.get("id"))
     return closed
 
 
@@ -472,7 +669,8 @@ def numbers(camp: dict, status: str = "all", limit: int = 100, offset: int = 0) 
         history = {}
         if ids:
             for a in conn.execute(
-                "SELECT lead_id::text AS lead_id, round, attempt_number, placed_at, ended_at, outcome, ended_reason "
+                "SELECT lead_id::text AS lead_id, round, attempt_number, placed_at, ended_at, outcome, ended_reason, "
+                "dial_strategy, dial_slot, dial_batch, dial_source "
                 "FROM public.campaign_attempts WHERE lead_id = ANY(%s::uuid[]) ORDER BY round, attempt_number", (ids,),
             ).fetchall():
                 history.setdefault(a["lead_id"], []).append(a)

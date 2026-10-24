@@ -58,6 +58,8 @@ settings.vapi_api_key = "qa-fake-vapi-key"
 settings.public_api_url = "https://qa.example.test"
 settings.vapi_webhook_secret = ""
 settings.vapi_sync_interval_seconds = 0
+# no pause between the calls of one group (the dialing engine staggers them in production)
+settings.dialer_burst_stagger_ms = 0
 
 import db_pg  # noqa: E402
 

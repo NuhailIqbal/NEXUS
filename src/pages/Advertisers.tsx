@@ -21,7 +21,7 @@ import {
   CtaBanner,
   PrimaryCta,
 } from "@/components/marketing/MarketingPrimitives";
-import { CAMPAIGN_BATCH_SIZE, INDUSTRY_COUNT, VOICE_COUNT } from "@/lib/marketing-facts";
+import { MAX_CONCURRENT_CALLS, INDUSTRY_COUNT, VOICE_COUNT } from "@/lib/marketing-facts";
 
 const benefits = [
   {
@@ -39,7 +39,7 @@ const benefits = [
   {
     icon: Rocket,
     title: "Launch in minutes",
-    desc: `A three-step campaign wizard and a pre-launch check, then calls go out ${CAMPAIGN_BATCH_SIZE} at a time. No dialer to configure, no callers to hire.`,
+    desc: `A guided campaign wizard and a pre-launch check, then calls go out one at a time, up to ${MAX_CONCURRENT_CALLS} at once, or at a steady rate. No dialer to configure, no callers to hire.`,
     badge: "Self-serve",
   },
   {

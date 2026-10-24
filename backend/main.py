@@ -117,6 +117,35 @@ async def _start_campaign_scheduler() -> None:
 
 
 @app.on_event("startup")
+async def _start_dialer() -> None:
+    """Start the dialing engine's loop (services/dialer.py): campaigns place their calls according to their
+    dialing strategy, and the reconciler that settles calls whose end report never came. DIALER_TICK_SECONDS=0 is
+    the kill switch for both: no loops, and campaigns then advance only at the
+    60 s sweep above (a degraded mode, logged here). The loop does not start while the database lacks a column the
+    engine needs (a migration step that failed); Start answers 503 in that state."""
+    import asyncio
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    if settings.dialer_tick_seconds <= 0:
+        log.warning("Dialing engine loop is OFF (DIALER_TICK_SECONDS=0): campaigns advance only at the %s s sweep",
+                    settings.campaign_sweep_interval_seconds)
+        return
+    from migrate import missing_dialing_columns
+    from services import dialer
+    try:
+        missing = missing_dialing_columns()
+    except Exception:  # noqa: BLE001
+        log.exception("Dialing engine not started: the database could not be checked")
+        return
+    if missing:
+        log.error("Dialing engine not started: the database is missing %s", ", ".join(missing))
+        return
+    dialer.startup()
+    asyncio.create_task(dialer.dispatcher_loop())
+    asyncio.create_task(dialer.reconciler_loop())
+
+
+@app.on_event("startup")
 async def _reconcile_caller_verification() -> None:
     """Re-point numbers that have caller verification on at this server's CURRENT address and
     secret. VAPI keeps the URL and secret it was given when verification was switched on, so a

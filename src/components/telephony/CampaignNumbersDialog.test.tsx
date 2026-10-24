@@ -69,6 +69,32 @@ describe("CampaignNumbersDialog", () => {
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
   });
 
+  it("each call in the history says how it was placed: its slot and wave, or that it was a redial", async () => {
+    reply([row({ attempts: 3, history: [
+      { round: 1, attempt_number: 1, placed_at: "2026-10-14T12:00:00Z", ended_at: "2026-10-14T12:00:30Z", outcome: "no_answer", ended_reason: null,
+        dial_strategy: "concurrent", dial_slot: 2, dial_batch: 1, dial_source: "fresh" },
+      { round: 1, attempt_number: 2, placed_at: "2026-10-14T12:10:30Z", ended_at: "2026-10-14T12:11:00Z", outcome: "busy", ended_reason: null,
+        dial_strategy: "concurrent", dial_slot: 1, dial_batch: 4, dial_source: "redial" },
+      { round: 1, attempt_number: 3, placed_at: "2026-10-14T12:20:30Z", ended_at: null, outcome: null, ended_reason: null,
+        dial_strategy: "paced", dial_slot: null, dial_batch: 7, dial_source: "redial" },
+    ] })]);
+    renderDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Show calls of +15550001111" }));
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("slot 2 · wave 1");
+    expect(items[0]).not.toHaveTextContent("redial");
+    expect(items[1]).toHaveTextContent("slot 1 · wave 4 · redial");
+    expect(items[2]).toHaveTextContent("paced · redial");
+    expect(items[2]).not.toHaveTextContent("wave");
+  });
+
+  it("a call from before the dialing strategies shows no placement note", async () => {
+    reply([row()]);
+    renderDialog();
+    fireEvent.click(await screen.findByRole("button", { name: "Show calls of +15550001111" }));
+    expect(screen.getByRole("listitem").textContent).not.toMatch(/slot|wave|redial/);
+  });
+
   it("choosing a filter asks the server for that status", async () => {
     reply([row()]);
     renderDialog();

@@ -1,5 +1,5 @@
 import { Bot, PhoneOutgoing, PhoneIncoming, FileAudio, Workflow, CreditCard } from "lucide-react";
-import { VOICE_COUNT, CAMPAIGN_BATCH_SIZE, TYPICAL_RATE_PER_MINUTE } from "@/lib/marketing-facts";
+import { VOICE_COUNT, MAX_CONCURRENT_CALLS, TYPICAL_RATE_PER_MINUTE } from "@/lib/marketing-facts";
 
 // Each module below is a real section of the dashboard — the feature chips and the
 // stat are things the platform actually does today, not aspirational copy.
@@ -19,10 +19,10 @@ const modules = [
     tag: "Dial at scale",
     title: "Outbound Campaigns",
     description:
-      "Import a contact list from CSV, point an agent at it and launch. Calls go out in concurrent batches, with optional do-not-call screening.",
+      "Import a contact list from CSV, point an agent at it and launch. Dial one call at a time, several at once or at a steady rate per minute, with optional do-not-call screening.",
     features: ["CSV contact import", "DNC screening", "Campaign analytics", "Full call logs"],
-    stat: String(CAMPAIGN_BATCH_SIZE),
-    statLabel: "calls at a time",
+    stat: String(MAX_CONCURRENT_CALLS),
+    statLabel: "calls at once, at most",
   },
   {
     icon: PhoneIncoming,

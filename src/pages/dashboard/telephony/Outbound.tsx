@@ -2,13 +2,14 @@
  * Outbound campaigns dashboard page (routes telephony/outbound and telephony/campaigns).
  * Uses api.getCampaigns/createCampaign/updateCampaign/deleteCampaign/startCampaign/
  * pauseCampaign/resumeCampaign plus getAgents, getPhoneNumbers, getContacts and
- * getAnalyticsOverview. Campaign creation is delegated to CreateCampaignDialog.
+ * getAnalyticsOverview, and api.getCampaignsLive (polled every few seconds while a campaign is running)
+ * for the live dialing panel on each card. Campaign creation is delegated to CreateCampaignDialog.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Plus, PhoneOutgoing, Play, Pause as PauseIcon,
   CheckCircle2, XCircle, Loader2, AlertTriangle,
-  Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock, Repeat, ListChecks,
+  Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock, Repeat, ListChecks, Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,10 @@ import {
   describeRetryShort, retryFromRow, retryOutcomesNote, retryToPayload,
   type RetryStats,
 } from "@/lib/callRetry";
+import {
+  LIVE_STATE_LABELS, describeDialingShort, dialingFromRow, dialingToPayload, secondsBetween, stallMessage,
+  type DialingInfo, type LiveState,
+} from "@/lib/dialingStrategy";
 import {
   CAMPAIGN_PREFIX, describeNextOpen, hoursFromRow, hoursToPayload,
   type HoursState,
@@ -57,7 +62,60 @@ type Campaign = {
   retry_interval_minutes?: number;
   retry_on?: string[];
   retry_stats?: RetryStats;
+  // Dialing strategy (dial_*) as stored, and the server's view of it: the settings with the account's
+  // cap applied, any warnings, and whether a run is open.
+  dial_strategy?: string;
+  dial_concurrent_calls?: number;
+  dial_calls_per_minute?: number;
+  dial_delay_seconds?: number;
+  dial_running?: boolean;
+  dialing?: DialingInfo;
 };
+
+/** What POST /start and /resume answer (the legacy keys are still there; the first tick's numbers). */
+type StartResult = {
+  started?: boolean;
+  resumed?: boolean;
+  already_running?: boolean;
+  strategy?: string;
+  dialed?: number;
+  placed?: number;
+  queued?: number;
+  active_now?: number;
+  errors?: number;
+  error_details?: { phone: string; error: string }[];
+  suppressed?: number;
+  already_on_call?: number;
+  capped?: { requested: number; effective: number; reason?: string } | null;
+  stopped_by_hours?: boolean;
+  next_open_at?: string | null;
+  stopped_by_person?: boolean;
+  remaining?: number;
+};
+
+/** How often the live dialing numbers are refreshed while a campaign is running. */
+const LIVE_POLL_MS = 4000;
+
+/** One toast per warning the server sent along with a save or a start (the wizard has closed by then). */
+const showWarnings = (warnings?: string[]) => {
+  for (const w of warnings ?? []) toast.warning(w);
+};
+
+/** The provider's own error text may name it; the page never does. */
+const scrub = (text: string) => text.replace(/vapi/gi, "the call service");
+
+/** "3 calls", "1 call". */
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+/** "updated 3 s ago": its own small component, so the page does not re-render every second for it. */
+function UpdatedAgo({ at }: { at: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <>updated {Math.max(0, Math.round((Date.now() - at) / 1000))} s ago</>;
+}
 
 /** One row of the pre-launch checklist dialog. */
 type CheckItem = {
@@ -122,6 +180,10 @@ const Outbound = () => {
   const [checks, setChecks] = useState<CheckItem[]>([]);
   const [launching, setLaunching] = useState(false);
 
+  // What the server is doing with each running campaign right now (GET /campaigns/live), and when it was read.
+  const [live, setLive] = useState<Record<string, LiveState>>({});
+  const [liveAt, setLiveAt] = useState(0);
+
   // A campaign whose every contact has a completed call has nothing left to dial — shown as
   // "Completed" regardless of its underlying Active/Paused status, which otherwise never
   // changes on its own once every contact has been reached.
@@ -157,6 +219,41 @@ const Outbound = () => {
     return () => clearInterval(t);
   }, []);
 
+  /** One read of the live numbers (only while the tab is in view; a failure keeps the last numbers). */
+  const fetchLive = useCallback(async () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const { data } = await api.getCampaignsLive();
+      if (!data || typeof data !== "object" || Array.isArray(data)) return;
+      setLive(data as Record<string, LiveState>);
+      setLiveAt(Date.now());
+    } catch {
+      // keep showing the last numbers; the next poll tries again
+    }
+  }, []);
+
+  // One read when the page loads, and another after every Start / Pause / Resume (see refreshAfterAction); the
+  // 4 s poll below takes over from there while something is running.
+  useEffect(() => { fetchLive(); }, [fetchLive]);
+
+  // Poll the live numbers only while a campaign has a pass open (it is dialing, or waiting to), has calls open, or
+  // is being started: a finished campaign stays Active but is not running, so an idle page makes no request.
+  // Coming back to the tab refreshes straight away.
+  const needsLive = launching || campaigns.some((c) => (c.dialing?.running ?? c.dial_running) === true || (live[c.id]?.active_now ?? 0) > 0);
+  useEffect(() => {
+    if (!needsLive) return;
+    const t = setInterval(fetchLive, LIVE_POLL_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") fetchLive(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [needsLive, fetchLive]);
+
+  /** After an action that changes what is running: the list and the live numbers, once. */
+  const refreshAfterAction = () => { fetchCampaigns(); fetchLive(); };
+
   const totalContacts = campaigns.reduce((s, c) => s + (c.contacts_count || 0), 0);
   const totalDialed   = campaigns.reduce((s, c) => s + (c.completed_count || 0), 0);
   const activeCampaigns = campaigns.filter((c) => c.effectiveStatus === "Active").length;
@@ -167,7 +264,7 @@ const Outbound = () => {
       const { error } = await api.pauseCampaign(c.id);
       if (error) return toast.error(error);
       toast.success("Campaign paused");
-      fetchCampaigns();
+      refreshAfterAction();
     } else {
       openPreflight(c);
     }
@@ -223,54 +320,84 @@ const Outbound = () => {
   };
 
   /**
-   * Starts (or resumes, if Paused) the campaign being checked and reports the outcome
-   * (dialed / failed / DNC-skipped counts) in a toast, then refreshes the list.
+   * Starts the campaign being checked (or continues it, when it is Paused part-way through its list) and
+   * reports the outcome in a toast, then refreshes the list. The server answers once its first calls are
+   * placed; the rest of the list is dialed in the background, so the toast describes the start, and the
+   * card's live panel follows the rest.
    */
   const launchCampaign = async () => {
     if (!preflightTarget) return;
     setLaunching(true);
+    // A Paused campaign is RESUMED, never started: with a pass left open the server carries on from where it
+    // stopped, and with none (it had finished) resume only makes it Active again, so its redials go on and the whole
+    // list is not dialed a second time. Only an Inactive (or Active, not running) campaign is started.
     const action = preflightTarget.status === "Paused" ? api.resumeCampaign : api.startCampaign;
-    const { data, error } = await action(preflightTarget.id);
+    const { data, error, warnings } = await action(preflightTarget.id);
     setLaunching(false);
     setPreflightTarget(null);
     if (error) return toast.error(error);
-    const dialed: number = (data as any)?.dialed ?? 0;
-    const errors: number = (data as any)?.errors ?? 0;
-    const suppressed: number = (data as any)?.suppressed ?? 0;
-    const details: { phone: string; error: string }[] = (data as any)?.error_details ?? [];
-    // A person paused (or changed) the campaign while it was running: it stopped at the next batch.
-    const byPerson = data as { stopped_by_person?: boolean; remaining?: number } | null;
-    if (byPerson?.stopped_by_person) {
-      const left = byPerson.remaining ?? 0;
+    showWarnings(warnings);
+    const res = (data ?? {}) as StartResult;
+    // Resumed with no pass left open: it is Active again, nothing was dialed.
+    if (action === api.resumeCampaign && res.started === undefined && res.already_running === undefined) {
+      toast.success("Campaign resumed. Numbers waiting for a redial will go out as they come due.");
+      refreshAfterAction();
+      return;
+    }
+    // Someone (or the automatic continuing) already has it running: nothing was changed.
+    if (res.already_running) {
+      toast.info("This campaign is already running.");
+      refreshAfterAction();
+      return;
+    }
+    const dialed: number = res.placed ?? res.dialed ?? 0;
+    const errors: number = res.errors ?? 0;
+    const suppressed: number = res.suppressed ?? 0;
+    const details = res.error_details ?? [];
+    // A person paused (or changed) the campaign while it was starting: it stopped at the next call.
+    if (res.stopped_by_person) {
+      const left = res.remaining ?? 0;
       toast.info(`Stopped: ${dialed} called, ${left} contact${left !== 1 ? "s" : ""} left. Start carries on from the next contact.`);
-      fetchCampaigns();
+      refreshAfterAction();
       return;
     }
     // The calling hours closed part-way: say how far it got and when the rest can be dialed.
-    const stop = data as { stopped_by_hours?: boolean; remaining?: number; next_open_at?: string | null } | null;
-    if (stop?.stopped_by_hours) {
-      const remaining = stop.remaining ?? 0;
+    if (res.stopped_by_hours) {
+      const remaining = res.remaining ?? 0;
       const next = describeNextOpen(
-        { enabled: true, open: false, next_open_at: stop.next_open_at ?? null, summary: null },
+        { enabled: true, open: false, next_open_at: res.next_open_at ?? null, summary: null },
         preflightTarget.call_hours_timezone,
       );
       toast.warning(
         `Calling hours ended: ${dialed} called, ${remaining} contact${remaining !== 1 ? "s" : ""} left.` +
         (next ? ` It will continue automatically from the next contact when the hours open (${next}).` : " It will continue automatically when the hours open.")
       );
-      fetchCampaigns();
+      refreshAfterAction();
       return;
     }
     // Suppressed numbers aren't failures — they were deliberately skipped by DNC screening,
-    // so they're reported separately from VAPI errors.
-    const onCall: number = (data as { already_on_call?: number } | null)?.already_on_call ?? 0;
+    // so they're reported separately from provider errors.
+    const onCall: number = res.already_on_call ?? 0;
     const skipped = (suppressed > 0 ? `, ${suppressed} skipped (DNC)` : "")
       + (onCall > 0 ? `, ${onCall} skipped (already on a call)` : "");
-    if (dialed === 0 && errors > 0) toast.error(`0 calls connected ${details[0]?.error ?? "Unknown error"}${skipped}`);
-    else if (errors > 0) toast.warning(`${dialed} called, ${errors} failed${skipped}`);
-    else if (suppressed > 0 || onCall > 0) toast.warning(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}${skipped}`);
-    else toast.success(`Dialing ${dialed} contact${dialed !== 1 ? "s" : ""}…`);
-    fetchCampaigns();
+    if (dialed === 0 && errors > 0) {
+      toast.error(`0 calls connected ${scrub(details[0]?.error ?? "Unknown error")}${skipped}`);
+      refreshAfterAction();
+      return;
+    }
+    // "Campaign started: 5 calls placed, 118 numbers queued (5 at a time)"
+    const dial = dialingFromRow(preflightTarget as unknown as Record<string, unknown>);
+    const strategy = res.strategy ?? dial.strategy;
+    const how = strategy === "concurrent" ? `${res.capped?.effective ?? dial.concurrentCalls} at a time`
+      : strategy === "paced" ? `${dial.callsPerMinute} per minute`
+        : "one at a time";
+    const message = `Campaign ${res.resumed ? "resumed" : "started"}: ${count(dialed, "call")} placed`
+      + (res.queued != null ? `, ${count(res.queued, "number")} queued` : "")
+      + ` (${how})`;
+    if (errors > 0) toast.warning(`${message}, ${errors} failed${skipped}`);
+    else if (suppressed > 0 || onCall > 0) toast.warning(`${message}${skipped}`);
+    else toast.success(message);
+    refreshAfterAction();
   };
 
   /**
@@ -281,7 +408,7 @@ const Outbound = () => {
     const { error } = await api.pauseCampaign(c.id);
     if (error) return toast.error(error);
     toast.success("Automatic continuing stopped. Press Start whenever you want it to carry on.");
-    fetchCampaigns();
+    refreshAfterAction();
   };
 
   /** Opens the edit wizard, which starts from the campaign's current values. */
@@ -298,6 +425,7 @@ const Outbound = () => {
     dncScreeningEnabled: c.dnc_screening_enabled ?? true,
     hours: hoursFromRow(c as unknown as Record<string, unknown>, CAMPAIGN_PREFIX),
     retry: retryFromRow(c as unknown as Record<string, unknown>),
+    dialing: dialingFromRow(c as unknown as Record<string, unknown>),
   });
 
   /**
@@ -306,18 +434,22 @@ const Outbound = () => {
    */
   const saveSettings = async (d: CampaignData): Promise<boolean> => {
     if (!settingsTarget) return false;
-    const { error } = await api.updateCampaign(settingsTarget.id, {
+    const { error, warnings } = await api.updateCampaign(settingsTarget.id, {
       name: d.name,
-      status: d.status,
+      // The status goes only if the person changed it in the dialog: sending the value it opened with would set a
+      // campaign that was paused elsewhere in the meantime Active again (and, with a pass open, start it dialing).
+      ...(d.status !== settingsTarget.status ? { status: d.status } : {}),
       ...(d.agentId ? { agent_id: d.agentId } : {}),
       ...(d.listId ? { list_id: d.listId } : {}),
       ...(d.phoneNumberId ? { phone_number_id: d.phoneNumberId } : {}),
       dnc_screening_enabled: d.dncScreeningEnabled,
       ...hoursToPayload(d.hours, CAMPAIGN_PREFIX),
       ...retryToPayload(d.retry),
+      ...dialingToPayload(d.dialing),
     });
     if (error) { toast.error(error); return false; }
     toast.success("Campaign updated");
+    showWarnings(warnings);
     fetchCampaigns();
     return true;
   };
@@ -372,12 +504,15 @@ const Outbound = () => {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {campaigns.map((c) => {
             const pct = c.contacts_count > 0 ? Math.round((c.completed_count / c.contacts_count) * 100) : 0;
-            const effectiveStatus = c.effectiveStatus ?? c.status;
+            const liveState = live[c.id];
+            // Calls still open, redials still queued or a run still open mean it is not finished, whatever the counts say.
+            const stillGoing = (liveState?.active_now ?? 0) > 0 || (liveState?.queued_redials ?? 0) > 0 || c.dialing?.running === true;
+            const effectiveStatus = c.effectiveStatus === "Completed" && stillGoing ? c.status : (c.effectiveStatus ?? c.status);
             // Pause/Start toggles the campaign's real underlying status, independent of
             // whether every contact has already been reached — kept separate from the
             // completion badge below so the button's label always matches what clicking it does.
             const isActive = c.status === "Active";
-            const isCompleted = effectiveStatus === "Completed";
+            const isCompleted = effectiveStatus === "Completed" && !stillGoing;
             // Visual "is this actually running right now" cues (glow, icon, progress fill)
             // should turn off once completed even if the underlying status is still Active.
             const showRunning = isActive && !isCompleted;
@@ -441,6 +576,73 @@ const Outbound = () => {
                     Stopped partway through its list. Start continues with the contacts that are left.
                   </p>
                 )}
+
+                {/* Dialing: the strategy and, while the campaign runs, what it is doing right now */}
+                {(() => {
+                  const dial = dialingFromRow(c as unknown as Record<string, unknown>);
+                  const eff = liveState?.effective ?? c.dialing?.effective;
+                  const serverWarnings = liveState?.warnings ?? c.dialing?.warnings ?? [];
+                  const notes: string[] = serverWarnings.length
+                    ? serverWarnings
+                    : eff?.capped && eff.cap ? [`Limited to ${count(eff.cap, "call")} at a time by your account.`] : [];
+                  const stall = stallMessage(liveState?.stall_reason ?? c.dialing?.stall_reason);
+                  // The last call error belongs to a pass that is going; a finished campaign does not keep showing it.
+                  const inPass = (c.dialing?.running ?? c.dial_running) === true || (liveState?.active_now ?? 0) > 0;
+                  const lastError = inPass && (liveState?.counters?.errors ?? 0) > 0 ? liveState?.counters?.last_error : null;
+                  const showLive = !!liveState && liveState.state !== "idle";
+                  const nextIn = dial.strategy === "paced" && liveState?.next_call_at
+                    ? secondsBetween(liveState.as_of, liveState.next_call_at) : null;
+                  return (
+                    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted/20">
+                      <div className="space-y-0.5 px-3 py-2">
+                        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-xs">
+                          <span className="flex items-center gap-1.5 font-medium text-foreground">
+                            <Gauge className="h-3.5 w-3.5 text-primary" /> Dialing
+                          </span>
+                          <span className="text-muted-foreground">{describeDialingShort(dial)}</span>
+                        </div>
+                        {notes.map((n) => (
+                          <p key={n} className="flex items-start gap-1.5 text-[11px] text-warning">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {n}
+                          </p>
+                        ))}
+                        {stall && (
+                          <p className="flex items-start gap-1.5 text-[11px] text-warning">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {stall}
+                          </p>
+                        )}
+                        {lastError && (
+                          <p className="flex items-start gap-1.5 text-[11px] text-warning">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> Last call error: {scrub(lastError)}
+                          </p>
+                        )}
+                      </div>
+                      {showLive && (
+                        <>
+                          <dl aria-label="Live dialing" className="grid grid-cols-3 divide-x divide-border border-t border-border text-center">
+                            {([
+                              ["Active now", liveState!.active_now],
+                              ["In queue", liveState!.queued],
+                              ["Placed", liveState!.placed],
+                            ] as const).map(([label, value]) => (
+                              <div key={label} className="flex min-w-0 flex-col items-center px-1 py-2">
+                                <dd className="text-base font-semibold leading-none text-foreground">{value.toLocaleString()}</dd>
+                                <dt className="mt-1 text-[10px] leading-tight text-muted-foreground">{label}</dt>
+                              </div>
+                            ))}
+                          </dl>
+                          <p className="flex flex-wrap items-center justify-between gap-x-3 border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+                            <span>
+                              {LIVE_STATE_LABELS[liveState!.state] ?? liveState!.state}
+                              {nextIn != null && ` · Next call in ${nextIn} s`}
+                            </span>
+                            <span><UpdatedAgo at={liveAt} /></span>
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Auto redial: one panel with the settings and, once calls have been placed, the counts */}
                 {(c.retry_enabled || (c.retry_stats?.total_attempts ?? 0) > 0) && (() => {
@@ -541,7 +743,7 @@ const Outbound = () => {
         open={open}
         onOpenChange={setOpen}
         onCreate={async (d) => {
-          const { error } = await api.createCampaign({
+          const { error, warnings } = await api.createCampaign({
             name: d.name,
             agent_id: d.agentId,
             list_id: d.listId,
@@ -549,9 +751,12 @@ const Outbound = () => {
             dnc_screening_enabled: d.dncScreeningEnabled,
             ...hoursToPayload(d.hours, CAMPAIGN_PREFIX),
             ...retryToPayload(d.retry),
+            ...dialingToPayload(d.dialing),
           });
           if (error) return toast.error(error);
           toast.success(`Campaign "${d.name}" created`);
+          // The wizard has closed by now, so this is the only place the user hears about a cap.
+          showWarnings(warnings);
           fetchCampaigns();
         }}
       />

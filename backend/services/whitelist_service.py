@@ -316,6 +316,7 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
     Returns {"allowed": bool, "reason": str | None, "source": "disabled"|"cache"|"api", "suppressed": bool}.
     `suppressed` is True only for a real verdict that the number is on the list; a refusal because the
     number could not be read or the provider is down is not a suppression (allowed is False, suppressed False).
+    A provider outage also carries "unavailable": True (an unreadable number does not).
 
     Pass `cached` to reuse a verdict already fetched in a batch pre-warm and skip the
     per-number cache read.
@@ -355,6 +356,9 @@ async def check_number(user_id: str, phone: str, *, cached: bool | None = None) 
             "reason": "DNC screening is unavailable, so the call was not placed.",
             "source": "api",
             "suppressed": False,
+            # A provider outage, as opposed to a number that cannot be read: the dialer keeps a FRESH number
+            # in the queue (and waits) instead of skipping it.
+            "unavailable": True,
         }
 
     _cache_put(user_id, phone_key, found, raw)

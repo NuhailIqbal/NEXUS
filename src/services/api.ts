@@ -303,6 +303,10 @@ export const api = {
   getCampaigns: () => get("/telephony/campaigns"),
   createCampaign: (data: any) => post("/telephony/campaigns", data),
   getCampaign: (id: string) => get(`/telephony/campaigns/${id}`),
+  // What each running campaign is doing right now: { [campaignId]: LiveState } (polled every few seconds).
+  getCampaignsLive: () => get("/telephony/campaigns/live"),
+  // The account's call limit and the bounds of the dialing settings.
+  getDialingLimits: () => get("/telephony/dialing/limits"),
   // The lead/number view: every number with its attempt count, next retry time and status.
   getCampaignNumbers: (id: string, params: { status?: string; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams();

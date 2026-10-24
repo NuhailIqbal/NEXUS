@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
 import { formatInZone } from "@/lib/timeZone";
 import {
-  NUMBER_FILTERS, OUTCOME_LABELS, STATUS_LABELS, type CampaignNumber,
+  NUMBER_FILTERS, OUTCOME_LABELS, STATUS_LABELS, describeAttemptDial, type CampaignNumber,
 } from "@/lib/callRetry";
 
 type Props = {
@@ -143,6 +143,7 @@ export function CampaignNumbersDialog({ campaignId, campaignName, timezone, onOp
                                   <span>placed {when(h.placed_at)}</span>
                                   <span>{h.ended_at ? `ended ${when(h.ended_at)}` : "in progress"}</span>
                                   <span className="text-muted-foreground">{h.outcome ? outcome(h.outcome) : ""}</span>
+                                  {describeAttemptDial(h) && <span className="text-muted-foreground">{describeAttemptDial(h)}</span>}
                                 </li>
                               ))}
                             </ul>

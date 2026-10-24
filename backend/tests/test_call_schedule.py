@@ -404,7 +404,7 @@ class ApiTests(ZoneBase):
     def create(self, **extra):
         return self.api("post", "/telephony/campaigns", json={
             "name": "S", "agent_id": self.agent["id"], "list_id": self.list["id"], "phone_number_id": self.out_number["id"],
-            "dnc_screening_enabled": False, "call_hours_enabled": True, "call_hours_timezone": "Asia/Karachi", **extra})
+            "dnc_screening_enabled": False, **H.LEGACY_DIAL, "call_hours_enabled": True, "call_hours_timezone": "Asia/Karachi", **extra})
 
     def test_a_new_campaign_without_a_schedule_runs_the_same_every_day_with_no_breaks(self):
         r = self.create()
@@ -629,15 +629,18 @@ class RunsWithBreaks(SchedulerBase):
         self.assertEqual((r.status_code, data["dialed"], data["stopped_by_hours"]), (200, 2, True), r.text)
         self.assertEqual(len(self.dialed()), 2, "the batch already under way finished, no new one started")
 
-    def test_calls_of_a_batch_already_under_way_are_not_cut_when_the_break_begins(self):
+    def test_the_break_is_obeyed_on_the_very_next_call_and_the_call_already_placed_is_not_cut(self):
         c = self.lunch_campaign()
         z = self.ZONE
         self.at(local(z, *DAY, 12, 59))
-        self.closing_after(1, local(z, *DAY, 13, 0))      # the break begins while the first batch is still placing calls
+        self.closing_after(1, local(z, *DAY, 13, 0))      # the break begins while the first group is still placing calls
         r = self.start(c["id"])
         data = r.json()["data"]
-        self.assertEqual((data["dialed"], data["remaining"]), (2, 8), "both calls of the batch were placed, then it stopped")
-        self.assertEqual(len(self.dialed()), 2)
+        # the hours are checked at every call (not once per group of calls): the second call of the group is not placed
+        self.assertEqual((data["dialed"], data["remaining"]), (1, 9), "the call placed stays, the very next one is held back")
+        self.assertEqual(len(self.dialed()), 1)
+        open_calls = supabase.table("campaign_attempts").select("id").eq("campaign_id", c["id"]).is_("ended_at", "null").execute().data
+        self.assertEqual(len(open_calls), 1, "the call that was placed is not cut")
 
     def test_it_never_dials_at_all_inside_a_break(self):
         c = self.lunch_campaign()

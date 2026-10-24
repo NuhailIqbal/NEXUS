@@ -2,10 +2,10 @@
 Continues outbound campaigns that the calling hours stopped, by themselves, the next time the hours
 open: no one has to press Start.
 
-A run that is still going when a campaign's hours end stops between batches and parks the campaign as
-Paused with `dial_cursor` (the last contact handled) and `stopped_by_hours_at` (the marker that says
-"continue automatically", see routers/telephony.start_campaign). Every sweep looks for exactly those
-campaigns whose hours are open now and starts them again from the cursor, through the same code as the
+A pass that is still going when a campaign's hours end stops at the next call and parks the campaign as
+Paused with its place (`dial_seq` / `dial_cursor`, the last contact handled) and `stopped_by_hours_at` (the
+marker that says "continue automatically", see services/dialer._handle_closed). Every sweep looks for exactly
+those campaigns whose hours are open now and starts them again from their place, through the same code as the
 Start button, so the next contact is the one after where the previous run ended and nobody is called
 twice. If that run is cut off again by the hours, it is parked again and continues the next day, and
 so on until the list is finished.
@@ -16,10 +16,12 @@ is claimed atomically before the run, so two sweeps can never start the same cam
 automatic start is refused (empty wallet, agent no longer set up, ...) the user is notified once and the
 campaign stays Paused for them to fix and Start.
 
-The same sweep also places the REDIALS of numbers that did not pick up (services/call_retry.py): every due
-number of a campaign that is Active, has retrying on and is inside its calling hours is called again, in
-batches like the campaign's own run. A paused/stopped campaign keeps its due redials and places them when it
-is Active again; a redial that falls outside the hours is moved to the next opening.
+The same sweep is also the safety net of the dialing engine (services/dialer.py), which normally wakes itself
+every couple of seconds: it places the REDIALS of numbers that did not pick up (services/call_retry.py) and, when
+asked, dispatches the campaigns' fresh numbers too (the only way campaigns advance when the engine's own loop is
+switched off with DIALER_TICK_SECONDS=0, a degraded mode: one step a minute). Redials follow the campaign's dialing
+strategy like every other call. A paused/stopped campaign keeps its due redials and places them when it is Active
+again; a redial that falls outside the hours is moved to the next opening.
 """
 import asyncio
 import logging
@@ -29,7 +31,7 @@ from fastapi import HTTPException
 
 from config import settings
 from database import supabase
-from services import call_hours, call_retry
+from services import call_hours, call_retry, dialer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ _background_runs: set = set()
 
 async def run_auto_resumes(now: datetime | None = None, wait: bool = True) -> dict:
     """One sweep: continue every waiting campaign whose calling hours are open. Returns counts:
-    resumed (started again), waiting (hours still closed, or another run already has the campaign),
+    resumed (started again), waiting (hours still closed, or the campaign is already running again),
     refused (the start was refused and the owner told).
 
     With wait=True (the default, used by tests and one-off calls) the runs are awaited and the counts
@@ -84,16 +86,11 @@ async def run_auto_resumes(now: datetime | None = None, wait: bool = True) -> di
     from routers import telephony
 
     now = now or datetime.now(timezone.utc)
-    rows = (
-        supabase.table("outbound_campaigns")
-        .select("*")
-        .eq("status", "Paused")
-        .eq("call_hours_enabled", True)
-        .not_.is_("dial_cursor", "null")
-        .not_.is_("stopped_by_hours_at", "null")
-        .execute()
-        .data
-        or []
+    # A pass is open when it is running or still has a place (an old engine's cursor); raw SQL, as the query
+    # shim has no OR.
+    rows = dialer._q(
+        "SELECT * FROM public.outbound_campaigns WHERE status = 'Paused' AND call_hours_enabled = true "
+        "AND (dial_running OR dial_cursor IS NOT NULL) AND stopped_by_hours_at IS NOT NULL"
     )
     result = {"resumed": 0, "waiting": 0, "refused": 0}
 
@@ -110,8 +107,8 @@ async def run_auto_resumes(now: datetime | None = None, wait: bool = True) -> di
             res = await telephony.start_campaign(camp["id"], {"user_id": camp["user_id"]})
         except HTTPException as e:
             if e.status_code == 409:
-                # Someone else (a person pressing Start, another worker) is running the campaign: it
-                # is theirs now, and it re-marks itself if the hours stop it. Nothing to report.
+                # Someone changed the campaign while it was starting (a person pressing Start got there
+                # first): it is theirs now, and it re-marks itself if the hours stop it. Nothing to report.
                 result["waiting"] += 1
                 return
             if not call_hours.is_open(camp, call_hours.CAMPAIGN, if_unreadable=False):
@@ -132,14 +129,24 @@ async def run_auto_resumes(now: datetime | None = None, wait: bool = True) -> di
             _notify(camp["user_id"], f"{name} could not continue automatically",
                     "Something went wrong starting it again. Press Start to carry on from where it stopped.")
             return
-        result["resumed"] += 1
         data = (res or {}).get("data") or {}
+        if data.get("already_running"):
+            # A person (or a faster sweep) started it between the claim and now: it is going, nothing to report.
+            result["waiting"] += 1
+            return
+        result["resumed"] += 1
         logger.info("auto-resumed campaign %s: %s", camp["id"], {k: data.get(k) for k in ("dialed", "remaining", "stopped_by_hours")})
         left = data.get("remaining")
-        _notify(camp["user_id"], f"{name} continued automatically",
-                f"The calling hours opened and the campaign carried on from where it stopped: "
-                f"{data.get('dialed', 0)} contact{'s' if data.get('dialed', 0) != 1 else ''} called"
-                + (f", {left} left for the next opening." if data.get("stopped_by_hours") and left else "."))
+        dialed = data.get("dialed", 0)
+        if data.get("stopped_by_hours"):
+            body = (f"The calling hours opened and the campaign carried on from where it stopped: "
+                    f"{dialed} contact{'s' if dialed != 1 else ''} called"
+                    + (f", {left} left for the next opening." if left else "."))
+        else:
+            queued = data.get("queued", 0)
+            body = (f"The calling hours opened and the campaign carried on from where it stopped "
+                    f"({queued} number{'s' if queued != 1 else ''} queued).")
+        _notify(camp["user_id"], f"{name} continued automatically", body)
 
     # Campaigns run side by side: one long list must not hold up the others' continuing.
     async def guarded(camp: dict) -> None:
@@ -158,170 +165,79 @@ async def run_auto_resumes(now: datetime | None = None, wait: bool = True) -> di
     return result
 
 
-# Campaigns whose redials a sweep is placing right now (a slow batch must not be started a second time by
-# the next sweep; the unique open-attempt index would stop the duplicate calls anyway).
-_retrying: set = set()
-
-
 def _iso(moment: datetime) -> str:
     return call_retry.iso(moment)
 
 
-def _dial_setup(camp: dict) -> tuple[str | None, str | None, str | None]:
-    """(VAPI assistant id, VAPI phone id, why the campaign cannot dial now or None) for placing redials: the
-    same things start_campaign checks, minus the calling hours."""
-    from routers import telephony
-
-    owner = camp["user_id"]
-    assistant = None
-    if camp.get("agent_id"):
-        row = supabase.table("ai_agents").select("vapi_assistant_id").eq("id", camp["agent_id"]).maybe_single().execute().data
-        assistant = (row or {}).get("vapi_assistant_id")
-    if not assistant:
-        return None, None, "the campaign's agent is not set up for calls"
-    phone = None
-    if camp.get("phone_number_id"):
-        row = supabase.table("phone_numbers").select("vapi_phone_id").eq("id", camp["phone_number_id"]).maybe_single().execute().data
-        phone = (row or {}).get("vapi_phone_id")
-    if not phone:
-        return assistant, None, "the campaign's phone number is not active"
-    reason = telephony.outbound_call_block_reason(telephony.get_or_create_billing(owner))
-    if reason:
-        return assistant, phone, reason
-    if not telephony.check_call_quota(owner, "outbound"):
-        return assistant, phone, "the balance is empty"
-    return assistant, phone, None
-
-
-async def _redial(camp: dict, lead: dict, contact: dict | None, assistant: str, phone_id: str) -> str:
-    """Place (or settle without placing) the due redial of one number. Returns what happened: placed,
-    busy (the number is on another call: it stays due), failed (the provider could not place it: that
-    counts as a failed attempt), suppressed, max_attempts, cancelled."""
-    from routers import telephony
-
-    # The number must still be in the campaign's list with a phone, or there is nobody to call.
-    if not contact or not (contact.get("phone") or "").strip() or contact.get("list_id") != camp.get("list_id"):
-        call_retry.settle(lead, call_retry.NOT_RETRIED)
-        return "cancelled"
-    # The maximum in force NOW: lowering it settles numbers that already have that many calls.
-    if lead["attempts"] >= int(camp.get("retry_max_attempts") or 1):
-        call_retry.settle(lead, call_retry.MAX_ATTEMPTS)
-        return "max_attempts"
-    r = await telephony._place_call(camp, camp["user_id"], contact, assistant, phone_id, new_round=False, lead=lead)
-    if r["success"]:
-        return "placed"
-    if r.get("suppressed"):
-        return "suppressed"
-    if r.get("unscreened"):
-        return "waiting"       # the DNC screening could not run: the redial stays due for a later sweep
-    return "busy" if r.get("busy") else "failed"
-
-
-async def _retry_campaign(camp: dict, leads: list[dict], clock, result: dict) -> None:
-    """Place the due redials of one campaign (see run_retries). `clock()` is the current time, asked again before
-    every batch so a long sweep never dials past the closing time."""
-    from routers import telephony
-
-    cid = camp["id"]
-    if cid in _retrying:
-        return
-    _retrying.add(cid)
-    try:
-        if camp.get("status") != "Active":
-            result["paused"] += len(leads)       # paused/stopped: they wait, and carry on when it is Active
-            return
-        if not camp.get("retry_enabled"):
-            for lead in leads:
-                call_retry.settle(lead, call_retry.NOT_RETRIED)
-            result["cancelled"] += len(leads)
-            return
-
-        def closed_until():
-            """False when the hours are open, else the next opening (None when it cannot be worked out)."""
-            moment = clock()
-            if call_hours.is_open(camp, call_hours.CAMPAIGN, moment, if_unreadable=False):
-                return False
-            return call_hours.next_opening(camp, call_hours.CAMPAIGN, moment)
-
-        def push_to(nxt, rest: list[dict]) -> None:
-            # Outside the hours: the redial moves to the next allowed window instead of staying "due".
-            if nxt:
-                supabase.table("campaign_leads").update({"next_attempt_at": _iso(nxt)}) \
-                    .in_("id", [l["id"] for l in rest]).is_("final_status", "null").execute()
-            result["waiting"] += len(rest)
-
-        closed = closed_until()
-        if closed is not False:
-            push_to(closed, leads)
-            return
-        assistant, phone_id, blocked = _dial_setup(camp)
-        if blocked:
-            logger.warning("redials of campaign %s are waiting: %s", cid, blocked)
-            result["waiting"] += len(leads)
-            return
-        contacts = {c["id"]: c for c in (supabase.table("contacts").select("id, name, phone, list_id")
-                                         .in_("id", [l["contact_id"] for l in leads]).execute().data or [])}
-        size = telephony.CAMPAIGN_BATCH_SIZE
-        for i in range(0, len(leads), size):
-            # Before every batch the campaign is read again: a Pause, a new list, switched-off retrying or
-            # narrower hours are obeyed from this batch on.
-            fresh = supabase.table("outbound_campaigns").select("*").eq("id", cid).maybe_single().execute().data
-            if not fresh or fresh.get("status") != "Active" or not fresh.get("retry_enabled"):
-                result["paused" if fresh and fresh.get("status") != "Active" else "cancelled"] += len(leads) - i
-                return
-            camp.update(fresh)
-            closed = closed_until()
-            if closed is not False:
-                push_to(closed, leads[i:])
-                return
-            batch = leads[i:i + size]
-            for outcome in await asyncio.gather(*[_redial(camp, l, contacts.get(l["contact_id"]), assistant, phone_id) for l in batch]):
-                result[outcome] = result.get(outcome, 0) + 1
-    finally:
-        _retrying.discard(cid)
-
-
-async def run_retries(now: datetime | None = None, wait: bool = True) -> dict:
+async def run_retries(now: datetime | None = None, wait: bool = True, *, fresh: bool = False) -> dict:
     """One sweep of the redials: place every number whose next attempt is due. Returns counts: placed,
     busy, failed, suppressed, max_attempts, cancelled (settled without a call), paused (campaign not Active)
     and waiting (outside the calling hours, or the campaign cannot dial now).
 
-    With wait=True (tests, one-off calls) the batches are awaited and the counts are complete; the
-    background loop passes wait=False, so a long batch never delays the next sweep (the counts then only
-    include what finished before it returned). A `now` given by the caller fixes the clock (tests); otherwise the
-    real time is read again before every batch."""
-    clock = (lambda: now) if now is not None else (lambda: datetime.now(timezone.utc))
-    now = clock()
+    A thin wrapper over the dialing engine (services/dialer.dispatch_once): it keeps its guards (a campaign that
+    is not Active keeps its redials, retrying switched off cancels them, calling hours closed move them to the next
+    opening) and lets the engine place the rest, under each campaign's dialing strategy and limits. `fresh=True`
+    also dispatches the campaigns' fresh numbers (the 60 s sweep does, as the safety net and the degraded mode of
+    the engine's own loop); the counts are only the redials'.
+
+    With wait=True (tests, one-off calls) the ticks are awaited and the counts are complete; the background loop
+    passes wait=False, so a long tick never delays the next sweep (the counts then only include what finished
+    before it returned). A `now` given by the caller fixes the clock (tests); otherwise the real time is read
+    at every step."""
+    moment = now if now is not None else datetime.now(timezone.utc)
     try:
-        call_retry.reap_stale()      # calls whose end report never came free their numbers
+        # calls whose end report never came free their numbers (reap_stale may ask the provider about a call, so it
+        # runs off the event loop)
+        await asyncio.to_thread(call_retry.reap_stale)
+        await asyncio.to_thread(call_retry.reap_unplaced, moment, int(settings.dialer_unplaced_reap_seconds))
     except Exception:  # noqa: BLE001
         logger.exception("could not close stale attempts")
+    result = {"placed": 0, "busy": 0, "failed": 0, "suppressed": 0, "max_attempts": 0, "cancelled": 0, "paused": 0, "waiting": 0}
     due = (
         supabase.table("campaign_leads").select("*")
-        .is_("final_status", "null").not_.is_("next_attempt_at", "null").lte("next_attempt_at", _iso(now))
+        .is_("final_status", "null").not_.is_("next_attempt_at", "null").lte("next_attempt_at", _iso(moment))
         .order("next_attempt_at").execute().data or []
     )
-    result = {"placed": 0, "busy": 0, "failed": 0, "suppressed": 0, "max_attempts": 0, "cancelled": 0, "paused": 0, "waiting": 0}
-    if not due:
-        return result
     by_campaign: dict[str, list[dict]] = {}
     for lead in due:
         by_campaign.setdefault(lead["campaign_id"], []).append(lead)
-    camps = {c["id"]: c for c in (supabase.table("outbound_campaigns").select("*").in_("id", list(by_campaign)).execute().data or [])}
-
-    async def guarded(cid: str) -> None:
-        try:
-            await _retry_campaign(camps[cid], by_campaign[cid], clock, result)
-        except Exception:  # noqa: BLE001 - one campaign must not stop the others
-            logger.exception("redials of campaign %s failed unexpectedly", cid)
-
-    tasks = [asyncio.ensure_future(guarded(cid)) for cid in by_campaign if cid in camps]
-    if wait:
-        await asyncio.gather(*tasks)
-    else:
-        for t in tasks:
-            _background_runs.add(t)
-            t.add_done_callback(_background_runs.discard)
+    camps = {}
+    if by_campaign:
+        camps = {c["id"]: c for c in (supabase.table("outbound_campaigns").select("*").in_("id", list(by_campaign)).execute().data or [])}
+    serve = False
+    for cid, leads in by_campaign.items():
+        camp = camps.get(cid)
+        if not camp:
+            continue
+        if camp.get("status") != "Active":
+            result["paused"] += len(leads)       # paused/stopped: they wait, and carry on when it is Active
+        elif not camp.get("retry_enabled"):
+            for lead in leads:
+                call_retry.settle(lead, call_retry.NOT_RETRIED)
+            result["cancelled"] += len(leads)
+        elif not call_hours.is_open(camp, call_hours.CAMPAIGN, moment, if_unreadable=False):
+            # Outside the hours: the redial moves to the next allowed window instead of staying "due".
+            nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN, moment)
+            if nxt:
+                supabase.table("campaign_leads").update({"next_attempt_at": _iso(nxt)}) \
+                    .in_("id", [l["id"] for l in leads]).is_("final_status", "null").execute()
+            result["waiting"] += len(leads)
+        else:
+            serve = True
+    if not serve and not fresh:
+        return result
+    try:
+        out = await dialer.dispatch_once(now, fresh=fresh, redials=True, wait=wait)
+    except Exception:  # noqa: BLE001
+        logger.exception("redial sweep failed")
+        return result
+    for cid, r in out["results"].items():
+        result["placed"] += r.redials_placed
+        if r.stall in ("agent", "number", "blocked", "balance"):
+            # The campaign cannot dial now (agent, number, account, wallet): its due redials wait, none is lost.
+            result["waiting"] += len(by_campaign.get(cid, []))
+        for key in ("busy", "failed", "suppressed", "max_attempts", "cancelled", "waiting"):
+            result[key] += r.redials[key]
     return result
 
 
@@ -337,7 +253,9 @@ async def campaign_loop() -> None:
         except Exception as e:  # noqa: BLE001
             logger.exception("campaign sweep failed: %s", e)
         try:
-            await run_retries(wait=False)
+            # The redials, and (fresh=True) the fresh numbers of every running campaign: the safety net of the
+            # dialing engine's own loop, and the only thing that advances campaigns when that loop is off.
+            await run_retries(wait=False, fresh=True)
         except Exception as e:  # noqa: BLE001
             logger.exception("redial sweep failed: %s", e)
         await asyncio.sleep(interval)

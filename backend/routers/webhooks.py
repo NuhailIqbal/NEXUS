@@ -48,6 +48,11 @@ limiter = Limiter(key_func=get_remote_address)
 # that FAIL authentication are counted, in a bucket of their own; requests carrying the secret
 # (VAPI, or this server's own reachability probe) are never throttled.
 _INBOUND_UNAUTHENTICATED_LIMIT = parse_rate_limit("60/minute")
+# /webhooks/vapi (the events route) works the same way with a higher allowance: at campaign concurrency 10-20 the
+# end-of-call reports alone come in faster than a blanket 120/minute per address allows, and a throttled report is a
+# call that never frees its slot. Requests carrying a valid credential are never counted; failed ones are (and,
+# with no secret configured at all, nothing can be told apart, so every request is counted as before).
+_EVENTS_UNAUTHENTICATED_LIMIT = parse_rate_limit("120/minute")
 _inbound_rate_storage = MemoryStorage()
 _inbound_rate_limiter = FixedWindowRateLimiter(_inbound_rate_storage)
 
@@ -795,20 +800,29 @@ async def _handle_status_update(payload: dict):
             logger.info(f"status-update created live row: {vapi_call_id} ({mapped})")
 
 
-async def _process_vapi_request(request: Request, *, throttle_failed_auth: bool = False):
+async def _process_vapi_request(request: Request, *, throttle_failed_auth: bool = False,
+                                throttle_bucket: tuple | None = None):
     """Authenticate one VAPI server request and dispatch it by message type.
 
     Shared by both webhook routes. 401 for a bad or missing credential (when a secret is
     configured), 400 for a body that is not JSON or whose `message` is not an object. With
     throttle_failed_auth, requests that fail authentication are also counted per client and
-    answered 429 beyond _INBOUND_UNAUTHENTICATED_LIMIT (authenticated ones never are).
+    answered 429 beyond _INBOUND_UNAUTHENTICATED_LIMIT (authenticated ones never are). `throttle_bucket`
+    (limit, name) does the same with another allowance and bucket; with no secret configured every request
+    counts toward it (nothing can be told apart then, and that is development only).
     """
     body = await request.body()
 
+    if throttle_bucket and not settings.vapi_webhook_secret:
+        limit, name = throttle_bucket
+        if not _inbound_rate_limiter.hit(limit, name, get_remote_address(request)):
+            raise HTTPException(status_code=429, detail="Too many requests")
     # Verify against the raw bytes before parsing JSON: the HMAC covers the exact body.
     if not _verify_request(body, request.headers):
         if throttle_failed_auth and not _inbound_rate_limiter.hit(
                 _INBOUND_UNAUTHENTICATED_LIMIT, "vapi-inbound-unauthenticated", get_remote_address(request)):
+            raise HTTPException(status_code=429, detail="Too many requests")
+        if throttle_bucket and not _inbound_rate_limiter.hit(throttle_bucket[0], throttle_bucket[1], get_remote_address(request)):
             raise HTTPException(status_code=429, detail="Too many requests")
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
@@ -850,15 +864,15 @@ async def _process_vapi_request(request: Request, *, throttle_failed_auth: bool 
 
 
 @router.post("/vapi")
-@limiter.limit("120/minute")
 async def vapi_webhook(request: Request):
     """Receive VAPI server events. Authenticated by the shared secret VAPI sends (see
-    _verify_request; no user token) and rate limited to 120 requests per minute per client
-    IP. Routes end-of-call-report/call-ended, status-update and call-started events to their
+    _verify_request; no user token). Requests that carry a valid credential are never throttled (they
+    include every end-of-call report); unauthenticated ones are limited to 120 per minute per client IP.
+    Routes end-of-call-report/call-ended, status-update and call-started events to their
     handlers, which update conversations and trigger billing and post-call work; answers an
     assistant-request with the agent to connect; other event types are acknowledged and
     ignored."""
-    return await _process_vapi_request(request)
+    return await _process_vapi_request(request, throttle_bucket=(_EVENTS_UNAUTHENTICATED_LIMIT, "vapi-events-unauthenticated"))
 
 
 @router.post("/vapi/inbound")

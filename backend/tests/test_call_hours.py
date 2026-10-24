@@ -17,8 +17,9 @@ from unittest.mock import AsyncMock, patch
 import byot_harness as H
 from database import supabase
 from routers import telephony
-from services import call_hours, caller_verification as cv, vapi_client
+from services import call_hours, call_retry, caller_verification as cv, campaign_scheduler, dialer, vapi_client
 
+from test_timezones import FakeDateTime
 from test_caller_verification import (
     Base, make_agent, make_number, number_row, patch_settings, request_body, run, screenings,
 )
@@ -267,23 +268,31 @@ class CampaignBase(unittest.TestCase):
         p = patch.object(telephony, "CAMPAIGN_BATCH_SIZE", 2)
         p.start()
         self.addCleanup(p.stop)
+        # no other test's campaign is mid-pass, claimed or waiting for a wake-up
+        self._reset_dial_state()
+        self.addCleanup(self._reset_dial_state)
+
+    @staticmethod
+    def _reset_dial_state():
+        H.sql("UPDATE public.outbound_campaigns SET dial_running = false, dial_stall = NULL, dial_next_at = NULL, "
+              "run_token = NULL, run_heartbeat_at = NULL")
 
     _phones = 0
 
     def add_contacts(self, list_id, n):
         """n contacts with phone numbers that are unique across the test (so "dialed once" can be
-        read off the numbers), returned in id order."""
+        read off the numbers), returned in dial (upload, contacts.seq) order."""
         start, self._phones = self._phones, self._phones + n
         rows = [{"user_id": self.user, "list_id": list_id, "name": f"C{i}", "phone": f"+1555000{i:04d}"}
                 for i in range(start, start + n)]
-        return sorted(supabase.table("contacts").insert(rows).execute().data, key=lambda c: c["id"])
+        return sorted(supabase.table("contacts").insert(rows).execute().data, key=lambda c: c["seq"])
 
     def api(self, method, path, user=None, **kw):
         return getattr(H.client, method)(path, headers=H.auth(user or self.user), **kw)
 
     def make_campaign(self, **extra):
         body = {"name": "Spring", "agent_id": self.agent["id"], "list_id": self.list["id"],
-                "phone_number_id": self.number["id"], "dnc_screening_enabled": False, **extra}
+                "phone_number_id": self.number["id"], "dnc_screening_enabled": False, **H.LEGACY_DIAL, **extra}
         r = self.api("post", "/telephony/campaigns", json=body)
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()["data"]
@@ -436,23 +445,47 @@ class CampaignStartTests(CampaignBase):
 
 
 class CampaignStoppedByHoursTests(CampaignBase):
-    """The hours close while the run is in progress, then reopen."""
+    """The hours close while the run is in progress, then reopen. The clock is frozen at noon UTC on a Wednesday,
+    the campaign's hours are 09:00-17:00 every day, and "the hours close mid-run" is the clock jumping to 17:00
+    after a chosen number of calls (the dialing engine reads the clock at every call)."""
 
-    def closing_after(self, allowed_checks):
-        """is_open answers True for that many checks, then False. The checks counted are the run's
-        "before dialing" check and one before each batch; the extra check made right after the run
-        takes its lease (the row is read again then) is not counted."""
-        calls = {"n": 0}
+    NOON = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    CLOSING = datetime(2026, 10, 14, 17, 0, tzinfo=timezone.utc)
 
-        def fake(row, prefix, now=None, *, if_unreadable=True):
-            calls["n"] += 1
-            return calls["n"] <= allowed_checks + 1
-        return patch.object(call_hours, "is_open", side_effect=fake)
+    def setUp(self):
+        super().setUp()
+        for target in (call_hours, telephony, dialer, call_retry, campaign_scheduler):
+            p = patch.object(target, "datetime", FakeDateTime)
+            p.start()
+            self.addCleanup(p.stop)
+        FakeDateTime.instant = self.NOON
+        self._left = None
+        inner = self.create_call.side_effect
+
+        async def placing(payload):
+            result = inner(payload)
+            if self._left is not None:
+                self._left -= 1
+                if self._left == 0:
+                    FakeDateTime.instant = self.CLOSING
+            return result
+        self.create_call.side_effect = placing
+
+    def window(self, **extra):
+        """Hours on, every day 09:00-17:00 UTC."""
+        return {C + "enabled": True, C + "timezone": "UTC", C + "days": [0, 1, 2, 3, 4, 5, 6],
+                C + "start": "09:00", C + "end": "17:00", **extra}
+
+    def closing_after(self, calls):
+        """The clock reaches closing time once `calls` more calls have been placed (it is put back at noon first,
+        as if the hours had opened again). None: no jump."""
+        FakeDateTime.instant = self.NOON
+        self._left = calls
 
     def test_a_run_that_outlasts_the_hours_stops_and_remembers_where(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):            # pre-check, batch 1, batch 2 -> closed before batch 3
-            r = self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)                  # two groups of two, then it is closing time
+        r = self.start(c["id"])
         data = r.json()["data"]
         self.assertEqual((r.status_code, data["dialed"], data["stopped_by_hours"], data["remaining"]), (200, 4, True, 1))
         self.assertEqual(sorted(self.dialed_numbers()), sorted(x["phone"] for x in self.contacts[:4]))
@@ -460,9 +493,10 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.assertEqual((after["status"], str(after["dial_cursor"])), ("Paused", self.contacts[3]["id"]))
 
     def test_starting_again_carries_on_with_the_rest_and_nobody_is_called_twice(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
+        self.closing_after(None)
         r = self.start(c["id"])
         self.assertEqual((r.status_code, r.json()["data"]["dialed"]), (200, 1))
         numbers = self.dialed_numbers()
@@ -472,9 +506,10 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.assertEqual((after["status"], after["dial_cursor"]), ("Active", None))
 
     def test_resume_does_the_same_as_start_for_a_stopped_run(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
+        self.closing_after(None)
         r = self.api("post", f"/telephony/campaigns/{c['id']}/resume")
         self.assertEqual((r.status_code, r.json()["data"]["dialed"]), (200, 1))
         self.assertEqual(len(set(self.dialed_numbers())), 5)
@@ -486,10 +521,12 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.create_call.assert_not_awaited()
 
     def test_a_stopped_run_will_not_start_while_still_closed(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
-        self.api("patch", f"/telephony/campaigns/{c['id']}", json=hours_body(C, open_now=False))
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
+        self.closing_after(None)               # the clock is back inside the window; the hours are then edited shut
+        closed_day = (self.NOON.weekday() + 3) % 7
+        self.api("patch", f"/telephony/campaigns/{c['id']}", json=self.window(**{C + "days": [closed_day]}))
         before = self.create_call.await_count
         self.assertEqual(self.start(c["id"]).status_code, 400)
         self.assertEqual(self.api("post", f"/telephony/campaigns/{c['id']}/resume").status_code, 400)
@@ -497,8 +534,14 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.assertIsNotNone(self.campaign_row(c["id"])["dial_cursor"])        # the place is kept
 
     def test_closing_before_the_first_call_leaves_the_campaign_as_it_was(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(1):            # the pre-check passes, the first batch finds it closed
+        c = self.make_campaign(**self.window())
+        self.closing_after(None)
+        check = telephony._raise_if_closed
+
+        def closes_right_after_the_check(camp):
+            check(camp)                        # Start's own check still sees it open ...
+            FakeDateTime.instant = self.CLOSING        # ... and the clock reaches closing time before the first call
+        with patch.object(telephony, "_raise_if_closed", closes_right_after_the_check):
             r = self.start(c["id"])
         data = r.json()["data"]
         self.assertEqual((data["dialed"], data["stopped_by_hours"], data["remaining"]), (0, True, 5))
@@ -507,21 +550,23 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.create_call.assert_not_awaited()
 
     def test_a_stop_after_a_resume_moves_the_place_forward(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(2):            # one batch of two
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(2)                  # one group of two
+        self.start(c["id"])
         self.assertEqual(str(self.campaign_row(c["id"])["dial_cursor"]), self.contacts[1]["id"])
-        with self.closing_after(2):            # again one batch (contacts 2 and 3)
-            self.start(c["id"])
+        self.closing_after(2)                  # again one group (contacts 2 and 3)
+        self.start(c["id"])
         self.assertEqual(str(self.campaign_row(c["id"])["dial_cursor"]), self.contacts[3]["id"])
+        self.closing_after(None)
         self.start(c["id"])
         self.assertEqual(len(self.dialed_numbers()), 5)
         self.assertEqual(len(set(self.dialed_numbers())), 5)
 
     def test_when_nothing_is_left_after_the_place_it_says_so_and_forgets_it(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        H.sql("UPDATE public.outbound_campaigns SET dial_cursor = %s, status = 'Paused' WHERE id = %s",
-              (self.contacts[-1]["id"], c["id"]))
+        c = self.make_campaign(**self.window())
+        # a pass parked at its last contact (the place is the last contact in dial order, contacts.seq)
+        H.sql("UPDATE public.outbound_campaigns SET dial_cursor = %s, dial_seq = %s, dial_running = true, status = 'Paused' WHERE id = %s",
+              (self.contacts[-1]["id"], self.contacts[-1]["seq"], c["id"]))
         r = self.start(c["id"])
         self.assertEqual(r.status_code, 400)
         self.assertIn("already been dialed", r.json()["detail"])
@@ -532,30 +577,32 @@ class CampaignStoppedByHoursTests(CampaignBase):
         self.assertEqual(self.start(c["id"]).json()["data"]["dialed"], 5)
 
     def test_changing_the_list_forgets_the_place(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
         other = supabase.table("lists").insert({"user_id": self.user, "name": "Other"}).execute().data[0]
         self.add_contacts(other["id"], 1)
         self.api("patch", f"/telephony/campaigns/{c['id']}", json={"list_id": other["id"]})
         self.assertIsNone(self.campaign_row(c["id"])["dial_cursor"])
 
     def test_resending_the_same_list_keeps_the_place(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
         self.api("patch", f"/telephony/campaigns/{c['id']}", json={"list_id": self.list["id"], "name": "Renamed"})
         self.assertIsNotNone(self.campaign_row(c["id"])["dial_cursor"])
 
     def test_contacts_added_after_the_place_are_picked_up_and_earlier_ones_are_not_repeated(self):
-        c = self.make_campaign(**hours_body(C, open_now=True))
-        with self.closing_after(3):
-            self.start(c["id"])
+        c = self.make_campaign(**self.window())
+        self.closing_after(4)
+        self.start(c["id"])
         late = self.add_contacts(self.list["id"], 2)
+        self.closing_after(None)
         self.start(c["id"])
         numbers = self.dialed_numbers()
         self.assertEqual(len(numbers), len(set(numbers)))            # nobody twice, whatever their id sorts to
         self.assertIn(self.contacts[4]["phone"], numbers)             # the one that was left
+        self.assertTrue({x["phone"] for x in late} <= set(numbers), "contacts added after the place are dialed too")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

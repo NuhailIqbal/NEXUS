@@ -6,13 +6,14 @@ viConfig.setConfig({ testTimeout: 20000 });   // the 96-slot time list and the z
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 vi.mock("@/services/api", () => ({
-  api: { getAgents: vi.fn(), getLists: vi.fn(), getPhoneNumbers: vi.fn(), getDncStatus: vi.fn() },
+  api: { getAgents: vi.fn(), getLists: vi.fn(), getPhoneNumbers: vi.fn(), getDncStatus: vi.fn(), getDialingLimits: vi.fn() },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { toast } from "sonner";
 import { api } from "@/services/api";
-import { CreateCampaignDialog } from "./CreateCampaignDialog";
+import { defaultHours } from "@/components/hours/callingHours";
+import { CreateCampaignDialog, EditCampaignDialog, type CampaignData } from "./CreateCampaignDialog";
 
 const fn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -22,6 +23,10 @@ beforeEach(() => {
   fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
   fn(api.getPhoneNumbers).mockResolvedValue({ data: [{ id: "p1", number: "+15550001111" }], error: null });
   fn(api.getDncStatus).mockResolvedValue({ data: { enabled: false, integration_id: null }, error: null });
+  fn(api.getDialingLimits).mockResolvedValue({
+    data: { account_limit: null, source: null, platform_limit: null, max_concurrent_calls: 20, max_calls_per_minute: 60, max_delay_seconds: 60 },
+    error: null,
+  });
 });
 
 /** Fills step 1 (name, number, agent). The number is chosen first: with the agent dropdown
@@ -35,6 +40,20 @@ async function fillBasics() {
   fireEvent.click(await screen.findByRole("option", { name: "Sara" }));
 }
 const next = () => fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+const DIALING_SUBTITLE = "Choose how the campaign places its calls";
+/** From the Auto Redial step: Next to the Dialing Strategy step, then Next again (the review follows). */
+async function pastRetry() {
+  next();
+  await screen.findByText(DIALING_SUBTITLE);
+  next();
+}
+/** From the review: Previous back to the Auto Redial step. */
+async function backToRetry() {
+  fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+  await screen.findByText(DIALING_SUBTITLE);
+  fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+  await screen.findByText("Call again when a number does not pick up");
+}
 
 /** Step 1 -> 2 -> 3: fills the basics, picks the list, and lands on the Calling Hours step. */
 async function toHoursStep() {
@@ -54,10 +73,10 @@ async function enableHours() {
 }
 
 describe("CreateCampaignDialog: calling hours step", () => {
-  it("the wizard has five steps and step 1 no longer carries the hours", async () => {
+  it("the wizard has six steps and step 1 no longer carries the hours", async () => {
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
     await screen.findByText("Campaign Basics");
-    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 6/)).toBeInTheDocument();
     expect(screen.queryByText("Calling Hours")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Only call during set hours" })).not.toBeInTheDocument();
   });
@@ -65,7 +84,7 @@ describe("CreateCampaignDialog: calling hours step", () => {
   it("step 3 is Calling Hours: off by default, and switching on reveals the pickers", async () => {
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
     await toHoursStep();
-    expect(screen.getByText(/Step 3 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 6/)).toBeInTheDocument();
     expect(hoursSwitch()).not.toBeChecked();
     expect(screen.queryByLabelText("Calls start")).not.toBeInTheDocument();
     fireEvent.click(hoursSwitch());
@@ -83,11 +102,11 @@ describe("CreateCampaignDialog: calling hours step", () => {
     fireEvent.click(hoursSwitch());
     next();
     expect(toast.error).toHaveBeenCalledWith("Select a time zone.");
-    expect(screen.getByText(/Step 3 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 6/)).toBeInTheDocument();
     await pick("Timezone", "karachi");
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     await screen.findByText("Campaign Summary");
   });
 
@@ -102,7 +121,7 @@ describe("CreateCampaignDialog: calling hours step", () => {
       expect(screen.getByLabelText("Timezone")).toHaveTextContent(/Pakistan/);
       next();
       await screen.findByText("Call again when a number does not pick up");
-      next();
+      await pastRetry();
       await screen.findByText("Campaign Summary");
     } finally {
       spy.mockRestore();
@@ -116,7 +135,7 @@ describe("CreateCampaignDialog: calling hours step", () => {
     for (const d of ["Mon", "Tue", "Wed", "Thu", "Fri"]) fireEvent.click(screen.getByRole("button", { name: d }));
     next();
     expect(toast.error).toHaveBeenCalledWith("Pick at least one day.");
-    expect(screen.getByText(/Step 3 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 6/)).toBeInTheDocument();
   });
 
   it("switched off, nothing is checked and the wizard moves on", async () => {
@@ -124,9 +143,9 @@ describe("CreateCampaignDialog: calling hours step", () => {
     await toHoursStep();
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     await screen.findByText("Campaign Summary");
-    expect(screen.getByText(/Step 5 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 6 of 6/)).toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
   });
 
@@ -138,7 +157,7 @@ describe("CreateCampaignDialog: calling hours step", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sat" }));
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
 
     const review = await screen.findByText("Campaign Summary");
     const tile = within(review.closest("div.rounded-xl") as HTMLElement).getByText("Calling Hours").parentElement as HTMLElement;
@@ -155,7 +174,7 @@ describe("CreateCampaignDialog: calling hours step", () => {
     await toHoursStep();
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     await screen.findByText("Campaign Summary");
     expect(screen.getByText("Any time")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
@@ -163,16 +182,15 @@ describe("CreateCampaignDialog: calling hours step", () => {
     expect(onCreate.mock.calls[0][0].hours.enabled).toBe(false);
   });
 
-  it("Previous from the review returns to the hours step with the choices kept", async () => {
+  it("Previous from the review returns to the hours step (through Dialing and Auto Redial) with the choices kept", async () => {
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
     await toHoursStep();
     await enableHours();
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     await screen.findByText("Campaign Summary");
-    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
-    await screen.findByText("Call again when a number does not pick up");
+    await backToRetry();
     fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
     await screen.findByText("Days and times the campaign may call");
     expect(hoursSwitch()).toBeChecked();
@@ -195,7 +213,7 @@ describe("CreateCampaignDialog: breaks and a custom schedule", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add break" }));
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     expect(await reviewHours()).toHaveTextContent("Mon–Fri, 9:00 AM–5:00 PM, break 1:00 PM–2:00 PM (Asia/Karachi)");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].hours).toMatchObject({ mode: "same", breaks: [{ start: "13:00", end: "14:00" }] });
@@ -210,7 +228,7 @@ describe("CreateCampaignDialog: breaks and a custom schedule", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("A break must end after it starts.");
     next();
     expect(toast.error).toHaveBeenCalledWith("A break must end after it starts.");
-    expect(screen.getByText(/Step 3 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 6/)).toBeInTheDocument();
   });
 
   it("a custom schedule per day is summarised by day in the review and kept when going back", async () => {
@@ -224,18 +242,17 @@ describe("CreateCampaignDialog: breaks and a custom schedule", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Monday break" }));
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     expect(await reviewHours()).toHaveTextContent("Mon 9:00 AM–5:00 PM (break 1:00 PM–2:00 PM); Tue–Fri 9:00 AM–5:00 PM; Sat 9:00 AM–1:00 PM (Asia/Karachi)");
 
-    fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
-    await screen.findByText("Call again when a number does not pick up");
+    await backToRetry();
     fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
     await screen.findByText("Days and times the campaign may call");
     expect(radio("Custom schedule per day")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("Saturday end")).toHaveTextContent("1:00 PM");
     next();
     await screen.findByText("Call again when a number does not pick up");
-    next();
+    await pastRetry();
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].hours.mode).toBe("per_day");
@@ -249,7 +266,7 @@ describe("CreateCampaignDialog: breaks and a custom schedule", () => {
     await choose("Wednesday end", "8:00 AM");
     next();
     expect(toast.error).toHaveBeenCalledWith("Wednesday: End time must be after start time.");
-    expect(screen.getByText(/Step 3 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3 of 6/)).toBeInTheDocument();
   });
 });
 
@@ -269,7 +286,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
   it("step 4 is Auto Redial and it is off by default", async () => {
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
     await toRetryStep();
-    expect(screen.getByText(/Step 4 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 4 of 6/)).toBeInTheDocument();
     expect(retrySwitch()).not.toBeChecked();
     expect(screen.queryByLabelText("Calls per number")).not.toBeInTheDocument();
   });
@@ -278,7 +295,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     const onCreate = vi.fn();
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
     await toRetryStep();
-    next();
+    await pastRetry();
     expect(await reviewTile("Auto Redial")).toHaveTextContent("Off");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].retry).toEqual({ enabled: false, maxAttempts: 3, intervalMinutes: 10, retryOn: ["no_answer", "busy", "voicemail", "failed"] });
@@ -292,7 +309,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     await choose("Calls per number", "5 calls");
     await choose("Wait between calls", "15 minutes");
     fireEvent.click(screen.getByRole("checkbox", { name: "Busy" }));
-    next();
+    await pastRetry();
     expect(await reviewTile("Auto Redial")).toHaveTextContent("Up to 5 calls per number, 15 min apart, on no answer, voicemail, call failed");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].retry).toEqual({ enabled: true, maxAttempts: 5, intervalMinutes: 15, retryOn: ["no_answer", "voicemail", "failed"] });
@@ -307,7 +324,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     }
     next();
     expect(toast.error).toHaveBeenCalledWith("Choose at least one outcome to redial on.");
-    expect(screen.getByText(/Step 4 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 4 of 6/)).toBeInTheDocument();
   });
 
   it("the choices are kept when going back and forth", async () => {
@@ -315,11 +332,167 @@ describe("CreateCampaignDialog: auto redial step", () => {
     await toRetryStep();
     fireEvent.click(retrySwitch());
     await choose("Wait between calls", "30 minutes");
+    await pastRetry();
+    await screen.findByText("Campaign Summary");
+    await backToRetry();
+    expect(retrySwitch()).toBeChecked();
+    expect(screen.getByLabelText("Wait between calls")).toHaveTextContent("30 minutes");
+  });
+});
+
+describe("CreateCampaignDialog: dialing strategy step", () => {
+  const strategy = (name: string) => screen.getByRole("radio", { name });
+  /** Wizard on the Dialing Strategy step (step 5), hours and redial left off. */
+  async function toDialingStep() {
+    await toHoursStep();
+    next();
+    await screen.findByText("Call again when a number does not pick up");
+    next();
+    await screen.findByText(DIALING_SUBTITLE);
+  }
+  const reviewTile = async (label: string) => {
+    const review = await screen.findByText("Campaign Summary");
+    return within(review.closest("div.rounded-xl") as HTMLElement).getByText(label).parentElement as HTMLElement;
+  };
+
+  it("step 5 is Dialing Strategy, after Auto Redial, with Sequential chosen by default", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    expect(screen.getByText(/Step 5 of 6/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Dialing Strategy", level: 3 })).toBeInTheDocument();
+    expect(strategy("Sequential")).toBeChecked();
+    expect(screen.queryByLabelText("Concurrent Calls")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Calls per Minute")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Delay between calls (seconds)")).toHaveValue(0);
+  });
+
+  it("Concurrent and Paced each reveal their own number", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Concurrent"));
+    expect(screen.getByLabelText("Concurrent Calls")).toHaveValue(5);
+    expect(screen.queryByLabelText("Calls per Minute")).not.toBeInTheDocument();
+    fireEvent.click(strategy("Paced"));
+    expect(screen.getByLabelText("Calls per Minute")).toHaveValue(10);
+    expect(screen.queryByLabelText("Concurrent Calls")).not.toBeInTheDocument();
+  });
+
+  it("left on the default, the review says Sequential and the campaign is created Sequential", async () => {
+    const onCreate = vi.fn();
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+    await toDialingStep();
+    next();
+    expect(await reviewTile("Dialing Strategy")).toHaveTextContent("Sequential: one call at a time");
+    fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    expect(onCreate.mock.calls[0][0].dialing).toEqual({ strategy: "sequential", concurrentCalls: 5, callsPerMinute: 10, delaySeconds: 0 });
+  });
+
+  it("the chosen settings reach the review and the created campaign", async () => {
+    const onCreate = vi.fn();
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Concurrent"));
+    fireEvent.change(screen.getByLabelText("Concurrent Calls"), { target: { value: "8" } });
+    fireEvent.change(screen.getByLabelText("Delay between calls (seconds)"), { target: { value: "2" } });
+    next();
+    expect(await reviewTile("Dialing Strategy")).toHaveTextContent("Concurrent: up to 8 calls at a time, 2 s between calls");
+    expect(screen.getByText(/Step 6 of 6/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    expect(onCreate.mock.calls[0][0].dialing).toEqual({ strategy: "concurrent", concurrentCalls: 8, callsPerMinute: 10, delaySeconds: 2 });
+  });
+
+  it("a Paced campaign is described with its rate", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Paced"));
+    fireEvent.change(screen.getByLabelText("Calls per Minute"), { target: { value: "30" } });
+    next();
+    expect(await reviewTile("Dialing Strategy")).toHaveTextContent("Paced: 30 calls per minute");
+  });
+
+  it("a number out of range stops the wizard on this step and says why", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Concurrent"));
+    fireEvent.change(screen.getByLabelText("Concurrent Calls"), { target: { value: "25" } });
+    next();
+    expect(toast.error).toHaveBeenCalledWith("Concurrent calls must be a whole number from 1 to 20.");
+    expect(screen.getByText(/Step 5 of 6/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Concurrent Calls"), { target: { value: "20" } });
+    next();
+    await screen.findByText("Campaign Summary");
+  });
+
+  it("a delay out of range stops the wizard too, whichever strategy is chosen", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.change(screen.getByLabelText("Delay between calls (seconds)"), { target: { value: "90" } });
+    next();
+    expect(toast.error).toHaveBeenCalledWith("Delay between calls must be a whole number of seconds from 0 to 60.");
+    expect(screen.getByText(/Step 5 of 6/)).toBeInTheDocument();
+  });
+
+  it("the choices are kept when going back and forth", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Paced"));
+    fireEvent.change(screen.getByLabelText("Calls per Minute"), { target: { value: "20" } });
     next();
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
-    await screen.findByText("Call again when a number does not pick up");
-    expect(retrySwitch()).toBeChecked();
-    expect(screen.getByLabelText("Wait between calls")).toHaveTextContent("30 minutes");
+    await screen.findByText(DIALING_SUBTITLE);
+    expect(strategy("Paced")).toBeChecked();
+    expect(screen.getByLabelText("Calls per Minute")).toHaveValue(20);
+  });
+
+  it("asks for the account's call limit when it opens", async () => {
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await screen.findByText("Campaign Basics");
+    expect(api.getDialingLimits).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns on the step and the review when the settings ask for more than the account allows", async () => {
+    fn(api.getDialingLimits).mockResolvedValue({ data: { account_limit: 3, source: "account", platform_limit: null }, error: null });
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    expect(screen.queryByText(/your account allows/)).not.toBeInTheDocument();
+    fireEvent.click(strategy("Concurrent"));
+    expect(screen.getByText(/but your account allows 3 calls at the same time/)).toBeInTheDocument();
+    next();
+    await screen.findByText("Campaign Summary");
+    expect(screen.getByText(/Calls will run 3 at a time/)).toBeInTheDocument();
+  });
+
+  it("without a limit, or when the limits cannot be read, there is no warning and the wizard still works", async () => {
+    fn(api.getDialingLimits).mockResolvedValue({ data: null, error: "Error 500" });
+    render(<CreateCampaignDialog open onOpenChange={vi.fn()} />);
+    await toDialingStep();
+    fireEvent.click(strategy("Concurrent"));
+    fireEvent.change(screen.getByLabelText("Concurrent Calls"), { target: { value: "20" } });
+    expect(screen.queryByText(/your account allows/)).not.toBeInTheDocument();
+    next();
+    await screen.findByText("Campaign Summary");
+  });
+
+  it("when editing, the step starts from the campaign's settings and says changes apply from now on", async () => {
+    const initial: CampaignData = {
+      status: "Active", name: "Spring", description: "", agentId: "a1", listId: "l1", phoneNumberId: "p1",
+      dncScreeningEnabled: true,
+      hours: defaultHours(),
+      retry: { enabled: false, maxAttempts: 3, intervalMinutes: 10, retryOn: ["no_answer", "busy", "voicemail", "failed"] },
+      dialing: { strategy: "paced", concurrentCalls: 5, callsPerMinute: 24, delaySeconds: 1 },
+    };
+    const onSave = vi.fn().mockResolvedValue(true);
+    render(<EditCampaignDialog open onOpenChange={vi.fn()} initial={initial} onSave={onSave} />);
+    await screen.findByText("Campaign Basics");
+    next(); next(); next(); next();
+    await screen.findByText(DIALING_SUBTITLE);
+    expect(strategy("Paced")).toBeChecked();
+    expect(screen.getByLabelText("Calls per Minute")).toHaveValue(24);
+    expect(screen.getByLabelText("Delay between calls (seconds)")).toHaveValue(1);
+    expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].dialing).toEqual({ strategy: "paced", concurrentCalls: 5, callsPerMinute: 24, delaySeconds: 1 });
   });
 });

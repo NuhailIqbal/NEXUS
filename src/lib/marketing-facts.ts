@@ -36,5 +36,5 @@ export const SIGNUP_CREDIT_EXPIRY_DAYS = 60;
 export const TOP_UP_MIN = "$20";
 /** Largest allowed wallet top-up; mirrors TOPUP_MAX in backend/routers/billing.py. */
 export const TOP_UP_MAX = "$1,000";
-/** Contacts dialed concurrently per batch when a campaign starts; mirrors CAMPAIGN_BATCH_SIZE in backend/routers/telephony.py. */
-export const CAMPAIGN_BATCH_SIZE = 20;
+/** Most calls one campaign can have going at once (its Concurrent Calls setting); mirrors the 1-20 range in backend/services/dial_settings.py and src/lib/dialingStrategy.ts. */
+export const MAX_CONCURRENT_CALLS = 20;

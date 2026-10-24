@@ -17,9 +17,8 @@ from unittest.mock import AsyncMock, patch
 import byot_harness as H
 from config import settings
 from database import supabase
-from fastapi import HTTPException
 from routers import telephony
-from services import call_hours
+from services import call_hours, dialer
 from services.campaign_scheduler import campaign_loop, run_auto_resumes
 
 from test_caller_verification import make_agent
@@ -51,8 +50,9 @@ class SchedulerBase(ZoneBase):
         p = patch.object(telephony, "CAMPAIGN_BATCH_SIZE", 2)
         p.start()
         self.addCleanup(p.stop)
+        # the dial order is the upload order (contacts.seq), not the uuid
         self.expected_order = [c["phone"] for c in sorted(
-            supabase.table("contacts").select("id, phone").eq("list_id", self.list["id"]).execute().data, key=lambda c: c["id"])]
+            supabase.table("contacts").select("id, phone, seq").eq("list_id", self.list["id"]).execute().data, key=lambda c: c["seq"])]
         self.assertEqual(len(self.expected_order), 10)
         # the clock moves to closing time once `_left` more calls have been placed
         self._left = None
@@ -69,7 +69,8 @@ class SchedulerBase(ZoneBase):
         self.create_call.side_effect = placing
 
     def expected_ids(self):
-        return sorted(r["id"] for r in supabase.table("contacts").select("id").eq("list_id", self.list["id"]).execute().data)
+        return [r["id"] for r in sorted(supabase.table("contacts").select("id, seq").eq("list_id", self.list["id"]).execute().data,
+                                        key=lambda r: r["seq"])]
 
     def closing_after(self, calls, instant):
         """After `calls` more calls the (frozen) clock jumps to `instant`, as if the hours ended mid-run."""
@@ -382,6 +383,31 @@ class SafetyTests(SchedulerBase):
         self.assertIn("4 contacts called", note["body"])
         self.assertIn("2 left for the next opening", note["body"])
 
+    def test_the_owner_is_told_how_many_numbers_are_queued_when_the_run_is_not_cut_off_again(self):
+        zone = "Asia/Karachi"
+        c = self.campaign(zone, dial_strategy="sequential")
+        last = self.expected_ids()[3]
+        seq = supabase.table("contacts").select("seq").eq("id", last).execute().data[0]["seq"]
+        # a pass the hours stopped after four contacts (as the engine parks it)
+        H.sql("UPDATE public.outbound_campaigns SET status = 'Paused', dial_running = true, dial_seq = %s, dial_cursor = %s, "
+              "stopped_by_hours_at = %s, dial_pass_started_at = %s WHERE id = %s",
+              (seq, last, local(zone, *DAY, 18).strftime("%Y-%m-%dT%H:%M:%SZ"), local(zone, *DAY, 9).strftime("%Y-%m-%dT%H:%M:%SZ"), c["id"]))
+        self.sweep(local(zone, *day(1), 9, 0))
+        (note,) = self.notifications()
+        self.assertIn("continued automatically", note["title"])
+        self.assertIn("carried on from where it stopped (5 numbers queued)", note["body"], "one call at a time: one placed, five left")
+        self.assertEqual(self.dialed(), self.expected_order[4:5])
+
+    def test_a_campaign_a_person_started_in_the_meantime_is_not_reported_to_the_owner(self):
+        zone = "Asia/Karachi"
+        self.stopped_first_day(zone)
+        self.closing_after(None, None)
+        # between the sweep's claim and its start a person pressed Start: the campaign is already running
+        going = AsyncMock(return_value={"data": {"already_running": True}})
+        with patch.object(telephony, "start_campaign", going):
+            self.assertEqual(self.sweep(local(zone, *day(1), 9, 0)), {"resumed": 0, "waiting": 1, "refused": 0})
+        self.assertEqual(self.notifications(), [])
+
     def test_it_never_touches_another_accounts_campaign_settings(self):
         zone = "Asia/Karachi"
         c = self.stopped_first_day(zone)
@@ -490,7 +516,7 @@ class DuringARunTests(SchedulerBase):
         self.assertEqual(self.start(c["id"]).status_code, 200)
         self.assertEqual(len(self.dialed()), 2, "nobody is called for a campaign that no longer exists")
 
-    def test_a_crash_mid_run_never_causes_repeat_calls_at_worst_that_one_batch_is_skipped(self):
+    def test_a_crash_mid_run_never_causes_repeat_calls_and_loses_nobody(self):
         c = self.make_campaign("UTC", call_hours_enabled=False)
 
         class Crash(BaseException):
@@ -499,56 +525,71 @@ class DuringARunTests(SchedulerBase):
         inner = self.create_call.side_effect
         succeeded: list[str] = []          # the numbers whose call was really placed
 
-        async def dies_in_the_third_batch(payload):
-            if len(self.placed) >= 4:
-                raise Crash()
+        async def placing(payload):
             result = await inner(payload)
             succeeded.append(payload["customer"]["number"])
             return result
-        self.create_call.side_effect = dies_in_the_third_batch
-        with self.assertRaises(Crash):
+        self.create_call.side_effect = placing
+        # the process dies while it saves its place after the THIRD group: those two calls are placed, the place is not saved
+        real_save, saves = dialer._save, {"n": 0}
+
+        def dies_saving_the_third_group(campaign_id, token, fields, list_id="__any__"):
+            if "dial_seq" in fields:
+                saves["n"] += 1
+                if saves["n"] == 3:
+                    raise Crash()
+            return real_save(campaign_id, token, fields, list_id)
+        with patch.object(dialer, "_save", dies_saving_the_third_group), self.assertRaises(Crash):
             asyncio.run(telephony.start_campaign(c["id"], {"user_id": self.user}))
-        self.assertEqual(succeeded, self.expected_order[:4], "two batches were finished before it died")
+        self.assertEqual(succeeded, self.expected_order[:6], "three groups were placed before it died")
         row = self.row(c["id"])
-        # the place was saved BEFORE the third batch was dialed: those two contacts are never called again
-        self.assertEqual(str(row["dial_cursor"]), self.expected_ids()[5])
-        self.assertEqual((row["status"], row["run_token"], row["run_heartbeat_at"]), ("Paused", None, None),
-                         "parked, not left looking like it is running")
+        # the place of the second group was the last one saved; nothing is parked or stuck: the claim is given back
+        self.assertEqual(str(row["dial_cursor"]), self.expected_ids()[3])
+        self.assertEqual((row["status"], row["dial_running"], row["run_token"], row["run_heartbeat_at"]), ("Active", True, None, None))
+        # the next tick re-picks the two unsaved numbers; the duplicate rule recognises them as called: nobody twice, nobody lost
+        self.tick(c["id"])
+        self.assertEqual(succeeded, self.expected_order, "every number exactly once, in order")
+        row = self.row(c["id"])
+        self.assertEqual((row["status"], row["dial_running"], row["dial_cursor"]), ("Active", False, None))
 
-        async def alive(payload):
-            result = await inner(payload)
-            succeeded.append(payload["customer"]["number"])
-            return result
-        self.create_call.side_effect = alive
-        self.assertEqual(self.start(c["id"]).status_code, 200)
-        self.assertEqual(succeeded, self.expected_order[:4] + self.expected_order[6:], "nobody twice; only the interrupted batch was skipped")
-
-    def test_a_campaign_already_running_cannot_be_started_a_second_time(self):
-        c = self.make_campaign("UTC", call_hours_enabled=False)
-        token = str(uuid.uuid4())
-        # (a real run saves its place before dialing its first batch, so a running campaign has one)
-        H.sql("UPDATE public.outbound_campaigns SET run_token = %s, run_heartbeat_at = %s, status = 'Active', dial_cursor = %s WHERE id = %s",
-              (token, FakeDateTime.instant.strftime("%Y-%m-%dT%H:%M:%SZ"), self.expected_ids()[1], c["id"]))
+    def test_a_campaign_already_running_is_not_started_a_second_time(self):
+        c = self.make_campaign("UTC", call_hours_enabled=False, dial_strategy="sequential")
+        self.assertEqual(self.start(c["id"]).json()["data"]["dialed"], 1)         # one call at a time: the pass stays open
+        before = self.row(c["id"])
         for path in ("start", "resume"):
             r = self.api("post", f"/telephony/campaigns/{c['id']}/{path}")
-            self.assertEqual(r.status_code, 409, path)
-            self.assertIn("already running", r.json()["detail"])
-        self.create_call.assert_not_awaited()
-        self.assertEqual(str(self.row(c["id"])["run_token"]), token, "the running run keeps its lease")
+            self.assertEqual(r.status_code, 200, path)
+            self.assertIs(r.json()["data"]["already_running"], True, path)
+        self.assertEqual(len(self.dialed()), 1, "no second call, no second run")
+        after = self.row(c["id"])
+        self.assertEqual({k: after[k] for k in ("status", "dial_running", "dial_seq", "dial_cursor", "dial_pass_started_at")},
+                         {k: before[k] for k in ("status", "dial_running", "dial_seq", "dial_cursor", "dial_pass_started_at")},
+                         "nothing about the running pass changed")
 
-    def test_a_lease_nobody_refreshes_goes_stale_after_ten_minutes_and_can_be_taken_over(self):
-        c = self.make_campaign("UTC", call_hours_enabled=False)
-        for minutes, expected in ((9, 409), (11, 200)):
+    def test_a_claim_nobody_refreshes_goes_stale_after_a_minute_and_is_taken_over(self):
+        c = self.make_campaign("UTC", call_hours_enabled=False, dial_strategy="sequential")
+        self.assertEqual(self.start(c["id"]).json()["data"]["dialed"], 1)
+        self.end_oldest(c["id"])                                       # its call ended: the next one is due
+        for seconds, calls in ((59, 1), (61, 2)):
+            token = str(uuid.uuid4())
             H.sql("UPDATE public.outbound_campaigns SET run_token = %s, run_heartbeat_at = %s WHERE id = %s",
-                  (str(uuid.uuid4()), (FakeDateTime.instant - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ"), c["id"]))
-            self.assertEqual(self.start(c["id"]).status_code, expected, f"{minutes} minutes old")
+                  (token, (FakeDateTime.instant - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ"), c["id"]))
+            res = self.tick(c["id"])
+            self.assertEqual(len(self.dialed()), calls, f"{seconds} seconds old")
+            if seconds == 59:
+                self.assertEqual((res.claimed, res.skipped), (False, "busy"), "a claim 59 s old is respected")
+                self.assertEqual(str(self.row(c["id"])["run_token"]), token, "and left as it is")
+            else:
+                self.assertTrue(res.claimed, "a claim 61 s old is taken over")
+                self.assertIsNone(self.row(c["id"])["run_token"], "and given back when the tick ends")
 
     def test_a_finished_campaign_can_still_be_started_again_as_before(self):
         c = self.make_campaign("UTC", call_hours_enabled=False)
         self.assertEqual(self.start(c["id"]).json()["data"]["dialed"], 10)
         self.assertEqual(self.row(c["id"])["status"], "Active")
         self.hang_up_all()                                              # the first round of calls has ended
-        self.assertEqual(self.start(c["id"]).status_code, 200)         # Active with no place saved: not running
+        self.at(FakeDateTime.instant + timedelta(minutes=5))            # time passes: the new pass starts after the old calls
+        self.assertEqual(self.start(c["id"]).status_code, 200)         # Active with no pass open: not running
         self.assertEqual(len(self.dialed()), 20)
 
     def test_no_place_is_left_behind_when_a_run_finishes(self):
@@ -636,6 +677,12 @@ class LeaseTests(SchedulerBase):
         row = self.row(cid)
         return row["run_token"], row["run_heartbeat_at"]
 
+    def park_at_the_end(self, cid):
+        """The campaign is parked Paused with its place at the LAST contact of its list (dial order): a pass with nothing left."""
+        last = max(supabase.table("contacts").select("id, seq").eq("list_id", self.list["id"]).execute().data, key=lambda r: r["seq"])
+        H.sql("UPDATE public.outbound_campaigns SET dial_cursor = %s, dial_seq = %s, dial_running = true, status = 'Paused' WHERE id = %s",
+              (last["id"], last["seq"], cid))
+
     def acts_after(self, calls, action):
         """After `calls` more calls, run `action()` (what a person does in another request)."""
         self._acts_left = calls
@@ -651,8 +698,8 @@ class LeaseTests(SchedulerBase):
         self.create_call.side_effect = placing
 
     def test_two_starts_at_the_same_moment_dial_the_list_once(self):
-        # 10 contacts is below one batch of 20 in production: the saved place is not visible yet while
-        # the first batch is being dialed, so only the lease can tell the second Start it is too late
+        # 10 contacts is below one group of 20 in production: the second Start finds the pass already open and
+        # answers "already running" (200) instead of starting a second run
         c = self.make_campaign("UTC", call_hours_enabled=False)
 
         async def both():
@@ -663,9 +710,8 @@ class LeaseTests(SchedulerBase):
             )
         results = asyncio.run(both())
         ok = [r for r in results if isinstance(r, dict)]
-        refused = [r for r in results if isinstance(r, HTTPException)]
-        self.assertEqual((len(ok), len(refused)), (1, 1), results)
-        self.assertEqual(refused[0].status_code, 409)
+        self.assertEqual(len(ok), 2, results)
+        self.assertEqual(sorted(r["data"]["already_running"] for r in ok), [False, True], "one started it, the other found it going")
         self.assertEqual(self.dialed(), self.expected_order, "every contact exactly once")
 
     def test_a_pause_followed_by_an_immediate_start_does_not_create_a_second_run(self):
@@ -674,17 +720,17 @@ class LeaseTests(SchedulerBase):
 
         def pause_then_start_at_once():
             self.api("post", f"/telephony/campaigns/{c['id']}/pause")
-            seen["resume"] = self.api("post", f"/telephony/campaigns/{c['id']}/resume").status_code
-            seen["start"] = self.api("post", f"/telephony/campaigns/{c['id']}/start").status_code
+            seen["resume"] = self.api("post", f"/telephony/campaigns/{c['id']}/resume")
+            seen["start"] = self.api("post", f"/telephony/campaigns/{c['id']}/start")
         self.acts_after(2, pause_then_start_at_once)
         data = self.start(c["id"]).json()["data"]
-        self.assertEqual((seen["resume"], seen["start"]), (409, 409), "the first run has not given its lease back yet")
-        self.assertEqual((data["dialed"], data["stopped_by_person"]), (2, True))
-        self.assertEqual(self.dialed(), self.expected_order[:2], "nothing was dialed twice, nothing continued")
-        # once it has stopped, Start carries on from the saved place
-        self.acts_after(None, lambda: None)
-        self.assertEqual(self.start(c["id"]).status_code, 200)
-        self.assertEqual(self.dialed(), self.expected_order)
+        # the tick that is going holds the claim, so the Resume's inline tick has nothing to do (no second run), and the
+        # Start that follows finds the campaign running again
+        self.assertEqual((seen["resume"].status_code, seen["start"].status_code), (200, 200))
+        self.assertEqual(seen["resume"].json()["data"]["dialed"], 0, "the resume's own tick placed nothing: the run that is going has the claim")
+        self.assertIs(seen["start"].json()["data"]["already_running"], True)
+        self.assertNotIn("stopped_by_person", data, "the person pressed Start again straight away: the run was never stopped")
+        self.assertEqual(self.dialed(), self.expected_order, "every contact exactly once: nothing twice, nothing lost")
 
     def test_the_lease_is_given_back_whatever_ends_the_run(self):
         none = (None, None)
@@ -704,30 +750,32 @@ class LeaseTests(SchedulerBase):
         # refused before dialing anything (nothing left after the saved place)
         self.acts_after(None, lambda: None)
         c4 = self.make_campaign("UTC", call_hours_enabled=False)
-        H.sql("UPDATE public.outbound_campaigns SET dial_cursor = %s, status = 'Paused' WHERE id = %s", (self.expected_ids()[-1], c4["id"]))
+        self.park_at_the_end(c4["id"])
         self.assertEqual(self.start(c4["id"]).status_code, 400)
         self.assertEqual(self.lease(c4["id"]), none, "refused")
 
-    def test_an_error_from_a_service_mid_run_parks_the_campaign_instead_of_leaving_it_running(self):
+    def test_an_error_from_a_service_mid_run_never_leaves_the_claim_held_or_calls_anyone_twice(self):
         from services import whitelist_service
         c = self.make_campaign("UTC", call_hours_enabled=False, dnc_screening_enabled=True)
         calls = {"n": 0}
 
         async def check(owner, phone, cached=None):
             calls["n"] += 1
-            if calls["n"] > 4:                                   # the third batch's screening fails
+            if calls["n"] > 4:                                   # the third group's screening fails
                 raise RuntimeError("screening service down")
             return {"allowed": True, "reason": None}
-        with patch.object(whitelist_service, "check_number", check), self.assertRaises(RuntimeError):
-            self.direct(c["id"])
+        with patch.object(whitelist_service, "check_number", check):
+            data = self.direct(c["id"])["data"]                 # the error is handled: Start still answers
+        self.assertEqual(data["dialed"], 4)
         row = self.row(c["id"])
-        self.assertEqual((row["status"], row["run_token"]), ("Paused", None))
+        self.assertEqual((row["status"], row["dial_running"], row["run_token"]), ("Active", True, None), "going on, claim given back")
         self.assertEqual(self.dialed(), self.expected_order[:4])
-        self.assertEqual(str(row["dial_cursor"]), self.expected_ids()[5], "the failed batch is not retried")
-        # a person can start it again at once (the lease is free) and nobody is called twice
+        self.assertEqual(str(row["dial_cursor"]), self.expected_ids()[3], "the failed group is not passed: it stays queued")
+        self.assertIsNotNone(row["dial_next_at"], "and the engine waits a little before it looks at it again")
+        # the service is back: the next tick (after the wait) carries on, and nobody is called twice
         with patch.object(whitelist_service, "check_number", AsyncMock(return_value={"allowed": True, "reason": None})):
-            self.assertEqual(self.start(c["id"]).status_code, 200)
-        self.assertEqual(self.dialed(), self.expected_order[:4] + self.expected_order[6:])
+            self.tick(c["id"], FakeDateTime.instant + timedelta(minutes=1))
+        self.assertEqual(self.dialed(), self.expected_order)
 
     def test_changing_the_list_mid_run_stops_it_and_never_stores_the_old_lists_place(self):
         zone = "Asia/Karachi"
@@ -780,14 +828,19 @@ class LeaseTests(SchedulerBase):
         row = self.row(c["id"])
         self.assertEqual((row["status"], row["stopped_by_hours_at"], row["dial_cursor"] is not None), ("Active", None, True))
         self.at(local(zone, *day(1), 9))
+        # An Active campaign with a pass open IS running: Start only says so (200, nothing placed) ...
         r = self.start(c["id"])
-        self.assertEqual(r.status_code, 200, "not mistaken for a running campaign")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIs(r.json()["data"]["already_running"], True)
+        self.assertEqual(len(self.dialed()), 4)
+        # ... and the engine (its next tick) carries on by itself from the saved place: it is not stuck
+        self.tick(c["id"])
         self.assertEqual(self.dialed(), self.expected_order, "it carries on from the saved place")
 
     def test_nothing_left_after_the_saved_place_clears_the_marker_and_the_lease_too(self):
         zone = "Asia/Karachi"
         c = self.stopped_first_day(zone)
-        H.sql("UPDATE public.outbound_campaigns SET dial_cursor = %s WHERE id = %s", (self.expected_ids()[-1], c["id"]))
+        self.park_at_the_end(c["id"])
         self.at(local(zone, *day(1), 9))
         r = self.start(c["id"])
         self.assertEqual(r.status_code, 400)
@@ -820,10 +873,13 @@ class LeaseTests(SchedulerBase):
         self.at(local(zone, *day(1), 9))
         with patch.object(call_hours, "is_open", side_effect=closes_after_the_first_check):
             r = self.start(c["id"])
-        self.assertEqual(r.status_code, 400)
+        # the engine finds the hours closed before its first call and parks the pass again (it used to refuse with a 400)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["data"]["stopped_by_hours"])
+        self.assertEqual(self.dialed(), self.expected_order[:4], "nothing was dialed")
         row = self.row(c["id"])
-        self.assertEqual((row["status"], row["stopped_by_hours_at"], row["dial_cursor"]),
-                         (before["status"], before["stopped_by_hours_at"], before["dial_cursor"]),
+        self.assertEqual((row["status"], row["stopped_by_hours_at"] is not None, row["dial_cursor"]),
+                         (before["status"], True, before["dial_cursor"]),
                          "still Paused, still marked to continue, same place")
         self.assertIsNone(row["run_token"])
 
@@ -848,10 +904,14 @@ class LeaseTests(SchedulerBase):
         H.sql("UPDATE public.outbound_campaigns SET run_token = %s, run_heartbeat_at = %s WHERE id = %s",
               (token, opens.strftime("%Y-%m-%dT%H:%M:%SZ"), c["id"]))        # a person's run (or another worker's) is on it
         before = len(self.dialed())
-        self.assertEqual(self.sweep(opens), {"resumed": 0, "waiting": 1, "refused": 0})
-        self.assertEqual(len(self.dialed()), before, "not dialed a second time")
-        self.assertEqual(self.notifications(), [], "and no false alarm")
-        self.assertEqual(str(self.row(c["id"])["run_token"]), token, "their lease is untouched")
+        # (a claim is only ever held while a tick is placing calls, 60 s at most without a sign of life)
+        self.assertEqual(self.sweep(opens), {"resumed": 1, "waiting": 0, "refused": 0})
+        self.assertEqual(len(self.dialed()), before, "the sweep's own tick found the claim taken: not dialed a second time")
+        self.assertFalse([n for n in self.notifications() if "could not continue" in n["title"]], "and no false alarm")
+        self.assertEqual(str(self.row(c["id"])["run_token"]), token, "their claim is untouched")
+        # once that claim has gone stale the campaign (Active again, pass open) is carried on by the next tick
+        self.tick(c["id"], opens + timedelta(seconds=61))
+        self.assertEqual(self.dialed(), self.expected_order, "every contact exactly once")
 
     def test_a_long_run_does_not_hold_up_the_next_sweep(self):
         karachi = self.stopped_first_day("Asia/Karachi")
@@ -904,6 +964,10 @@ class WiringTests(unittest.TestCase):
     def test_the_app_starts_the_loop(self):
         import main
         self.assertTrue(any(getattr(h, "__name__", "") == "_start_campaign_scheduler" for h in main.app.router.on_startup))
+
+    def test_the_app_starts_the_dialer_too(self):
+        import main
+        self.assertTrue(any(getattr(h, "__name__", "") == "_start_dialer" for h in main.app.router.on_startup))
 
     def test_the_hours_module_and_the_scheduler_agree_on_what_open_means(self):
         zone = "Pacific/Chatham"

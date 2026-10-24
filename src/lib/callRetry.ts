@@ -128,7 +128,23 @@ export type AttemptRow = {
   ended_at: string | null;
   outcome: string | null;
   ended_reason: string | null;
+  // How the call was placed (absent on calls from before the dialing strategies): the campaign's strategy then,
+  // the slot it held (Sequential and Concurrent), its wave (Concurrent) and whether it was a first call or a redial.
+  dial_strategy?: string | null;
+  dial_slot?: number | null;
+  dial_batch?: number | null;
+  dial_source?: string | null;
 };
+
+/** "slot 2 · wave 1", "paced · redial": how a call was placed, or null for a call without that record. */
+export function describeAttemptDial(h: Pick<AttemptRow, "dial_strategy" | "dial_slot" | "dial_batch" | "dial_source">): string | null {
+  const parts: string[] = [];
+  if (h.dial_strategy === "paced") parts.push("paced");
+  if (h.dial_slot != null) parts.push(`slot ${h.dial_slot}`);
+  if (h.dial_strategy === "concurrent" && h.dial_batch != null) parts.push(`wave ${h.dial_batch}`);
+  if (h.dial_source === "redial") parts.push("redial");
+  return parts.length ? parts.join(" · ") : null;
+}
 
 /** One number of a campaign (GET /telephony/campaigns/:id/numbers). */
 export type CampaignNumber = {

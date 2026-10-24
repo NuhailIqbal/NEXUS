@@ -75,6 +75,55 @@ def _ended_recently(call: dict) -> bool:
         return False
 
 
+_background: set = set()        # post-call automations running in the background (kept so they are not garbage collected)
+
+
+async def _automate(user_id: str, call_id: str, conversation: dict) -> None:
+    try:
+        await run_post_call_automations(user_id, conversation)
+    except Exception as automation_error:
+        logger.warning(f"vapi-sync: automations failed for call {call_id}: {automation_error}")
+
+
+async def drain_background() -> None:
+    """Wait for the post-call automations that import_and_automate(background=True) started (tests, shutdown)."""
+    while _background:
+        await asyncio.gather(*list(_background), return_exceptions=True)
+
+
+async def import_and_automate(full: dict, user_id: str, agent_hint: str | None = None, *, background: bool = False) -> str | None:
+    """Store one ended call (`full` is the whole record from vapi_client.get_call) for `user_id` and, only the
+    FIRST time it is imported, run the account's post-call automations. Returns import_vapi_call's result
+    ("imported", "updated", ...).
+
+    This is the one place a call may be imported from the provider's side (the background sync and the
+    dialer's reconciler both come here): automations run only when the result is "imported", so a call
+    imported by one path and seen again by the other never runs a flow twice. Raises what import_vapi_call
+    raises; a failing automation is logged and never turns the import into a failure.
+
+    `background=True` (the reconciler) starts the automations as a task of their own and returns without waiting
+    for them: a Flow with a delay node can sleep up to a minute, and the call's slot is already free."""
+    call_id = full.get("id")
+    # import_vapi_call is synchronous (DB writes + billing), so run it off the event loop.
+    res = await asyncio.to_thread(import_vapi_call, full, user_id, agent_hint)
+    if res == "imported":
+        # The real-time call_ended webhook (which normally fires automations)
+        # can't reach a localhost backend — this poll loop is the only place
+        # a locally-run backend ever learns a call ended, so it must trigger
+        # post-call automations itself. Only on first import, not on later
+        # "updated" passes (e.g. a recording arriving late), so a flow never
+        # runs twice for the same call.
+        conversation = await asyncio.to_thread(_get_conversation, call_id)
+        if conversation:
+            if background:
+                task = asyncio.ensure_future(_automate(user_id, call_id, conversation))
+                _background.add(task)
+                task.add_done_callback(_background.discard)
+            else:
+                await _automate(user_id, call_id, conversation)
+    return res
+
+
 async def run_global_sync() -> dict:
     """One sync pass: pull recent VAPI calls and import new/incomplete ones."""
     # Nothing to do until VAPI credentials are configured.
@@ -134,22 +183,9 @@ async def run_global_sync() -> dict:
                     user_id, agent_hint = assistant_map.get(full["assistantId"]), None
                     if user_id is None:
                         continue
-            # import_vapi_call is synchronous (DB writes + billing), so run it off the event loop.
-            res = await asyncio.to_thread(import_vapi_call, full, user_id, agent_hint)
+            res = await import_and_automate(full, user_id, agent_hint)
             if res == "imported":
                 imported += 1
-                # The real-time call_ended webhook (which normally fires automations)
-                # can't reach a localhost backend — this poll loop is the only place
-                # a locally-run backend ever learns a call ended, so it must trigger
-                # post-call automations itself. Only on first import, not on later
-                # "updated" passes (e.g. a recording arriving late), so a flow never
-                # runs twice for the same call.
-                conversation = await asyncio.to_thread(_get_conversation, c["id"])
-                if conversation:
-                    try:
-                        await run_post_call_automations(user_id, conversation)
-                    except Exception as automation_error:
-                        logger.warning(f"vapi-sync: automations failed for call {c['id']}: {automation_error}")
             elif res == "updated":
                 updated += 1
         except Exception as e:  # never let one bad call abort the whole pass

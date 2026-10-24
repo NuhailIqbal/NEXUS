@@ -829,11 +829,287 @@ def _ensure_columns(conn) -> None:
     ]
     for stmt in statements:
         try:
-            conn.execute(stmt)
+            if callable(stmt):
+                stmt(conn)
+            else:
+                conn.execute(stmt)
         except Exception as e:  # noqa: BLE001
             # The log label is whatever follows "EXISTS" in the statement (usually the target
-            # name); a statement without that word is logged in full.
-            logger.warning("auto-migrate: column ensure skipped (%s): %s", stmt.split("EXISTS", 1)[-1].strip(), e)
+            # name); a statement without that word is logged in full. A step that is a function
+            # is labelled by its name.
+            label = getattr(stmt, "__name__", None) or stmt.split("EXISTS", 1)[-1].strip()
+            logger.warning("auto-migrate: column ensure skipped (%s): %s", label, e)
+    # Dialing strategy (services/dial_settings.py, services/dialer.py): see _DIALING_STATEMENTS.
+    _run_dialing_statements(conn)
+
+
+# Indexes of the dialing migration (all created IF NOT EXISTS; checked by name so a boot after the first
+# does not take a table lock just to find them there).
+_DIALING_INDEXES = ("contacts_list_seq_idx", "campaign_attempts_slot_idx", "campaign_attempts_open_idx",
+                    "campaign_attempts_placed_idx", "campaign_attempts_ended_idx", "campaign_attempts_camp_key_idx")
+
+# How long a dialing DDL statement may wait for its table lock before it is skipped (and retried at the next boot).
+_DIALING_LOCK_TIMEOUT = "5s"
+
+
+def _dialing_state(conn) -> dict:
+    """What of the dialing migration is already done, from ONE cheap catalogue query (no table is scanned except
+    the small campaigns table). Keys: cols (every column exists), seq (contacts.seq exists, is NOT NULL and has
+    its default; NOT NULL means no row without a number can exist, so no table scan is needed), trigger,
+    campaigns (the four settings columns are NOT NULL with defaults and the CHECK exists), indexes, legacy (a
+    campaign parked mid-pass by the old engine still waits to be converted)."""
+    cols = [f"{t}.{c}" for t, c in DIALING_COLUMNS]
+    # pg_attribute, not information_schema: the catalogue is read without taking any table lock, so the probe
+    # never waits behind a long transaction (information_schema evaluates the defaults, which opens the table).
+    cols_sql = ("SELECT count(*) FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' "
+                "AND a.attnum > 0 AND NOT a.attisdropped")
+    row = conn.execute(
+        f"""SELECT
+             ({cols_sql} AND c.relname || '.' || a.attname = ANY(%s)) AS cols,
+             ({cols_sql} AND c.relname = 'contacts' AND a.attname = 'seq' AND a.attnotnull AND a.atthasdef) AS seq,
+             EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'contacts_seq_list_change' AND NOT tgisinternal) AS trigger,
+             ({cols_sql} AND c.relname = 'outbound_campaigns' AND a.attname IN
+                  ('dial_strategy', 'dial_concurrent_calls', 'dial_calls_per_minute', 'dial_delay_seconds')
+                AND a.attnotnull AND a.atthasdef) AS settings,
+             EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'outbound_campaigns_dial_chk') AS chk,
+             (SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = ANY(%s)) AS indexes""",
+        (cols, list(_DIALING_INDEXES))).fetchone()
+    row = dict(row) if isinstance(row, dict) else dict(zip(("cols", "seq", "trigger", "settings", "chk", "indexes"), row))
+    cols_done = int(row["cols"]) == len(cols)
+    legacy = False
+    if cols_done:
+        legacy = bool(conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM public.outbound_campaigns WHERE dial_cursor IS NOT NULL "
+            "AND dial_pass_started_at IS NULL)").fetchone()[0])
+    return {"cols": cols_done, "seq": int(row["seq"]) == 1, "trigger": bool(row["trigger"]),
+            "campaigns": int(row["settings"]) == 4 and bool(row["chk"]), "indexes": int(row["indexes"]) == len(_DIALING_INDEXES),
+            "legacy": legacy or not cols_done}
+
+
+# Which finished piece makes a statement a no-op (first match wins; a statement matching none always runs).
+# "legacy" is True while a campaign parked mid-pass by the old engine still has to be converted.
+_DIALING_SKIP = (
+    ("CREATE SEQUENCE", "seq"), ("_backfill_contacts_seq", "seq"), ("setval", "seq"), ("ALTER COLUMN seq", "seq"),
+    ("UPDATE public.contacts SET seq", "seq"),
+    ("contacts_seq_on_list_change", "trigger"), ("DROP TRIGGER", "trigger"), ("CREATE TRIGGER", "trigger"),
+    ("dial_strategy IS NULL", "campaigns"), ("coalesce(dial_concurrent_calls", "campaigns"),
+    ("ALTER COLUMN dial_", "campaigns"), ("outbound_campaigns_dial_chk", "campaigns"),
+    ("INDEX IF NOT EXISTS", "indexes"),
+    ("ADD COLUMN IF NOT EXISTS", "cols"),
+    ("UPDATE public.outbound_campaigns SET dial_running", "legacy"),
+)
+
+
+def _run_dialing_statements(conn) -> None:
+    """Run _DIALING_STATEMENTS so that every boot after the first is a cheap no-op: ONE catalogue query says
+    what is already done, and the statements of a finished piece (the contacts.seq numbering, the SET NOT NULL /
+    SET DEFAULT steps, the trigger, the columns, the indexes) are not run at all. The group runs with a lock_timeout
+    (a statement that cannot get its lock in _DIALING_LOCK_TIMEOUT is skipped with a warning and tried again at
+    the next boot, instead of queueing behind a long query and blocking every other one)."""
+    try:
+        state = _dialing_state(conn)
+    except Exception as e:  # noqa: BLE001 - an unreadable catalogue means: run everything, as before
+        logger.warning("auto-migrate: could not read the dialing migration state (%s); running every step", e)
+        state = {}
+    if state and state["cols"] and state["seq"] and state["trigger"] and state["campaigns"] and state["indexes"] \
+            and not state["legacy"]:
+        return
+    # The lock_timeout covers the whole group (the back-fill's row updates as well as the DDL) and is put back after.
+    conn.execute(f"SET lock_timeout = '{_DIALING_LOCK_TIMEOUT}'")
+    try:
+        for stmt in _DIALING_STATEMENTS:
+            text = getattr(stmt, "__name__", None) if callable(stmt) else stmt
+            key = next((k for needle, k in _DIALING_SKIP if needle in text), None)
+            if key and state:
+                done = (not state["legacy"]) if key == "legacy" else state[key]
+                if done:
+                    continue
+            try:
+                if callable(stmt):
+                    stmt(conn)
+                else:
+                    conn.execute(stmt)
+            except Exception as e:  # noqa: BLE001
+                label = getattr(stmt, "__name__", None) or stmt.split("EXISTS", 1)[-1].strip()
+                logger.warning("auto-migrate: column ensure skipped (%s): %s", label, e)
+    finally:
+        try:
+            conn.execute("RESET lock_timeout")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# Contacts numbered per statement by the contacts.seq back-fill.
+_SEQ_CHUNK = 50000
+
+
+def _backfill_contacts_seq(conn) -> None:
+    """Give every contact without an upload-order number (`contacts.seq`) one, oldest first
+    (created_at, then id), continuing after the highest number already in use. Done in chunks of
+    _SEQ_CHUNK so a very large table is never rewritten in one statement; each chunk numbers the oldest
+    remaining rows 1..N above the current maximum, so the result is the same as one pass. A no-op once
+    every row has a number."""
+    while True:
+        done = conn.execute(
+            """UPDATE public.contacts c SET seq = b.base + r.n
+               FROM (SELECT id, row_number() OVER (ORDER BY created_at, id) AS n
+                     FROM public.contacts WHERE seq IS NULL ORDER BY created_at, id LIMIT %s) r,
+                    (SELECT coalesce(max(seq), 0) AS base FROM public.contacts) b
+               WHERE c.id = r.id""",
+            (_SEQ_CHUNK,),
+        ).rowcount
+        if not done:
+            return
+
+
+# The dialing-strategy migration. NOTHING of it is declared in schema.sql: _sync_columns_from_schema
+# runs BEFORE _ensure_columns and would add the columns with their final defaults, so the back-fill
+# below could no longer tell a campaign that existed before this feature (it dialed in batches of up
+# to 20 at once, so it becomes Concurrent / 20) from one created after it (Sequential / 5 / 10 / 0).
+# Each entry runs on its own with its own try/except (see the loop above) and is safe to repeat.
+_DIALING_STATEMENTS = [
+    # Settings: nullable first, so that legacy rows can be recognised by the NULL.
+    '''ALTER TABLE public.outbound_campaigns
+         ADD COLUMN IF NOT EXISTS dial_strategy text,
+         ADD COLUMN IF NOT EXISTS dial_concurrent_calls integer,
+         ADD COLUMN IF NOT EXISTS dial_calls_per_minute integer,
+         ADD COLUMN IF NOT EXISTS dial_delay_seconds integer''',
+    # Legacy back-fill (runs once: afterwards no row is NULL).
+    '''UPDATE public.outbound_campaigns SET dial_strategy = 'concurrent', dial_concurrent_calls = 20,
+         dial_calls_per_minute = 10, dial_delay_seconds = 0 WHERE dial_strategy IS NULL''',
+    # A row that is still partly NULL (inserted half-way by another process) gets the new-campaign
+    # default per column, so the NOT NULL below cannot fail.
+    '''UPDATE public.outbound_campaigns SET dial_concurrent_calls = coalesce(dial_concurrent_calls, 5),
+         dial_calls_per_minute = coalesce(dial_calls_per_minute, 10), dial_delay_seconds = coalesce(dial_delay_seconds, 0)
+         WHERE dial_concurrent_calls IS NULL OR dial_calls_per_minute IS NULL OR dial_delay_seconds IS NULL''',
+    '''ALTER TABLE public.outbound_campaigns
+         ALTER COLUMN dial_strategy SET DEFAULT 'sequential', ALTER COLUMN dial_strategy SET NOT NULL,
+         ALTER COLUMN dial_concurrent_calls SET DEFAULT 5, ALTER COLUMN dial_concurrent_calls SET NOT NULL,
+         ALTER COLUMN dial_calls_per_minute SET DEFAULT 10, ALTER COLUMN dial_calls_per_minute SET NOT NULL,
+         ALTER COLUMN dial_delay_seconds SET DEFAULT 0, ALTER COLUMN dial_delay_seconds SET NOT NULL''',
+    # ADD CONSTRAINT has no IF NOT EXISTS, so the guard is on the catalogue.
+    '''DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'outbound_campaigns_dial_chk') THEN
+           ALTER TABLE public.outbound_campaigns ADD CONSTRAINT outbound_campaigns_dial_chk CHECK (
+             dial_strategy IN ('sequential', 'concurrent', 'paced') AND dial_concurrent_calls BETWEEN 1 AND 20
+             AND dial_calls_per_minute BETWEEN 1 AND 60 AND dial_delay_seconds BETWEEN 0 AND 60);
+         END IF;
+       END $$''',
+    # Engine state (written by the server only).
+    '''ALTER TABLE public.outbound_campaigns
+         ADD COLUMN IF NOT EXISTS dial_running boolean NOT NULL DEFAULT false,
+         ADD COLUMN IF NOT EXISTS dial_seq bigint,
+         ADD COLUMN IF NOT EXISTS dial_legacy_cursor uuid,
+         ADD COLUMN IF NOT EXISTS dial_next_at timestamptz,
+         ADD COLUMN IF NOT EXISTS dial_pass_started_at timestamptz,
+         ADD COLUMN IF NOT EXISTS dial_batch_seq integer NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS dial_stall text,
+         ADD COLUMN IF NOT EXISTS dial_counters jsonb NOT NULL DEFAULT '{}'::jsonb''',
+    # A legacy campaign parked or killed mid-pass becomes an open pass that carries on after its old
+    # cursor, Paused so that nobody is called at deploy time; its marker (stopped_by_hours_at) is kept so
+    # the automatic continuing still applies. dial_pass_started_at is what makes this run only once.
+    '''UPDATE public.outbound_campaigns SET dial_running = true, dial_legacy_cursor = dial_cursor, dial_seq = NULL,
+         dial_pass_started_at = now(), status = CASE WHEN status = 'Active' THEN 'Paused' ELSE status END,
+         run_token = NULL, run_heartbeat_at = NULL
+       WHERE dial_cursor IS NOT NULL AND dial_pass_started_at IS NULL''',
+    # Upload order: contacts get a number that grows with every insert (and every move into another list).
+    'CREATE SEQUENCE IF NOT EXISTS public.contacts_seq_seq',
+    'ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS seq bigint',
+    _backfill_contacts_seq,
+    # Never lower the sequence: take whichever is higher, the largest number in use or where it already is.
+    '''SELECT setval('public.contacts_seq_seq', greatest((SELECT coalesce(max(seq), 1) FROM public.contacts),
+         (SELECT last_value FROM public.contacts_seq_seq), 1))''',
+    "ALTER TABLE public.contacts ALTER COLUMN seq SET DEFAULT nextval('public.contacts_seq_seq')",
+    # Rows inserted while the back-fill ran (they had no default yet).
+    "UPDATE public.contacts SET seq = nextval('public.contacts_seq_seq') WHERE seq IS NULL",
+    'ALTER TABLE public.contacts ALTER COLUMN seq SET NOT NULL',
+    'CREATE INDEX IF NOT EXISTS contacts_list_seq_idx ON public.contacts (list_id, seq) WHERE phone IS NOT NULL',
+    '''CREATE OR REPLACE FUNCTION public.contacts_seq_on_list_change() RETURNS trigger AS $$
+         BEGIN NEW.seq := nextval('public.contacts_seq_seq'); RETURN NEW; END $$ LANGUAGE plpgsql''',
+    'DROP TRIGGER IF EXISTS contacts_seq_list_change ON public.contacts',
+    '''CREATE TRIGGER contacts_seq_list_change BEFORE UPDATE OF list_id ON public.contacts FOR EACH ROW
+         WHEN (OLD.list_id IS DISTINCT FROM NEW.list_id) EXECUTE FUNCTION public.contacts_seq_on_list_change()''',
+    # Per-call log: how each call was placed. dial_source is 'fresh' (the list) or 'redial'.
+    '''ALTER TABLE public.campaign_attempts ADD COLUMN IF NOT EXISTS dial_strategy text,
+         ADD COLUMN IF NOT EXISTS dial_slot smallint, ADD COLUMN IF NOT EXISTS dial_batch integer,
+         ADD COLUMN IF NOT EXISTS dial_source text''',
+    # One open call per slot of a campaign (the slot index is what lets two ticks race safely).
+    '''CREATE UNIQUE INDEX IF NOT EXISTS campaign_attempts_slot_idx ON public.campaign_attempts (campaign_id, dial_slot)
+         WHERE ended_at IS NULL AND dial_slot IS NOT NULL''',
+    'CREATE INDEX IF NOT EXISTS campaign_attempts_open_idx ON public.campaign_attempts (campaign_id) WHERE ended_at IS NULL',
+    'CREATE INDEX IF NOT EXISTS campaign_attempts_placed_idx ON public.campaign_attempts (campaign_id, placed_at DESC)',
+    '''CREATE INDEX IF NOT EXISTS campaign_attempts_ended_idx ON public.campaign_attempts (campaign_id, ended_at DESC)
+         WHERE ended_at IS NOT NULL''',
+    'CREATE INDEX IF NOT EXISTS campaign_attempts_camp_key_idx ON public.campaign_attempts (campaign_id, phone_key)',
+    # Limits: an account's own cap on calls at the same time (NULL = the platform default) and the
+    # platform-wide ones (NULL = no cap). dial_learned_cap is what the provider last refused, until
+    # dial_learned_until.
+    'ALTER TABLE public.billing ADD COLUMN IF NOT EXISTS max_concurrent_calls integer',
+    '''ALTER TABLE public.platform_settings ADD COLUMN IF NOT EXISTS dial_account_default integer,
+         ADD COLUMN IF NOT EXISTS dial_platform_max integer, ADD COLUMN IF NOT EXISTS dial_learned_cap integer,
+         ADD COLUMN IF NOT EXISTS dial_learned_until timestamptz''',
+]
+
+# Every column the dialing engine needs, as (table, column). Checked by missing_dialing_columns().
+DIALING_COLUMNS = (
+    [("outbound_campaigns", c) for c in (
+        "dial_strategy", "dial_concurrent_calls", "dial_calls_per_minute", "dial_delay_seconds", "dial_running",
+        "dial_seq", "dial_legacy_cursor", "dial_next_at", "dial_pass_started_at", "dial_batch_seq", "dial_stall",
+        "dial_counters")]
+    + [("contacts", "seq")]
+    + [("campaign_attempts", c) for c in ("dial_strategy", "dial_slot", "dial_batch", "dial_source")]
+    + [("billing", "max_concurrent_calls")]
+    + [("platform_settings", c) for c in ("dial_account_default", "dial_platform_max", "dial_learned_cap", "dial_learned_until")]
+)
+
+
+def missing_dialing_columns(conn=None) -> list[str]:
+    """The "table.column" names the dialing engine needs that the live database lacks (empty = ready). A
+    contacts.seq that exists but is half-applied is reported too: "contacts.seq (no default)" (new contacts would
+    get no number and never be dialed) and "contacts.seq (nullable)".
+
+    Preflight for the dispatcher at startup and for Start: a migration step that failed is only logged
+    (see bootstrap_schema), so the engine checks for itself instead of failing on its first query.
+    Without `conn` it uses the app's connection pool; with one (a psycopg connection) it uses that."""
+    # pg_attribute (lock-free), not information_schema: this runs at startup and must not queue behind a long
+    # transaction holding one of the tables.
+    rows_sql = ("SELECT c.relname AS table_name, a.attname AS column_name, "
+                "CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable, "
+                "CASE WHEN a.atthasdef THEN 'default' END AS column_default "
+                "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped AND c.relname = ANY(%s)")
+    tables = sorted({t for t, _ in DIALING_COLUMNS})
+    if conn is not None:
+        rows = conn.execute(rows_sql, (tables,)).fetchall()
+    else:
+        from db_pg import _get_pool  # lazy: db_pg opens its pool on first use
+
+        with _get_pool().connection() as c:
+            rows = c.execute(rows_sql, (tables,)).fetchall()
+    # dict rows (the app pool) or plain tuples (a bare psycopg connection)
+    info = {}
+    for r in rows:
+        t, c, nullable, default = ((r["table_name"], r["column_name"], r["is_nullable"], r["column_default"])
+                                   if isinstance(r, dict) else (r[0], r[1], r[2], r[3]))
+        info[(t, c)] = (nullable, default)
+    out = [f"{t}.{c}" for t, c in DIALING_COLUMNS if (t, c) not in info]
+    if ("contacts", "seq") in info:
+        nullable, default = info[("contacts", "seq")]
+        if default is None:
+            out.append("contacts.seq (no default)")
+        if nullable != "NO":
+            out.append("contacts.seq (nullable)")
+    return out
+
+
+def dialing_ready(conn=None) -> bool:
+    """True when every column the dialing engine needs exists (see missing_dialing_columns)."""
+    try:
+        return not missing_dialing_columns(conn)
+    except Exception:  # noqa: BLE001 - an unreadable catalogue is "not ready", never a crash
+        logger.warning("auto-migrate: could not check the dialing columns", exc_info=True)
+        return False
 
 
 def _backfill_phone_billing_dates(conn) -> None:

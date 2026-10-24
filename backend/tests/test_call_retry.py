@@ -143,6 +143,13 @@ class RetryBase(ZoneBase):
         self.create_call.side_effect = recording
 
     # ── building blocks ──
+    _prefix_counter = 0
+
+    def fresh_prefix(self):
+        """A 3-digit number block no other contact of this test uses (str hash() is randomised per run: it collided)."""
+        RetryBase._prefix_counter += 1
+        return 200 + RetryBase._prefix_counter % 700
+
     def add_contacts(self, n, list_id=None, prefix="+1555111"):
         start = len(supabase.table("contacts").select("id").eq("list_id", list_id or self.list["id"]).execute().data)
         rows = [{"user_id": self.user, "list_id": list_id or self.list["id"], "name": f"P{start + i}",
@@ -152,6 +159,9 @@ class RetryBase(ZoneBase):
     def campaign(self, **extra):
         body = {"name": "Retry", "agent_id": self.agent["id"], "list_id": self.list["id"],
                 "phone_number_id": self.out_number["id"], "dnc_screening_enabled": False,
+                # dial the whole list in Start, as every campaign did before a strategy could be chosen (unless the
+                # test picks its own dialing settings)
+                **({} if any(k.startswith("dial_") for k in extra) else H.LEGACY_DIAL),
                 "retry_enabled": True, "retry_max_attempts": 3, "retry_interval_minutes": 10, **extra}
         r = self.api("post", "/telephony/campaigns", json=body)
         self.assertEqual(r.status_code, 200, r.text)
@@ -289,7 +299,7 @@ class AcceptanceTests(RetryBase):
             for happened, (reason, seconds) in outcomes.items():
                 with self.subTest(ticked=ticked, happened=happened):
                     list_ = supabase.table("lists").insert({"user_id": self.user, "name": f"L-{ticked}-{happened}"}).execute().data[0]
-                    contact = self.add_contacts(1, list_["id"], prefix=f"+1555{abs(hash((ticked, happened))) % 900 + 100}")[0]
+                    contact = self.add_contacts(1, list_["id"], prefix=f"+1555{self.fresh_prefix()}")[0]
                     c = self.campaign(list_id=list_["id"], retry_on=[ticked])
                     before = len(self.placed)
                     self.at(T0)
@@ -318,7 +328,7 @@ class AcceptanceTests(RetryBase):
         for expected, reason, seconds, outcome in cases:
             with self.subTest(expected):
                 list_ = supabase.table("lists").insert({"user_id": self.user, "name": f"N-{expected}"}).execute().data[0]
-                contact = self.add_contacts(1, list_["id"], prefix=f"+1555{abs(hash(expected)) % 900 + 100}")[0]
+                contact = self.add_contacts(1, list_["id"], prefix=f"+1555{self.fresh_prefix()}")[0]
                 # every retryable outcome is ticked: the call still must not be redialed
                 c = self.campaign(list_id=list_["id"], retry_on=list(call_retry.RETRYABLE))
                 before = len(self.placed)
@@ -535,12 +545,15 @@ class PauseTests(RetryBase):
 
             async def pausing(payload):
                 out = await inner(payload)
-                self.api("post", f"/telephony/campaigns/{c['id']}/pause")      # the person pauses mid-sweep
+                if len(self.placed) == 8:
+                    self.api("post", f"/telephony/campaigns/{c['id']}/pause")      # the person pauses mid-sweep, after the first group
                 return out
             self.create_call.side_effect = pausing
             res = self.sweep(T0 + 11 * MIN)
-        self.assertEqual(res["placed"], 2, "the batch in flight finishes, the rest wait")
-        self.assertEqual(res["paused"], 4)
+        self.assertEqual(res["placed"], 2, "the group that was out is placed, the rest wait")
+        self.assertEqual(len(self.placed), 8)
+        # the four left are still due and are reported as paused by the next sweep (the engine obeys a pause call by call)
+        self.assertEqual(self.sweep(T0 + 12 * MIN)["paused"], 4)
         self.assertEqual(len(self.placed), 8)
 
 
@@ -584,7 +597,8 @@ class OneCallAtATimeTests(RetryBase):
         self.at(T0 + 5 * MIN)
         self.assertEqual(self.start(b["id"])["dialed"], 1)
         res = self.sweep(T0 + 11 * MIN)
-        self.assertEqual((res["placed"], res["busy"]), (0, 1))
+        # (a number on another call is left out of the pick, not tried: nothing is placed and nothing is counted as busy)
+        self.assertEqual((res["placed"], res["busy"]), (0, 0))
         self.assertEqual(self.lead(c["id"])["attempts"], 1, "no attempt was taken")
         self.assertIsNotNone(self.lead(c["id"])["next_attempt_at"], "still due")
         self.end_call(self.calls_to(phone)[1], "customer-ended-call", 5, at=T0 + 12 * MIN)         # the other call ends (hung up)
@@ -891,7 +905,10 @@ class SweepEdgeCases(RetryBase):
             return real(camp, contact_row, **kw)
         with patch.object(call_retry, "begin_attempt", flaky):
             self.sweep(T0 + 11 * MIN)
-        # A's bookkeeping broke, so its call went out untracked; B's was tracked normally
+        # A's bookkeeping broke, so NO call went out for it (fail-closed: an untracked call could never be settled or
+        # counted); its number stays due. B's was tracked normally
+        self.assertEqual(len(self.calls_to(self.contacts[0]["phone"])), 1, "A's redial was not placed untracked")
+        self.assertIsNotNone(self.lead(a["id"])["next_attempt_at"], "and A's number is still due")
         self.assertEqual(len(self.calls_to(contact["phone"])), 2)
         self.assertEqual(self.lead(b["id"], contact["phone"])["attempts"], 2)
 
@@ -994,7 +1011,8 @@ class ReviewFixTests(RetryBase):
 
         async def slow(payload):
             out = await inner(payload)
-            self.at(local(zone, 2026, 10, 14, 17, 0) + timedelta(seconds=30))    # the first batch took until closing time
+            if len(self.placed) - placed_before == 2:
+                self.at(local(zone, 2026, 10, 14, 17, 0) + timedelta(seconds=30))    # the first batch took until closing time
             return out
         self.create_call.side_effect = slow
         p = patch.object(campaign_scheduler, "datetime", FakeDateTime)
@@ -1062,6 +1080,489 @@ class ReviewFixTests(RetryBase):
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 1, "retries_placed": 0, "answered_on_retry": 0,
                                                "max_attempts_reached": 0, "pending_retries": 0, "numbers": 1})
         self.assertEqual(len(self.numbers(c["id"])["rows"][0]["history"]), 3, "the earlier round stays in the number's history")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Dialing strategy plumbing in the attempt bookkeeping: how a call was placed (strategy / slot / wave /
+# source), the slot index, taking an attempt back when the provider has no room, closing calls that were
+# never confirmed as placed, and the wake-up hook on every close.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class AttemptBookkeepingTests(RetryBase):
+    def setUp(self):
+        super().setUp()
+        self.hook_calls: list[dict] = []
+        self.hook = self.hook_calls.append
+        call_retry.attempt_finished_hooks.append(self.hook)
+        self.addCleanup(lambda: call_retry.attempt_finished_hooks.remove(self.hook) if self.hook in call_retry.attempt_finished_hooks else None)
+
+    # ── helpers ──
+    def camp(self, **extra):
+        c = self.campaign(**extra)
+        return supabase.table("outbound_campaigns").select("*").eq("id", c["id"]).execute().data[0]
+
+    def begin(self, camp, contact=None, **kw):
+        kw.setdefault("new_round", True)
+        return call_retry.begin_attempt({**camp, "user_id": self.user}, contact or self.contacts[0], **kw)
+
+    def attempt_rows(self, camp):
+        return supabase.table("campaign_attempts").select("*").eq("campaign_id", camp["id"]).execute().data
+
+    def lead_row(self, camp, contact=None):
+        rows = supabase.table("campaign_leads").select("*").eq("campaign_id", camp["id"]).eq("contact_id", (contact or self.contacts[0])["id"]).execute().data
+        return rows[0] if rows else None
+
+    # ── what an attempt records ──
+    def test_the_attempt_records_how_the_call_was_placed(self):
+        camp = self.camp(dial_strategy="concurrent", dial_concurrent_calls=7, dial_delay_seconds=3)
+        a = self.begin(camp, now=T0 + 5 * MIN, dial={"strategy": "concurrent", "slot": 3, "batch": 2, "source": "fresh"})
+        row = self.attempt_rows(camp)[0]
+        self.assertEqual((row["dial_strategy"], row["dial_slot"], row["dial_batch"], row["dial_source"]), ("concurrent", 3, 2, "fresh"))
+        self.assertEqual(a["id"], row["id"])
+        self.assertEqual(call_retry.parse_time(row["placed_at"]), T0 + 5 * MIN, "placed_at comes from the injected now")
+
+    def test_without_dial_the_strategy_is_the_campaigns_and_the_source_follows_new_round(self):
+        camp = self.camp(dial_strategy="paced")
+        self.begin(camp, new_round=True)
+        row = self.attempt_rows(camp)[0]
+        self.assertEqual((row["dial_strategy"], row["dial_slot"], row["dial_batch"], row["dial_source"]), ("paced", None, None, "fresh"))
+
+    def test_a_redial_is_recorded_as_a_redial_and_continues_the_count(self):
+        camp = self.camp()
+        first = self.begin(camp)
+        call_retry.finish_attempt(first, "no_answer", None, T0 + MIN)
+        lead = self.lead_row(camp)
+        second = self.begin(camp, new_round=False, lead=lead, now=T0 + 11 * MIN)
+        self.assertEqual((second["attempt_number"], second["dial_source"]), (2, "redial"))
+        self.assertEqual(self.lead_row(camp)["attempts"], 2)
+        third_dial = {"strategy": "sequential", "slot": 1, "batch": None, "source": "redial"}
+        call_retry.finish_attempt(second, "no_answer", None, T0 + 12 * MIN)
+        third = self.begin(camp, new_round=False, lead=self.lead_row(camp), now=T0 + 22 * MIN, dial=third_dial)
+        self.assertEqual((third["dial_slot"], third["dial_strategy"], third["dial_source"]), (1, "sequential", "redial"))
+
+    def test_the_settings_snapshot_keeps_the_retry_settings_and_adds_the_dialing_ones(self):
+        camp = self.camp(retry_max_attempts=4, retry_interval_minutes=15, dial_strategy="paced", dial_calls_per_minute=20, dial_delay_seconds=2)
+        a = self.begin(camp)
+        snap = self.attempt_rows(camp)[0]["settings"]
+        self.assertEqual({k: snap[k] for k in ("enabled", "max_attempts", "interval_minutes", "retry_on")},
+                         {"enabled": True, "max_attempts": 4, "interval_minutes": 15, "retry_on": ["no_answer", "busy", "voicemail", "failed"]})
+        self.assertEqual(snap["dial"], {"strategy": "paced", "concurrent_calls": 5, "calls_per_minute": 20, "delay_seconds": 2})
+        # finishing it ignores the extra key and still settles the number with the retry settings
+        call_retry.finish_attempt(a, "busy", None, T0 + MIN)
+        self.assertEqual(call_retry.parse_time(self.lead_row(camp)["next_attempt_at"]), T0 + 16 * MIN)
+
+    def test_the_snapshot_is_what_the_call_was_placed_under(self):
+        camp = self.camp(dial_strategy="concurrent", dial_concurrent_calls=9)
+        self.begin(camp)
+        supabase.table("outbound_campaigns").update({"dial_strategy": "sequential", "dial_concurrent_calls": 1}).eq("id", camp["id"]).execute()
+        self.assertEqual(self.attempt_rows(camp)[0]["settings"]["dial"]["concurrent_calls"], 9)
+
+    def test_every_timestamp_comes_from_the_injected_clock(self):
+        camp = self.camp()
+        at = T0 + 3 * 24 * 60 * MIN
+        self.begin(camp, now=at)
+        lead = self.lead_row(camp)
+        self.assertEqual(call_retry.parse_time(lead["last_attempt_at"]), at)
+        self.assertEqual(call_retry.parse_time(lead["updated_at"]), at)
+
+    def test_a_stale_open_attempt_is_reaped_by_the_injected_clock_not_the_real_one(self):
+        camp = self.camp()
+        first = self.begin(camp, now=T0)
+        self.assertIsNotNone(first)
+        # 100 minutes later (by the injected clock) the first one is stale: it is closed as failed and the
+        # number can be called again
+        second = self.begin(camp, now=T0 + 100 * MIN)
+        self.assertIsNotNone(second)
+        rows = sorted(self.attempt_rows(camp), key=lambda r: r["placed_at"])
+        self.assertEqual((rows[0]["outcome"], rows[1]["ended_at"]), ("failed", None))
+
+    def test_a_young_open_attempt_still_holds_its_number(self):
+        camp = self.camp()
+        self.assertIsNotNone(self.begin(camp, now=T0))
+        self.assertIsNone(self.begin(camp, now=T0 + 80 * MIN), "80 minutes is not stale yet")
+
+    def test_reap_stale_measures_age_by_the_given_clock(self):
+        camp = self.camp()
+        self.begin(camp, now=T0)
+        self.assertEqual(call_retry.reap_stale(self.user, now=T0 + 89 * MIN), 0)
+        self.assertEqual(call_retry.reap_stale(self.user, now=T0 + 91 * MIN), 1)
+
+    # ── the slot index ──
+    def test_a_slot_held_by_an_open_call_raises_slot_taken_and_writes_nothing(self):
+        camp = self.camp(dial_strategy="concurrent")
+        other = self.add_contacts(1)[0]
+        self.assertIsNotNone(self.begin(camp, self.contacts[0], dial={"strategy": "concurrent", "slot": 1, "batch": 1, "source": "fresh"}))
+        with self.assertRaises(call_retry.SlotTaken):
+            self.begin(camp, other, dial={"strategy": "concurrent", "slot": 1, "batch": 1, "source": "fresh"})
+        self.assertEqual(len(self.attempt_rows(camp)), 1, "no attempt row for the refused one")
+        lead = self.lead_row(camp, other)
+        self.assertTrue(lead is None or lead["attempts"] == 0, "its number was not counted as called")
+        # another slot is fine
+        self.assertIsNotNone(self.begin(camp, other, dial={"strategy": "concurrent", "slot": 2, "batch": 1, "source": "fresh"}))
+
+    def test_a_freed_slot_can_be_taken_again(self):
+        camp = self.camp(dial_strategy="concurrent")
+        other = self.add_contacts(1)[0]
+        a = self.begin(camp, self.contacts[0], dial={"slot": 1})
+        call_retry.finish_attempt(a, "answered", None, T0 + MIN)
+        self.assertIsNotNone(self.begin(camp, other, dial={"slot": 1}))
+
+    def test_two_campaigns_may_use_the_same_slot_number(self):
+        a_camp, b_camp = self.camp(dial_strategy="concurrent"), self.camp(dial_strategy="concurrent")
+        other = self.add_contacts(1)[0]
+        self.assertIsNotNone(self.begin(a_camp, self.contacts[0], dial={"slot": 1}))
+        self.assertIsNotNone(self.begin(b_camp, other, dial={"slot": 1}))
+
+    def test_attempts_without_a_slot_never_collide_on_the_slot_index(self):
+        camp = self.camp()
+        others = self.add_contacts(2)
+        for contact in [self.contacts[0]] + others:
+            self.assertIsNotNone(self.begin(camp, contact))
+
+    def test_a_busy_number_is_busy_not_slot_taken(self):
+        camp = self.camp(dial_strategy="concurrent")
+        self.assertIsNotNone(self.begin(camp, dial={"slot": 1}))
+        # the same number again: the number index refuses it, whatever slot was asked for
+        self.assertIsNone(self.begin(camp, dial={"slot": 2}))
+        self.assertIsNone(self.begin(camp, dial={"slot": 1}), "both indexes would refuse it: the number is reported")
+
+    def test_the_same_number_in_another_campaign_is_busy(self):
+        a_camp, b_camp = self.camp(), self.camp()
+        self.assertIsNotNone(self.begin(a_camp))
+        self.assertIsNone(self.begin(b_camp))
+
+    def _violation(self, constraint_name):
+        import psycopg
+        from types import SimpleNamespace
+
+        class Violation(psycopg.errors.UniqueViolation):
+            diag = SimpleNamespace(constraint_name=constraint_name)
+        return Violation("duplicate key")
+
+    def _begin_with_violation(self, camp, constraint_name, dial=None):
+        """begin_attempt when the insert of the attempt row fails with a unique violation on `constraint_name`."""
+        real_table = call_retry._table
+        exc = self._violation(constraint_name)
+        lead = call_retry._get_or_create_lead({**camp, "user_id": self.user}, self.contacts[0])
+
+        class Failing:
+            def __init__(self, real):
+                self.real = real
+
+            def insert(self, *a, **kw):
+                outer = self
+
+                class Q:
+                    def execute(self):
+                        raise exc
+                return Q()
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+
+        def table(name):
+            return Failing(real_table(name)) if name == "campaign_attempts" else real_table(name)
+        with patch.object(call_retry, "_table", table):
+            return self.begin(camp, lead=lead, dial=dial)
+
+    def test_the_violation_is_classified_by_its_constraint_name(self):
+        camp = self.camp()
+        self.assertIsNone(self._begin_with_violation(camp, "campaign_attempts_one_open_call_idx"))
+        with self.assertRaises(call_retry.SlotTaken):
+            self._begin_with_violation(camp, "campaign_attempts_slot_idx", dial={"slot": 4})
+        # a name nobody knows, or none at all, is the safe answer: nothing is placed
+        with self.assertLogs(call_retry.logger, "WARNING"):
+            self.assertIsNone(self._begin_with_violation(camp, "something_else"))
+        self.assertIsNone(self._begin_with_violation(camp, None))
+
+    # ── taking an attempt back ──
+    def test_releasing_the_first_attempt_of_a_number_leaves_no_trace(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        self.assertIsNotNone(self.lead_row(camp))
+        self.assertTrue(call_retry.release_attempt(a))
+        self.assertEqual(self.attempt_rows(camp), [])
+        self.assertIsNone(self.lead_row(camp), "a number that was never really called is not tracked")
+        self.assertEqual(self.hook_calls, [], "nothing ended: the wake-up hook is not called")
+        # and the number can be tried again at once
+        self.assertIsNotNone(self.begin(camp))
+
+    def test_releasing_a_redial_puts_the_lead_back_exactly_as_it_was(self):
+        camp = self.camp()
+        first = self.begin(camp, now=T0)
+        call_retry.finish_attempt(first, "no_answer", "customer-did-not-answer", T0 + MIN)
+        before = self.lead_row(camp)
+        self.assertEqual((before["attempts"], before["last_outcome"]), (1, "no_answer"))
+        self.assertIsNotNone(before["next_attempt_at"])
+        redial = self.begin(camp, new_round=False, lead=before, now=T0 + 11 * MIN)
+        during = self.lead_row(camp)
+        self.assertEqual((during["attempts"], during["next_attempt_at"]), (2, None))
+        self.assertTrue(call_retry.release_attempt(redial))
+        after = self.lead_row(camp)
+        for key in call_retry.LEAD_STATE_FIELDS:
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(len(self.attempt_rows(camp)), 1, "only the first attempt is left")
+        # still due, so the next sweep places it, and as attempt 2 (no retry was burned)
+        supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", camp["id"]).execute()
+        self.assertEqual(self.sweep(T0 + 11 * MIN)["placed"], 1)
+        self.assertEqual(self.lead_row(camp)["attempts"], 2)
+
+    def test_releasing_the_start_of_a_new_round_restores_the_old_round(self):
+        camp = self.camp()
+        first = self.begin(camp, now=T0)
+        call_retry.finish_attempt(first, "answered", None, T0 + MIN)
+        before = self.lead_row(camp)
+        self.assertEqual((before["round"], before["attempts"], before["final_status"]), (1, 1, "answered"))
+        again = self.begin(camp, new_round=True, now=T0 + 2 * MIN)
+        during = self.lead_row(camp)
+        self.assertEqual((during["round"], during["attempts"], during["final_status"]), (2, 1, None))
+        self.assertTrue(call_retry.release_attempt(again))
+        after = self.lead_row(camp)
+        self.assertEqual((after["round"], after["attempts"], after["final_status"], after["last_outcome"]), (1, 1, "answered", "answered"))
+        self.assertEqual(len(self.attempt_rows(camp)), 1)
+
+    def test_release_frees_the_slot_and_the_number(self):
+        camp = self.camp(dial_strategy="concurrent")
+        other = self.add_contacts(1)[0]
+        a = self.begin(camp, self.contacts[0], dial={"slot": 1})
+        call_retry.release_attempt(a)
+        self.assertIsNotNone(self.begin(camp, other, dial={"slot": 1}))
+        self.assertIsNotNone(self.begin(camp, self.contacts[0], dial={"slot": 2}))
+
+    def test_releasing_an_attempt_that_already_ended_changes_nothing(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        call_retry.finish_attempt(a, "answered", None, T0 + MIN)
+        lead = self.lead_row(camp)
+        self.assertFalse(call_retry.release_attempt(a))
+        self.assertEqual(len(self.attempt_rows(camp)), 1)
+        self.assertEqual(self.lead_row(camp), lead)
+
+    def test_releasing_never_undoes_a_number_that_has_moved_on(self):
+        camp = self.camp()
+        a = self.begin(camp, now=T0)
+        # the number moved on (a new round began behind this attempt's back)
+        supabase.table("campaign_leads").update({"round": 5, "attempts": 3}).eq("id", a["lead_id"]).execute()
+        self.assertTrue(call_retry.release_attempt(a))
+        moved = self.lead_row(camp)
+        self.assertEqual((moved["round"], moved["attempts"]), (5, 3))
+
+    def test_an_attempt_row_read_back_from_the_database_can_be_released_without_a_restore(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        stored = self.attempt_rows(camp)[0]
+        self.assertNotIn("lead_before", stored)
+        self.assertTrue(call_retry.release_attempt(stored))
+        self.assertEqual(self.attempt_rows(camp), [])
+
+    def test_lead_before_is_not_stored(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        self.assertEqual(set(a["lead_before"]), set(call_retry.LEAD_STATE_FIELDS))
+        self.assertNotIn("lead_before", self.attempt_rows(camp)[0])
+
+    # ── closing calls that were never confirmed as placed ──
+    def test_reap_unplaced_closes_only_old_attempts_without_a_call_id(self):
+        camp = self.camp()
+        contacts = self.add_contacts(3)
+        old = self.begin(camp, self.contacts[0], now=T0 - 130 * MIN / 60)
+        young = self.begin(camp, contacts[0], now=T0 - 119 * MIN / 60)
+        placed = self.begin(camp, contacts[1], now=T0 - 600 * MIN / 60)
+        call_retry.mark_placed(placed, "call-has-id")
+        done = self.begin(camp, contacts[2], now=T0 - 600 * MIN / 60)
+        call_retry.finish_attempt(done, "answered", None, T0 - 300 * MIN / 60)
+        self.hook_calls.clear()
+        self.assertEqual(call_retry.reap_unplaced(T0), 1)
+        rows = {r["id"]: r for r in self.attempt_rows(camp)}
+        self.assertEqual((rows[old["id"]]["outcome"], rows[old["id"]]["ended_reason"]), ("failed", "the call was never confirmed as placed"))
+        self.assertEqual(call_retry.parse_time(rows[old["id"]]["ended_at"]), T0, "closed at the injected time")
+        self.assertIsNone(rows[young["id"]]["ended_at"], "119 s is not old enough")
+        self.assertIsNone(rows[placed["id"]]["ended_at"], "it has a call id: the reconciler's business")
+        self.assertEqual(rows[done["id"]]["outcome"], "answered")
+        self.assertEqual([a["id"] for a in self.hook_calls], [old["id"]])
+
+    def test_reap_unplaced_boundary_is_strictly_older_than_120_seconds(self):
+        camp = self.camp()
+        self.begin(camp, now=T0)
+        self.assertEqual(call_retry.reap_unplaced(T0 + timedelta(seconds=120)), 0)
+        self.assertEqual(call_retry.reap_unplaced(T0 + timedelta(seconds=121)), 1)
+        self.assertEqual(call_retry.reap_unplaced(T0 + timedelta(seconds=500)), 0, "already closed")
+
+    def test_reap_unplaced_takes_the_age_as_a_parameter(self):
+        camp = self.camp()
+        self.begin(camp, now=T0)
+        self.assertEqual(call_retry.reap_unplaced(T0 + timedelta(seconds=40), older_than_s=30), 1)
+
+    def test_reap_unplaced_settles_the_number_like_any_failed_call(self):
+        camp = self.camp()
+        self.begin(camp, now=T0)
+        call_retry.reap_unplaced(T0 + timedelta(seconds=300))
+        lead = self.lead_row(camp)
+        self.assertEqual(lead["last_outcome"], "failed")
+        self.assertEqual(call_retry.parse_time(lead["next_attempt_at"]), T0 + timedelta(seconds=300) + 10 * MIN,
+                         "a redial is due, measured from the moment it was closed")
+
+    def test_reap_unplaced_uses_the_clock_by_default(self):
+        camp = self.camp()
+        self.begin(camp, now=T0 - 10 * MIN)
+        self.assertEqual(call_retry.reap_unplaced(), 1)
+
+    # ── the wake-up hook ──
+    def test_every_close_calls_the_hook_with_the_attempt_once(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        self.assertTrue(call_retry.finish_attempt(a, "answered", None, T0 + MIN))
+        self.assertEqual([h["id"] for h in self.hook_calls], [a["id"]])
+        self.assertEqual(self.hook_calls[0]["campaign_id"], camp["id"])
+        self.assertFalse(call_retry.finish_attempt(a, "answered", None, T0 + 2 * MIN), "a second close is a no-op")
+        self.assertEqual(len(self.hook_calls), 1, "and does not wake anyone again")
+
+    def test_a_close_of_a_number_that_moved_on_still_calls_the_hook(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        supabase.table("campaign_leads").update({"attempts": 9}).eq("id", a["lead_id"]).execute()
+        self.assertTrue(call_retry.finish_attempt(a, "answered", None, T0 + MIN))
+        self.assertEqual(len(self.hook_calls), 1, "the slot is free whatever the lead says")
+
+    def test_a_failing_hook_never_breaks_the_close(self):
+        def boom(attempt):
+            raise RuntimeError("hook down")
+        call_retry.attempt_finished_hooks.insert(0, boom)
+        self.addCleanup(lambda: call_retry.attempt_finished_hooks.remove(boom))
+        camp = self.camp()
+        a = self.begin(camp)
+        with self.assertLogs(call_retry.logger, "ERROR"):
+            self.assertTrue(call_retry.finish_attempt(a, "answered", None, T0 + MIN))
+        self.assertEqual(len(self.hook_calls), 1, "the other hooks still run")
+        self.assertIsNotNone(self.attempt_rows(camp)[0]["ended_at"])
+
+    def test_a_failed_placement_calls_the_hook(self):
+        camp = self.camp()
+        a = self.begin(camp)
+        call_retry.placement_failed(a, "500 boom")
+        self.assertEqual(len(self.hook_calls), 1)
+
+    def test_the_end_of_call_webhook_calls_the_hook(self):
+        c = self.campaign()
+        self.start(c["id"])
+        self.hook_calls.clear()
+        self.end_call(self.placed[0], at=T0 + MIN)
+        self.assertEqual(len(self.hook_calls), 1)
+
+    def test_the_stale_reaper_calls_the_hook(self):
+        camp = self.camp()
+        self.begin(camp, now=T0)
+        self.hook_calls.clear()
+        call_retry.reap_stale(self.user, now=T0 + 95 * MIN)
+        self.assertEqual(len(self.hook_calls), 1)
+
+    # ── the numbers view ──
+    def test_the_numbers_history_shows_how_each_call_was_placed(self):
+        camp = self.camp(dial_strategy="concurrent")
+        a = self.begin(camp, now=T0, dial={"strategy": "concurrent", "slot": 2, "batch": 3, "source": "fresh"})
+        call_retry.finish_attempt(a, "no_answer", None, T0 + MIN)
+        self.begin(camp, new_round=False, lead=self.lead_row(camp), now=T0 + 11 * MIN,
+                   dial={"strategy": "concurrent", "slot": 1, "batch": 4, "source": "redial"})
+        rows = call_retry.numbers(camp)["rows"]
+        history = rows[0]["history"]
+        self.assertEqual([(h["dial_strategy"], h["dial_slot"], h["dial_batch"], h["dial_source"]) for h in history],
+                         [("concurrent", 2, 3, "fresh"), ("concurrent", 1, 4, "redial")])
+        for h in history:
+            self.assertTrue({"round", "attempt_number", "placed_at", "ended_at", "outcome", "ended_reason"} <= set(h))
+
+    def test_the_numbers_api_carries_the_same_fields_and_old_attempts_show_nulls(self):
+        c = self.campaign()
+        self.start(c["id"])
+        h = self.numbers(c["id"])["rows"][0]["history"][0]
+        self.assertEqual(set(h) & {"dial_strategy", "dial_slot", "dial_batch", "dial_source"}, {"dial_strategy", "dial_slot", "dial_batch", "dial_source"})
+        # a call placed by the engine of before this feature has no strategy / slot / wave / source: shown as null
+        # (calls placed through Start now carry a slot and a wave, so the old row is built by clearing all four)
+        supabase.table("campaign_attempts").update({"dial_strategy": None, "dial_slot": None, "dial_batch": None, "dial_source": None}).eq("campaign_id", c["id"]).execute()
+        h = self.numbers(c["id"])["rows"][0]["history"][0]
+        self.assertEqual((h["dial_strategy"], h["dial_slot"], h["dial_batch"], h["dial_source"]), (None, None, None, None))
+
+
+class ImportAndAutomateTests(RetryBase):
+    """vapi_sync.import_and_automate: the one shared path for importing a call from the provider's side."""
+
+    def setUp(self):
+        super().setUp()
+        from services import vapi_sync
+        self.vs = vapi_sync
+        self.autos = AsyncMock()
+        p = patch.object(vapi_sync, "run_post_call_automations", self.autos)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def run_it(self, full, user=None, hint=None):
+        return asyncio.run(self.vs.import_and_automate(full, user or self.user, hint))
+
+    def full(self, call_id, **extra):
+        return {"id": call_id, "type": "outboundPhoneCall", "assistantId": self.agent["vapi_assistant_id"],
+                "endedReason": "customer-ended-call", "endedAt": (T0 + 2 * MIN).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "startedAt": T0.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "customer": {"number": self.contacts[0]["phone"]}, **extra}
+
+    def test_the_first_import_runs_the_automations_once_with_the_stored_conversation(self):
+        c = self.campaign()
+        self.start(c["id"])
+        call = self.placed[0]
+        self.assertEqual(self.run_it(self.full(call)), "imported")
+        self.autos.assert_awaited_once()
+        user, conversation = self.autos.await_args.args
+        self.assertEqual((user, conversation["vapi_call_id"]), (self.user, call))
+
+    def test_a_second_import_of_the_same_call_does_not_run_them_again(self):
+        c = self.campaign()
+        self.start(c["id"])
+        call = self.placed[0]
+        self.assertEqual(self.run_it(self.full(call)), "imported")
+        self.assertEqual(self.run_it(self.full(call)), "updated")
+        self.assertEqual(self.autos.await_count, 1)
+
+    def test_it_settles_the_attempt_exactly_like_the_sync_did(self):
+        c = self.campaign()
+        self.start(c["id"])
+        self.run_it(self.full(self.placed[0], endedReason="customer-busy"))
+        lead = self.lead(c["id"])
+        self.assertEqual(lead["last_outcome"], "busy")
+
+    def test_the_agent_hint_is_passed_on(self):
+        from unittest.mock import MagicMock
+        imp = MagicMock(return_value="skipped")
+        with patch.object(self.vs, "import_vapi_call", imp):
+            self.assertEqual(self.run_it({"id": "c-1"}, hint="agent-7"), "skipped")
+        imp.assert_called_once_with({"id": "c-1"}, self.user, "agent-7")
+        self.autos.assert_not_awaited()
+
+    def test_nothing_runs_for_a_result_other_than_imported(self):
+        from unittest.mock import MagicMock
+        for res in ("updated", "skipped", None):
+            with self.subTest(result=res), patch.object(self.vs, "import_vapi_call", MagicMock(return_value=res)):
+                self.assertEqual(self.run_it({"id": "c-2"}), res)
+        self.autos.assert_not_awaited()
+
+    def test_a_failing_automation_is_logged_and_the_import_still_counts(self):
+        c = self.campaign()
+        self.start(c["id"])
+        self.autos.side_effect = RuntimeError("flow broke")
+        with self.assertLogs(self.vs.logger, "WARNING"):
+            self.assertEqual(self.run_it(self.full(self.placed[0])), "imported")
+
+    def test_an_import_error_propagates_to_the_caller(self):
+        from unittest.mock import MagicMock
+        with patch.object(self.vs, "import_vapi_call", MagicMock(side_effect=RuntimeError("db"))):
+            with self.assertRaises(RuntimeError):
+                self.run_it({"id": "c-3"})
+        self.autos.assert_not_awaited()
+
+    def test_no_conversation_means_no_automations(self):
+        from unittest.mock import MagicMock
+        with patch.object(self.vs, "import_vapi_call", MagicMock(return_value="imported")), \
+                patch.object(self.vs, "_get_conversation", MagicMock(return_value=None)):
+            self.assertEqual(self.run_it({"id": "c-4"}), "imported")
+        self.autos.assert_not_awaited()
 
 
 if __name__ == "__main__":

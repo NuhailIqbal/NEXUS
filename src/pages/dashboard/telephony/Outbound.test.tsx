@@ -1,6 +1,6 @@
 import { choose, pick } from "@/test/pick";
 import "@/test/radix-stubs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vi as viConfig } from "vitest";
 viConfig.setConfig({ testTimeout: 20000 });   // the 96-slot time list and the zone list render slowly in jsdom when the machine is busy
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
@@ -8,7 +8,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 vi.mock("@/services/api", () => ({
   api: {
     getCampaigns: vi.fn(), getAgents: vi.fn(), getPhoneNumbers: vi.fn(), getAnalyticsOverview: vi.fn(), getContacts: vi.fn(),
-    getLists: vi.fn(), getDncStatus: vi.fn(),
+    getLists: vi.fn(), getDncStatus: vi.fn(), getDialingLimits: vi.fn(), getCampaignsLive: vi.fn(),
     createCampaign: vi.fn(), updateCampaign: vi.fn(), deleteCampaign: vi.fn(),
     startCampaign: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn(), getCampaignNumbers: vi.fn(),
   },
@@ -44,8 +44,16 @@ function mock(campaigns: object[]) {
   fn(api.getLists).mockResolvedValue({ data: [], error: null });
   fn(api.getDncStatus).mockResolvedValue({ data: { enabled: false, integration_id: null }, error: null });
   fn(api.updateCampaign).mockResolvedValue({ data: {}, error: null });
-  fn(api.startCampaign).mockResolvedValue({ data: { dialed: 10, errors: 0, suppressed: 0 }, error: null });
-  fn(api.resumeCampaign).mockResolvedValue({ data: { dialed: 3, errors: 0, suppressed: 0 }, error: null });
+  fn(api.getDialingLimits).mockResolvedValue({ data: { account_limit: null, source: null, platform_limit: null }, error: null });
+  fn(api.getCampaignsLive).mockResolvedValue({ data: {}, error: null });
+  fn(api.startCampaign).mockResolvedValue({
+    data: { started: true, resumed: false, already_running: false, strategy: "sequential", dialed: 5, placed: 5, queued: 5, active_now: 1, errors: 0, suppressed: 0 },
+    warnings: [], error: null,
+  });
+  fn(api.resumeCampaign).mockResolvedValue({
+    data: { started: false, resumed: true, already_running: false, strategy: "sequential", dialed: 3, placed: 3, queued: 6, active_now: 1, errors: 0, suppressed: 0 },
+    warnings: [], error: null,
+  });
 }
 
 const cardOf = (name: string) => screen.getByText(name).closest("div.rounded-xl") as HTMLElement;
@@ -157,7 +165,7 @@ describe("Outbound campaigns: starting", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("Inside calling hours");
     fireEvent.click(launchButton());
     await waitFor(() => expect(api.startCampaign).toHaveBeenCalledWith("c1"));
-    expect(toast.success).toHaveBeenCalledWith("Dialing 10 contacts…");
+    expect(toast.success).toHaveBeenCalledWith("Campaign started: 5 calls placed, 5 numbers queued (one at a time)");
   });
 
   it("without hours there is nothing to wait for", async () => {
@@ -190,8 +198,8 @@ describe("Outbound campaigns: starting", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("a stopped campaign is continued with resume", async () => {
-    mock([withHours(OPEN_STATE, { status: "Paused", dial_cursor: "k5" })]);
+  it("a campaign Paused part-way through a run is continued with resume", async () => {
+    mock([withHours(OPEN_STATE, { status: "Paused", dial_cursor: "k5", dial_running: true })]);
     render(<Outbound />);
     await screen.findByText("Spring Push");
     startFrom(cardOf("Spring Push"));
@@ -199,7 +207,128 @@ describe("Outbound campaigns: starting", () => {
     fireEvent.click(launchButton());
     await waitFor(() => expect(api.resumeCampaign).toHaveBeenCalledWith("c1"));
     expect(api.startCampaign).not.toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledWith("Dialing 3 contacts…");
+    expect(toast.success).toHaveBeenCalledWith("Campaign resumed: 3 calls placed, 6 numbers queued (one at a time)");
+  });
+
+  it("the server's own view of an open run (dialing.running) also means resume", async () => {
+    mock([withHours(OPEN_STATE, { status: "Paused", dialing: { settings: {}, running: true, stall_reason: null } })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(api.resumeCampaign).toHaveBeenCalledWith("c1"));
+  });
+
+  // Re-pinned: a Paused campaign with NO pass open (it had finished) used to be STARTED, which dials the whole list a
+  // second time. It is resumed now: the server only makes it Active again and its redials go on.
+  it("a Paused campaign with no run open is resumed, never started (the finished list is not dialed again)", async () => {
+    mock([withHours(OPEN_STATE, { status: "Paused", dial_running: false })]);
+    fn(api.resumeCampaign).mockResolvedValue({ data: { status: "Active" }, warnings: [], error: null });
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(api.resumeCampaign).toHaveBeenCalledWith("c1"));
+    expect(api.startCampaign).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith("Campaign resumed. Numbers waiting for a redial will go out as they come due.");
+  });
+
+  it("an Inactive campaign is started, and an Active one that is not running too", async () => {
+    mock([withHours(OPEN_STATE, { status: "Inactive", dial_running: false })]);
+    render(<Outbound />);
+    await screen.findByText("Spring Push");
+    startFrom(cardOf("Spring Push"));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+    fireEvent.click(launchButton());
+    await waitFor(() => expect(api.startCampaign).toHaveBeenCalledWith("c1"));
+    expect(api.resumeCampaign).not.toHaveBeenCalled();
+  });
+
+  describe("what the start toast says", () => {
+    const launch = async () => {
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      startFrom(cardOf("Spring Push"));
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+      fireEvent.click(launchButton());
+    };
+
+    it("a Concurrent campaign names how many run at a time", async () => {
+      mock([campaign({ dial_strategy: "concurrent", dial_concurrent_calls: 5 })]);
+      fn(api.startCampaign).mockResolvedValue({ data: { started: true, strategy: "concurrent", dialed: 5, placed: 5, queued: 118, errors: 0, suppressed: 0 }, warnings: [], error: null });
+      await launch();
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Campaign started: 5 calls placed, 118 numbers queued (5 at a time)"));
+    });
+
+    it("the account's cap is what it says when the campaign asked for more", async () => {
+      mock([campaign({ dial_strategy: "concurrent", dial_concurrent_calls: 10 })]);
+      fn(api.startCampaign).mockResolvedValue({
+        data: { started: true, strategy: "concurrent", placed: 3, queued: 40, errors: 0, suppressed: 0, capped: { requested: 10, effective: 3, reason: "account" } },
+        warnings: ["Concurrent Calls is set to 10, but your account allows 3 calls at the same time. Calls will run 3 at a time."], error: null,
+      });
+      await launch();
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Campaign started: 3 calls placed, 40 numbers queued (3 at a time)"));
+      expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/your account allows 3 calls at the same time/));
+    });
+
+    it("a Paced campaign names its rate, and one number is singular", async () => {
+      mock([campaign({ dial_strategy: "paced", dial_calls_per_minute: 10 })]);
+      fn(api.startCampaign).mockResolvedValue({ data: { started: true, strategy: "paced", placed: 1, queued: 1, errors: 0, suppressed: 0 }, warnings: [], error: null });
+      await launch();
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Campaign started: 1 call placed, 1 number queued (10 per minute)"));
+    });
+
+    it("every warning the server sends is its own toast", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({ data: { started: true, strategy: "sequential", placed: 1, queued: 0, errors: 0, suppressed: 0 }, warnings: ["First warning.", "Second warning."], error: null });
+      await launch();
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith("First warning."));
+      expect(toast.warning).toHaveBeenCalledWith("Second warning.");
+    });
+
+    it("already running is an info toast, not an error, and changes nothing", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({ data: { started: false, already_running: true, strategy: "sequential", placed: 0, dialed: 0 }, warnings: [], error: null });
+      await launch();
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith("This campaign is already running."));
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it("no call placed and errors: the first error is the toast", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({
+        data: { started: true, placed: 0, dialed: 0, queued: 9, errors: 2, error_details: [{ phone: "+1555", error: "Agent not found" }, { phone: "+1556", error: "x" }] },
+        warnings: [], error: null,
+      });
+      await launch();
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Agent not found")));
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it("some calls placed and some errors is a warning with the failure count", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({ data: { started: true, placed: 4, queued: 6, errors: 1 }, warnings: [], error: null });
+      await launch();
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith("Campaign started: 4 calls placed, 6 numbers queued (one at a time), 1 failed"));
+    });
+
+    it("a refusal from the server is shown as the error", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({ data: null, error: "Dialing is being upgraded" });
+      await launch();
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Dialing is being upgraded"));
+    });
+
+    it("the server's error text never names the call service", async () => {
+      mock([campaign()]);
+      fn(api.startCampaign).mockResolvedValue({ data: { placed: 0, errors: 1, error_details: [{ phone: "+1", error: "Vapi said no" }] }, warnings: [], error: null });
+      await launch();
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(fn(toast.error).mock.calls[0][0]).not.toMatch(/vapi/i);
+    });
   });
 });
 
@@ -300,6 +429,8 @@ describe("Outbound campaigns: creating one with hours", () => {
     }
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Call again when a number does not pick up");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Choose how the campaign places its calls");        // the dialing step
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
@@ -478,17 +609,6 @@ describe("Outbound campaigns: a person's Pause while it runs, and a running camp
     expect(cardOf("Spring Push").textContent).not.toMatch(/Stopped partway/);
     expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeInTheDocument();
   });
-
-  it("starting a campaign that is already running shows the server's reason", async () => {
-    mock([withHours(OPEN_STATE)]);
-    fn(api.startCampaign).mockResolvedValue({ data: null, error: "This campaign is already running. Pause it first if you want to stop it." });
-    render(<Outbound />);
-    await screen.findByText("Spring Push");
-    startFrom(cardOf("Spring Push"));
-    await waitFor(() => expect(launchButton()).toBeEnabled());
-    fireEvent.click(launchButton());
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/already running/)));
-  });
 });
 
 describe("Outbound campaigns: breaks and a custom schedule in the settings", () => {
@@ -627,6 +747,8 @@ describe("Outbound campaigns: breaks and a custom schedule in the settings", () 
     fireEvent.click(screen.getByRole("button", { name: "Add break" }));
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Call again when a number does not pick up");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Choose how the campaign places its calls");
     fireEvent.click(screen.getByRole("button", { name: /Next/ }));
     await screen.findByText("Campaign Summary");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
@@ -781,10 +903,11 @@ describe("Outbound campaigns: auto redial", () => {
 });
 
 describe("Outbound campaigns: the edit wizard", () => {
-  // The settings open the same five-step wizard as creating a campaign, starting from the campaign.
+  // The settings open the same six-step wizard as creating a campaign, starting from the campaign.
   const full = (over: Record<string, unknown> = {}) => campaign({
     status: "Paused", list_id: "l1", phone_number_id: "p1", dnc_screening_enabled: true,
-    retry_enabled: true, retry_max_attempts: 4, retry_interval_minutes: 15, retry_on: ["busy", "failed"], ...over,
+    retry_enabled: true, retry_max_attempts: 4, retry_interval_minutes: 15, retry_on: ["busy", "failed"],
+    dial_strategy: "concurrent", dial_concurrent_calls: 7, dial_calls_per_minute: 20, dial_delay_seconds: 2, ...over,
   });
   const openEdit = async () => {
     await screen.findByText("Spring Push");
@@ -798,12 +921,12 @@ describe("Outbound campaigns: the edit wizard", () => {
     fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
   };
 
-  it("is the creation wizard in edit mode: five steps, starting from the campaign", async () => {
+  it("is the creation wizard in edit mode: six steps, starting from the campaign", async () => {
     withLists();
     render(<Outbound />);
     await openEdit();
     expect(screen.getByText("Edit")).toBeInTheDocument();
-    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 6/)).toBeInTheDocument();
     expect(screen.getByDisplayValue("Spring Push")).toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Paused");
     expect(screen.queryByText("Description")).not.toBeInTheDocument();
@@ -828,7 +951,14 @@ describe("Outbound campaigns: the edit wizard", () => {
     expect(screen.getByRole("checkbox", { name: "Busy" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "No Answer" })).not.toBeChecked();
     nextBtn();
+    await screen.findByText("Choose how the campaign places its calls");
+    expect(screen.getByRole("radio", { name: "Concurrent" })).toBeChecked();
+    expect(screen.getByLabelText("Concurrent Calls")).toHaveValue(7);
+    expect(screen.getByLabelText("Delay between calls (seconds)")).toHaveValue(2);
+    expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
+    nextBtn();
     expect(await screen.findByText("Review & Save")).toBeInTheDocument();
+    expect(screen.getByText("Concurrent: up to 7 calls at a time, 2 s between calls")).toBeInTheDocument();
     expect(screen.getByText("Confirm your changes")).toBeInTheDocument();
     expect(within(screen.getByRole("dialog")).getByText("Paused")).toBeInTheDocument();   // the Status tile
     expect(screen.getByText(/Up to 4 calls per number, 15 min apart, on busy, call failed/)).toBeInTheDocument();
@@ -848,16 +978,40 @@ describe("Outbound campaigns: the edit wizard", () => {
     expect(body).toMatchObject({
       name: "Summer Push", status: "Active", agent_id: "a1", list_id: "l1", phone_number_id: "p1", dnc_screening_enabled: true,
       call_hours_enabled: false, retry_enabled: true, retry_max_attempts: 4, retry_interval_minutes: 15, retry_on: ["busy", "failed"],
+      dial_strategy: "concurrent", dial_concurrent_calls: 7, dial_calls_per_minute: 20, dial_delay_seconds: 2,
     });
     expect(toast.success).toHaveBeenCalledWith("Campaign updated");
     await waitFor(() => expect(screen.queryByText("Campaign Basics")).not.toBeInTheDocument());
+  });
+
+  it("a status the person did not change is not sent (saving cannot un-pause a campaign paused elsewhere)", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("Spring Push"), { target: { value: "Summer Push" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    const body = fn(api.updateCampaign).mock.calls[0][1] as Record<string, unknown>;
+    expect(body).toMatchObject({ name: "Summer Push", dial_strategy: "concurrent" });
+    expect(body).not.toHaveProperty("status");
+  });
+
+  it("a status the person changed back to what it was is not sent either", async () => {
+    withLists();
+    render(<Outbound />);
+    await openEdit();
+    await choose("Status", "Active");
+    await choose("Status", "Paused");
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+    expect(fn(api.updateCampaign).mock.calls[0][1]).not.toHaveProperty("status");
   });
 
   it("saves from the last step too, with the same Save Changes button", async () => {
     withLists();
     render(<Outbound />);
     await openEdit();
-    for (let i = 0; i < 4; i++) nextBtn();
+    for (let i = 0; i < 5; i++) nextBtn();
     await screen.findByText("Review & Save");
     fireEvent.click(saveBtn());
     await waitFor(() => expect(api.updateCampaign).toHaveBeenCalledTimes(1));
@@ -931,7 +1085,7 @@ describe("Outbound campaigns: the edit wizard", () => {
     expect(api.updateCampaign).not.toHaveBeenCalled();
     await openEdit();
     expect(screen.getByDisplayValue("Spring Push")).toBeInTheDocument();
-    expect(screen.getByText(/Step 1 of 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 6/)).toBeInTheDocument();
   });
 
   it("a campaign that never got a list or a number can still be saved; those are then left out of the update", async () => {
@@ -953,5 +1107,435 @@ describe("Outbound campaigns: the edit wizard", () => {
     for (let i = 0; i < 3; i++) nextBtn();
     await screen.findByText("Call again when a number does not pick up");
     expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
+  });
+});
+
+describe("Outbound campaigns: dialing strategy", () => {
+  const liveOf = (over: Record<string, unknown> = {}) => ({
+    campaign_id: "c1", state: "dialing", strategy: "concurrent", active_now: 5, queued: 118, queued_fresh: 118, queued_redials: 0,
+    redials_due_now: 0, placed: 41, placed_last_minute: 10,
+    counters: { suppressed: 0, busy: 0, duplicate: 0, errors: 0, last_error: null, last_error_at: null },
+    stall_reason: null, next_call_at: null, pass_started_at: "2026-10-24T10:00:00Z", dispatcher_ok: true, as_of: "2026-10-24T10:05:00Z",
+    ...over,
+  });
+  const liveMock = (state: object | null) =>
+    fn(api.getCampaignsLive).mockResolvedValue({ data: state ? { c1: state } : {}, error: null });
+  const running = (over: Record<string, unknown> = {}) =>
+    campaign({ status: "Active", dial_strategy: "concurrent", dial_concurrent_calls: 5, dial_calls_per_minute: 10, dial_delay_seconds: 0, dial_running: true,
+      dialing: { settings: { strategy: "concurrent", concurrent_calls: 5, calls_per_minute: 10, delay_seconds: 0 }, running: true, stall_reason: null }, ...over });
+  const panel = (card: HTMLElement) => within(card).getByText("Dialing").closest("div.rounded-lg") as HTMLElement;
+
+  describe("on the card", () => {
+    it("shows the strategy in short form", async () => {
+      mock([campaign({ dial_strategy: "concurrent", dial_concurrent_calls: 5, dial_delay_seconds: 2 })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(panel(cardOf("Spring Push"))).toHaveTextContent("Concurrent · 5 at a time · 2 s gap");
+    });
+
+    it("a row without any dial fields shows the defaults (Sequential)", async () => {
+      mock([campaign()]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(panel(cardOf("Spring Push"))).toHaveTextContent("Sequential · one at a time");
+    });
+
+    it("a Paced campaign shows its rate", async () => {
+      mock([campaign({ dial_strategy: "paced", dial_calls_per_minute: 12 })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(panel(cardOf("Spring Push"))).toHaveTextContent("Paced · 12/min");
+    });
+
+    it("sits between the hours notes and the Auto redial panel", async () => {
+      mock([withHours(OPEN_STATE, { retry_enabled: true, retry_stats: { total_attempts: 0, retries_placed: 0, answered_on_retry: 0, max_attempts_reached: 0, pending_retries: 0, numbers: 0 } })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      const text = cardOf("Spring Push").textContent ?? "";
+      expect(text.indexOf("Open now")).toBeGreaterThan(-1);
+      expect(text.indexOf("Open now")).toBeLessThan(text.indexOf("Dialing"));
+      expect(text.indexOf("Dialing")).toBeLessThan(text.indexOf("Auto redial"));
+    });
+
+    it("adds no button of its own", async () => {
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(within(cardOf("Spring Push")).getByLabelText("Live dialing")).toBeInTheDocument());
+      expect(within(panel(cardOf("Spring Push"))).queryAllByRole("button")).toHaveLength(0);
+    });
+
+    it("never names the call service", async () => {
+      mock([running()]);
+      liveMock(liveOf({ stall_reason: "provider_limit", warnings: ["Calls will run 3 at a time."] }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(within(cardOf("Spring Push")).getByLabelText("Live dialing")).toBeInTheDocument());
+      expect(cardOf("Spring Push").textContent).not.toMatch(/vapi|twilio|vonage|telnyx/i);
+    });
+  });
+
+  describe("the live panel", () => {
+    it("shows active now, in queue and placed for a running campaign", async () => {
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      const dl = await within(cardOf("Spring Push")).findByLabelText("Live dialing");
+      expect(dl).toHaveTextContent(/5\s*Active now/);
+      expect(dl).toHaveTextContent(/118\s*In queue/);
+      expect(dl).toHaveTextContent(/41\s*Placed/);
+      expect(cardOf("Spring Push")).toHaveTextContent("Dialing");
+      expect(cardOf("Spring Push")).toHaveTextContent(/updated \d+ s ago/);
+    });
+
+    it("a Paced campaign also says when the next call goes out", async () => {
+      mock([running({ dial_strategy: "paced", dial_calls_per_minute: 10 })]);
+      liveMock(liveOf({ strategy: "paced", active_now: 2, next_call_at: "2026-10-24T10:05:04Z" }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await within(cardOf("Spring Push")).findByLabelText("Live dialing");
+      expect(cardOf("Spring Push")).toHaveTextContent("Next call in 4 s");
+    });
+
+    it("a Sequential or Concurrent campaign has no next-call line", async () => {
+      mock([running()]);
+      liveMock(liveOf({ next_call_at: "2026-10-24T10:05:04Z" }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await within(cardOf("Spring Push")).findByLabelText("Live dialing");
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Next call in/);
+    });
+
+    it("an idle campaign shows no live numbers", async () => {
+      mock([running()]);
+      liveMock(liveOf({ state: "idle", active_now: 0, queued: 0 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      expect(within(cardOf("Spring Push")).queryByLabelText("Live dialing")).not.toBeInTheDocument();
+    });
+
+    it("says why a campaign is waiting, in words", async () => {
+      mock([running()]);
+      liveMock(liveOf({ state: "stalled", active_now: 0, stall_reason: "balance" }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(cardOf("Spring Push")).toHaveTextContent(/Waiting for balance/));
+    });
+
+    it("shows the server's warning when the account's cap limits the campaign", async () => {
+      mock([running()]);
+      liveMock(liveOf({ warnings: ["Concurrent Calls is set to 5, but your account allows 3 calls at the same time. Calls will run 3 at a time."] }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(cardOf("Spring Push")).toHaveTextContent(/your account allows 3 calls at the same time/));
+    });
+
+    it("without a server warning, a capped campaign still says so", async () => {
+      mock([running({ dialing: { settings: {}, running: true, stall_reason: null, effective: { concurrent_calls: 3, calls_per_minute: 10, capped: true, cap: 3, cap_source: "account" } } })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(cardOf("Spring Push")).toHaveTextContent("Limited to 3 calls at a time by your account.");
+    });
+
+    it("shows the last call error once there have been errors", async () => {
+      mock([running()]);
+      liveMock(liveOf({ counters: { errors: 2, last_error: "Number is not valid", last_error_at: "2026-10-24T10:04:00Z" } }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(cardOf("Spring Push")).toHaveTextContent("Last call error: Number is not valid"));
+    });
+
+    it("a finished campaign no longer shows the last call error", async () => {
+      mock([running({ status: "Active", dial_running: false, dialing: { settings: {}, running: false, stall_reason: null } })]);
+      liveMock(liveOf({ state: "idle", active_now: 0, queued: 0, counters: { errors: 2, last_error: "Number is not valid", last_error_at: "2026-10-24T10:04:00Z" } }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 50));
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Last call error/);
+    });
+
+    it("the last call error stays while calls are still open after the pass ended", async () => {
+      mock([running({ dial_running: false, dialing: { settings: {}, running: false, stall_reason: null } })]);
+      liveMock(liveOf({ state: "finishing", active_now: 2, counters: { errors: 1, last_error: "Number is not valid", last_error_at: null } }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(cardOf("Spring Push")).toHaveTextContent("Last call error: Number is not valid"));
+    });
+
+    it("does not pass on a provider's name in an error", async () => {
+      mock([running()]);
+      liveMock(liveOf({ counters: { errors: 1, last_error: "Vapi rejected the call", last_error_at: null } }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(cardOf("Spring Push")).toHaveTextContent(/Last call error/));
+      expect(cardOf("Spring Push").textContent).not.toMatch(/vapi/i);
+    });
+  });
+
+  describe("the live poll", () => {
+    const hidden = () => Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    const visible = () => { delete (document as unknown as Record<string, unknown>).visibilityState; };
+
+    afterEach(() => { vi.useRealTimers(); visible(); });
+
+    it("reads once when the page loads and then every 4 seconds while a campaign has a pass open", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not keep polling when nothing is running (one read when the page loads, then none)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([campaign({ status: "Paused" }), campaign({ id: "c2", name: "Other", status: "Inactive" })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(1);
+    });
+
+    it("a finished campaign (Active, no pass open, no calls) is not polled every 4 seconds", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([campaign({ status: "Active", dial_running: false, dialing: { settings: {}, running: false, stall_reason: null } })]);
+      liveMock(liveOf({ state: "idle", active_now: 0, queued: 0 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await vi.advanceTimersByTimeAsync(13000);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops polling once the last call has ended and the pass is over", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(2);
+      // the 30 s refresh finds the pass over
+      mock([campaign({ status: "Active", dial_running: false, dialing: { settings: {}, running: false, stall_reason: null } })]);
+      liveMock(liveOf({ state: "idle", active_now: 0, queued: 0 }));
+      await vi.advanceTimersByTimeAsync(30100);
+      const after = fn(api.getCampaignsLive).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(api.getCampaignsLive).toHaveBeenCalledTimes(after);
+    });
+
+    it("Pause reads the live numbers once more", async () => {
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      fn(api.pauseCampaign).mockResolvedValue({ data: {}, error: null });
+      fn(api.getCampaignsLive).mockClear();
+      fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ }));
+      await waitFor(() => expect(api.pauseCampaign).toHaveBeenCalledWith("c1"));
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+    });
+
+    it("keeps polling a paused campaign that still has calls open", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([campaign({ status: "Paused", dial_running: true, dialing: { settings: {}, running: true, stall_reason: null } })]);
+      liveMock(liveOf({ state: "finishing", active_now: 2 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      expect(await within(cardOf("Spring Push")).findByLabelText("Live dialing")).toHaveTextContent(/2\s*Active now/);
+    });
+
+    it("does not poll while the tab is hidden, and refreshes when it comes back", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      hidden();
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(api.getCampaignsLive).not.toHaveBeenCalled();
+      visible();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalledTimes(1));
+    });
+
+    it("stops polling when the page goes away", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([running()]);
+      liveMock(liveOf());
+      const { unmount } = render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      unmount();
+      const before = fn(api.getCampaignsLive).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(fn(api.getCampaignsLive).mock.calls.length).toBe(before);
+    });
+
+    it("a failed poll keeps what was shown", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mock([running()]);
+      liveMock(liveOf());
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await within(cardOf("Spring Push")).findByLabelText("Live dialing");
+      fn(api.getCampaignsLive).mockRejectedValue(new Error("offline"));
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(within(cardOf("Spring Push")).getByLabelText("Live dialing")).toHaveTextContent(/118\s*In queue/);
+    });
+  });
+
+  describe("a campaign whose contacts all have a completed call", () => {
+    const done = (over: Record<string, unknown> = {}) => campaign({ contacts_count: 10, completed_count: 10, status: "Active", ...over });
+
+    it("with calls still open keeps Pause and does not say all contacts were reached", async () => {
+      mock([done()]);
+      liveMock(liveOf({ state: "finishing", active_now: 3, queued: 0 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeEnabled());
+      expect(screen.queryByText(/All contacts reached/)).not.toBeInTheDocument();
+      expect(within(cardOf("Spring Push")).getByText("Active")).toBeInTheDocument();
+    });
+
+    it("with redials still queued keeps Pause", async () => {
+      mock([done()]);
+      liveMock(liveOf({ state: "waiting_redials", active_now: 0, queued: 2, queued_redials: 2 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeEnabled());
+    });
+
+    it("with a run still open keeps Pause", async () => {
+      mock([done({ dial_running: true, dialing: { settings: {}, running: true, stall_reason: null } })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(within(cardOf("Spring Push")).getByRole("button", { name: /Pause/ })).toBeEnabled();
+    });
+
+    it("with nothing open or queued is Completed", async () => {
+      mock([done()]);
+      liveMock(liveOf({ state: "idle", active_now: 0, queued: 0, queued_redials: 0 }));
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      await waitFor(() => expect(api.getCampaignsLive).toHaveBeenCalled());
+      expect(within(cardOf("Spring Push")).getByRole("button", { name: /All contacts reached/ })).toBeDisabled();
+      expect(within(cardOf("Spring Push")).queryByRole("button", { name: /Pause/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("saving and creating", () => {
+    const openSettings = async () => {
+      await screen.findByText("Spring Push");
+      fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: "Settings" }));
+      await screen.findByText("Campaign Basics");
+    };
+
+    it("opens the dialing step with the stored settings and saves a change", async () => {
+      mock([campaign({ dial_strategy: "paced", dial_calls_per_minute: 30, dial_delay_seconds: 1 })]);
+      render(<Outbound />);
+      await openSettings();
+      for (let i = 0; i < 4; i++) fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+      await screen.findByText("Choose how the campaign places its calls");
+      expect(screen.getByRole("radio", { name: "Paced" })).toBeChecked();
+      expect(screen.getByLabelText("Calls per Minute")).toHaveValue(30);
+      fireEvent.change(screen.getByLabelText("Calls per Minute"), { target: { value: "45" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+      expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({
+        dial_strategy: "paced", dial_concurrent_calls: 5, dial_calls_per_minute: 45, dial_delay_seconds: 1,
+      });
+    });
+
+    it("saving a campaign with no dial fields sends the four defaults", async () => {
+      mock([campaign()]);
+      render(<Outbound />);
+      await openSettings();
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+      expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({
+        dial_strategy: "sequential", dial_concurrent_calls: 5, dial_calls_per_minute: 10, dial_delay_seconds: 0,
+      });
+    });
+
+    it("a warning that comes back with a save is its own toast", async () => {
+      mock([campaign({ dial_strategy: "concurrent", dial_concurrent_calls: 10 })]);
+      fn(api.updateCampaign).mockResolvedValue({
+        data: {}, warnings: ["Concurrent Calls is set to 10, but your account allows 3 calls at the same time. Calls will run 3 at a time."], error: null,
+      });
+      render(<Outbound />);
+      await openSettings();
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/your account allows 3 calls/)));
+      expect(toast.success).toHaveBeenCalledWith("Campaign updated");
+    });
+
+    it("a refused save raises no warnings", async () => {
+      mock([campaign()]);
+      fn(api.updateCampaign).mockResolvedValue({ data: null, warnings: ["x"], error: "No" });
+      render(<Outbound />);
+      await openSettings();
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("No"));
+      expect(toast.warning).not.toHaveBeenCalled();
+    });
+
+    const createThrough = async () => {
+      await screen.findByText("Spring Push");
+      fireEvent.click(screen.getAllByRole("button", { name: /New Campaign/ })[0]);
+      await screen.findByText("Campaign Information");
+      fireEvent.click(screen.getAllByRole("combobox")[1]);
+      const numbers = await screen.findAllByText("+15550001111");
+      fireEvent.click(numbers[numbers.length - 1]);
+      fireEvent.change(screen.getByPlaceholderText(/Q3 Cold Outreach/), { target: { value: "Autumn" } });
+      fireEvent.click(screen.getAllByRole("combobox")[0]);
+      fireEvent.click(await screen.findByRole("option", { name: "Sara" }));
+      fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+      fireEvent.click(screen.getAllByRole("combobox")[0]);
+      fireEvent.click(await screen.findByRole("option", { name: /Leads/ }));
+      for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+      await screen.findByText("Choose how the campaign places its calls");
+      fireEvent.click(screen.getByRole("radio", { name: "Concurrent" }));
+      fireEvent.change(screen.getByLabelText("Concurrent Calls"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+      await screen.findByText("Campaign Summary");
+      fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
+    };
+
+    it("a new campaign is created with its dialing settings, and a warning is toasted after the wizard closes", async () => {
+      mock([campaign()]);
+      fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
+      fn(api.getDialingLimits).mockResolvedValue({ data: { account_limit: 3, source: "account", platform_limit: null }, error: null });
+      fn(api.createCampaign).mockResolvedValue({
+        data: {}, warnings: ["Concurrent Calls is set to 10, but your account allows 3 calls at the same time. Calls will run 3 at a time."], error: null,
+      });
+      render(<Outbound />);
+      await createThrough();
+      await waitFor(() => expect(api.createCampaign).toHaveBeenCalled());
+      expect(fn(api.createCampaign).mock.calls[0][0]).toMatchObject({
+        name: "Autumn", dial_strategy: "concurrent", dial_concurrent_calls: 10, dial_calls_per_minute: 10, dial_delay_seconds: 0,
+      });
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/your account allows 3 calls/)));
+      expect(toast.success).toHaveBeenCalledWith('Campaign "Autumn" created');
+    });
+
+    it("a refused create raises no warnings", async () => {
+      mock([campaign()]);
+      fn(api.getLists).mockResolvedValue({ data: [{ id: "l1", name: "Leads", contact_count: 4 }], error: null });
+      fn(api.createCampaign).mockResolvedValue({ data: null, warnings: ["x"], error: "Nope" });
+      render(<Outbound />);
+      await createThrough();
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope"));
+      expect(toast.warning).not.toHaveBeenCalled();
+    });
   });
 });

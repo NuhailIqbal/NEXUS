@@ -40,7 +40,7 @@ import {
   INDUSTRY_COUNT,
   LANGUAGE_OPTIONS,
   PHONE_NUMBER_MONTHLY,
-  CAMPAIGN_BATCH_SIZE,
+  MAX_CONCURRENT_CALLS,
 } from "@/lib/marketing-facts";
 
 type Feature = { icon: LucideIcon; title: string; desc: string; badge?: string; points?: string[] };
@@ -112,8 +112,8 @@ const groups: Group[] = [
         icon: PhoneOutgoing,
         title: "Outbound campaigns",
         desc: "Pick an agent, a contact list and a number to call from, then launch. A pre-launch check confirms everything is ready before the first dial.",
-        badge: `${CAMPAIGN_BATCH_SIZE} at a time`,
-        points: ["Calls placed in concurrent batches", "Live progress and completion tracking", "Pause or resume from the campaign list"],
+        badge: `Up to ${MAX_CONCURRENT_CALLS} at once`,
+        points: ["One at a time, several at once, or a steady rate per minute", "Live progress and queue tracking", "Pause or resume from the campaign list"],
       },
       {
         icon: PhoneIncoming,

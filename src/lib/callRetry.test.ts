@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  INTERVAL_OPTIONS, MAX_ATTEMPT_OPTIONS, RETRY_OUTCOMES, defaultRetry, describeRetry, describeRetryShort, retryFromRow,
+  INTERVAL_OPTIONS, MAX_ATTEMPT_OPTIONS, RETRY_OUTCOMES, defaultRetry, describeAttemptDial, describeRetry, describeRetryShort, retryFromRow,
   retryOutcomesNote, retryToPayload, validateRetry,
 } from "./callRetry";
 
@@ -54,5 +54,13 @@ describe("callRetry", () => {
     expect(retryOutcomesNote(defaultRetry())).toBeNull();
     expect(retryOutcomesNote({ ...defaultRetry(), retryOn: ["no_answer", "failed"] })).toBe("Redials on: no answer, call failed");
     expect(retryOutcomesNote({ ...defaultRetry(), retryOn: [] })).toBe("Redials on: nothing");
+  });
+
+  it("describes how a call was placed, or says nothing for a call without that record", () => {
+    expect(describeAttemptDial({})).toBeNull();
+    expect(describeAttemptDial({ dial_strategy: "sequential", dial_slot: 1, dial_batch: null, dial_source: "fresh" })).toBe("slot 1");
+    expect(describeAttemptDial({ dial_strategy: "concurrent", dial_slot: 3, dial_batch: 2, dial_source: "fresh" })).toBe("slot 3 · wave 2");
+    expect(describeAttemptDial({ dial_strategy: "concurrent", dial_slot: 3, dial_batch: 2, dial_source: "redial" })).toBe("slot 3 · wave 2 · redial");
+    expect(describeAttemptDial({ dial_strategy: "paced", dial_slot: null, dial_batch: 9, dial_source: "fresh" })).toBe("paced");
   });
 });

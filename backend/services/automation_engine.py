@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from database import supabase
 from services.email_service import send_email
 from services.sms_service import send_sms
-from services import vapi_client, whitelist_service
+from services import call_retry, vapi_client, whitelist_service
 from services.call_events import get_hits
 from routers.billing import outbound_call_block_reason, get_or_create_billing, check_call_quota
 
@@ -566,6 +566,12 @@ async def _connect_call_agent(user_id: str, config: dict, conversation: dict, ta
         return
     if not check_call_quota(user_id, "outbound"):
         logger.warning(f"{node_label} node: balance empty, skipping")
+        return
+
+    # Never two calls to one number at the same time: a number that is on a campaign call right now is skipped
+    # (this call is not counted toward a campaign's concurrency limit, see services/dialer.py).
+    if call_retry.number_is_busy(user_id, phone):
+        logger.warning(f"{node_label} node: {phone} is on another call right now, skipping")
         return
 
     screen = await whitelist_service.check_number(user_id, phone)
