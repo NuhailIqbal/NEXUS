@@ -812,3 +812,52 @@ describe("Inbound & Outbound page", () => {
     expect(toast.error).toHaveBeenCalledWith("Report is down");
   });
 });
+
+describe("Export CSV on the Campaign, Vertical and State pages", () => {
+  const handlersFor = (dim: string, hasData: boolean) => {
+    const h: Record<string, Handler> = {};
+    h[`/breakdown/${dim}/kpi`] = () => OK({ has_data: hasData, total_calls: hasData ? 5 : 0, consumed_calls: 0, consumed_pct: 0, dropped_calls: 0, dropped_pct: 0,
+      segment_count: 1, worst_segment_name: null, worst_segment_drop_rate: null, worst_segment_calls: null, cost_on_dropped: 0 });
+    for (const sec of ["combo", "disposition", "mix", "ranking"]) h[`/breakdown/${dim}/${sec}`] = () => OK([]);
+    h[`/breakdown/${dim}/summary`] = () => OK(hasData
+      ? { has_data: true, rows: [{ key: "k", name: "Row", ...tally(5, 1) }], total: { name: "Total", ...tally(5, 1) } }
+      : { has_data: false, rows: [], total: { name: "Total", ...tally(1, 0) } });
+    h["/state/heatmap"] = () => OK({ states: [], cells: [], unknown_calls: 0 });
+    setupHandlers(h);
+  };
+  const exportButton = async (dim: string) => {
+    const summary = (await screen.findByText("Summary")).closest("section")!;
+    return within(summary).getByRole("button", { name: /export csv/i });
+  };
+
+  for (const [dim, file] of [["campaign", "CallConsumptionByCampaign.csv"], ["vertical", "CallConsumptionByVertical.csv"], ["state", "CallConsumptionByState.csv"]] as const) {
+    it(`${dim} page: the Summary has an Export CSV that downloads ${file} with the current filters`, async () => {
+      handlersFor(dim, true);
+      download.mockResolvedValue({ error: null });
+      renderAt(`/dashboard/call-consumption/${dim}`);
+      const btn = await exportButton(dim);
+      await waitFor(() => expect(btn).toBeEnabled());
+      fireEvent.click(btn);
+      await waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+      expect(download.mock.calls[0][0]).toBe(`/breakdown/${dim}/export.csv`);
+      expect(download.mock.calls[0][2]).toBe(file);
+      expect(download.mock.calls[0][1]).toMatchObject({ tz: expect.any(String) });
+    });
+
+    it(`${dim} page: the export is disabled when there is nothing to export`, async () => {
+      handlersFor(dim, false);
+      renderAt(`/dashboard/call-consumption/${dim}`);
+      expect(await exportButton(dim)).toBeDisabled();
+    });
+  }
+
+  it("a refusal from the server (for example a 404 'no data') is shown as a message", async () => {
+    handlersFor("campaign", true);
+    download.mockResolvedValue({ error: "There is no data to export for these filters." });
+    renderAt("/dashboard/call-consumption/campaign");
+    const btn = await exportButton("campaign");
+    await waitFor(() => expect(btn).toBeEnabled());
+    fireEvent.click(btn);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("There is no data to export for these filters."));
+  });
+});

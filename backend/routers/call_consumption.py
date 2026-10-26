@@ -10,7 +10,7 @@ independently:
 
   /filters                                 dropdown contents
   /overview/{kpis,summary,insights,hotspots}   + /overview/export/{summary,hotspots}.csv
-  /breakdown/{campaign|vertical|state}/{kpi,combo,disposition,mix,ranking,summary}
+  /breakdown/{campaign|vertical|state}/{kpi,combo,disposition,mix,ranking,summary}   + /breakdown/<dimension>/export.csv
   /state/heatmap                           state x hour-of-day grid for the State page
   /reasons?campaign_id=                    why one campaign's calls were dropped
   /hourly/{kpis,heatmap,trend,summary}     + /hourly/export.csv
@@ -147,6 +147,25 @@ def overview(widget: str, flt: cc.Filters = Depends(get_filters), user=Depends(g
 
 
 # ------------------------------------------------------------------------------------------- breakdown
+
+_BREAKDOWN_FILES = {
+    "campaign": ("Campaign", "CallConsumptionByCampaign.csv"),
+    "vertical": ("Vertical", "CallConsumptionByVertical.csv"),
+    "state": ("State", "CallConsumptionByState.csv"),
+}
+
+
+@router.get("/breakdown/{dimension}/export.csv")
+def export_breakdown(dimension: str, flt: cc.Filters = Depends(get_filters), user=Depends(get_current_user)):
+    """The Campaign / Vertical / State page's Summary table as CSV (same builder as the screen, so they agree)."""
+    if dimension not in _BREAKDOWN_FILES:
+        raise HTTPException(404, "Unknown dimension.")
+    summary = cc.breakdown_summary(_owner(user), flt, dimension)
+    if not summary["has_data"]:
+        raise HTTPException(404, "There is no data to export for these filters.")
+    column, filename = _BREAKDOWN_FILES[dimension]
+    return _csv_response(cc.summary_csv(summary, name_header=column), filename)
+
 
 @router.get("/breakdown/{dimension}/{section}")
 def breakdown(dimension: str, section: str, flt: cc.Filters = Depends(get_filters), user=Depends(get_current_user)):

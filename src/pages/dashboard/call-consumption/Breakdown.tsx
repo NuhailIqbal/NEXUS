@@ -19,6 +19,7 @@ import {
   type ComboRow, type DispositionRow, type MixRow, type RankingRow, type StateHeatCell,
 } from "@/components/call-consumption/Charts";
 import { ConsumptionTable } from "@/components/call-consumption/ConsumptionTable";
+import { ExportButton } from "@/components/call-consumption/ExportButton";
 import { FilterBar } from "@/components/call-consumption/FilterBar";
 import { KpiCard } from "@/components/call-consumption/KpiCard";
 import { SectionCard } from "@/components/call-consumption/SectionCard";
@@ -31,24 +32,27 @@ import {
   type SummaryResponse, type TreeRow,
 } from "@/lib/callConsumption";
 
-const COPY: Record<Dimension, { title: string; noun: string; column: string; blurb: string }> = {
+const COPY: Record<Dimension, { title: string; noun: string; column: string; blurb: string; file: string }> = {
   campaign: {
     title: "Call Consumption by Campaign",
     noun: "campaign",
     column: "Campaign",
     blurb: "Which campaigns lose the most calls, and why. Click a campaign to see its reasons.",
+    file: "CallConsumptionByCampaign.csv",
   },
   vertical: {
     title: "Call Consumption by Vertical",
     noun: "vertical",
     column: "Vertical",
     blurb: "Calls grouped by the industry of the agent that handled them.",
+    file: "CallConsumptionByVertical.csv",
   },
   state: {
     title: "Call Consumption by State",
     noun: "state",
     column: "State",
     blurb: "Calls grouped by the state of the contact's phone number area code (an estimate: ported or non-US numbers show as Unknown).",
+    file: "CallConsumptionByState.csv",
   },
 };
 
@@ -155,7 +159,8 @@ const Breakdown = ({ dimension }: { dimension: Dimension }) => {
       </SectionCard>
 
       <SectionCard title="Summary" loading={summary.loading} error={summary.error} onRetry={summary.reload}
-                   empty={!summary.data?.has_data}>
+                   empty={!summary.data?.has_data}
+                   actions={<ExportButton path={`${base}/export.csv`} filename={copy.file} applied={applied} disabled={!summary.data?.has_data} />}>
         {summary.data && (
           <ConsumptionTable
             rows={summary.data.rows}

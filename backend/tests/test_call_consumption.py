@@ -658,6 +658,59 @@ class DirectionReport(Base):
         self.assertEqual(self.report("outbound", user=self.other)["total"]["total_calls"], 1)
 
 
+class BreakdownExport(Base):
+    def csv(self, dim, user=None, **kw):
+        return client.get(f"/call-consumption/breakdown/{dim}/export.csv", params=q(**kw), headers=auth(user or self.user))
+
+    def test_each_page_exports_its_summary_table(self):
+        for dim, header, filename, first, total in (
+            ("campaign", "Campaign", "CallConsumptionByCampaign.csv", "Spring Push,14,8,57.14%,6,42.86%", "Total,17,10,58.82%,7,41.18%"),
+            ("vertical", "Vertical", "CallConsumptionByVertical.csv", "Insurance,15,", "Total,17,10,"),
+            ("state", "State", "CallConsumptionByState.csv", "Colorado,14,8,57.14%,6,42.86%", "Total,17,10,"),
+        ):
+            with self.subTest(dim):
+                r = self.csv(dim)
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertTrue(r.headers["content-type"].startswith("text/csv"))
+                self.assertIn(filename, r.headers["content-disposition"])
+                lines = r.text.strip().split("\n")
+                self.assertEqual(lines[0], f"{header},Total Calls,Consumed,Consumption Rate,Dropped,Drop Rate,No answer,Busy,Voicemail,Hung up at once,Blocked,Failed")
+                self.assertTrue(lines[1].startswith(first), lines[1])         # most dropped first, like the screen
+                self.assertTrue(lines[-1].startswith(total), lines[-1])
+
+    def test_the_csv_is_exactly_the_screens_summary(self):
+        for dim in ("campaign", "vertical", "state"):
+            with self.subTest(dim):
+                screen = self.data(f"/breakdown/{dim}/summary")
+                lines = self.csv(dim).text.strip().split("\n")
+                self.assertEqual(len(lines), 1 + len(screen["rows"]) + 1)
+                self.assertEqual([l.split(",")[0] for l in lines[1:-1]], [r["name"] for r in screen["rows"]])
+                self.assertEqual(lines[-1].split(",")[1], str(screen["total"]["total_calls"]))
+
+    def test_filters_apply_to_the_export(self):
+        lines = self.csv("campaign", vertical="Real Estate").text.strip().split("\n")
+        self.assertEqual(len(lines), 3)                                       # header, Listings, Total
+        self.assertTrue(lines[1].startswith("Listings,2,"))
+        lines = self.csv("state", states="NY").text.strip().split("\n")
+        self.assertTrue(lines[1].startswith("New York,2,"))
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(self.csv("campaign", disposition="failed").text.strip().split("\n")[-1].startswith("Total,4,0,"))
+
+    def test_empty_range_unknown_dimension_and_isolation(self):
+        for dim in ("campaign", "vertical", "state"):
+            self.assertEqual(self.csv(dim, **{"from": "2026-01-01", "to": "2026-01-02"}).status_code, 404, dim)
+        self.assertEqual(self.csv("planet").status_code, 404)
+        other = self.csv("campaign", user=self.other)
+        self.assertEqual(other.status_code, 200)                              # their own single call, nothing of ours
+        self.assertNotIn("Spring Push", other.text)
+
+    def test_names_with_commas_are_quoted(self):
+        weird = self.campaign(self.user, 'Acme, Inc "West"', self.a1)
+        insert_call(self.user, at(5, 10), "customer-ended-call", agent=self.a1, campaign=weird)
+        text = self.csv("campaign").text
+        self.assertIn('"Acme, Inc ""West""",1,1,', text)
+
+
 # ---------------------------------------------------------------------------------------------- hourly
 
 class Hourly(Base):
