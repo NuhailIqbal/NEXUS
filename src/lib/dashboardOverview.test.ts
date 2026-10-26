@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildAlerts, changeLine, changeParts, chartIsEmpty, notAnsweredBreakdown, chartPoints, customPresets, hourLabel, dayCostPerQualified, dayLabel, dayRate, firstName, formatDuration, formatMinutes, funnelStages,
-  greeting, previousLabel, progressPct, runningSub, setupSteps, statusLine, type Tiles,
+  buildAlerts, changeLine, changeParts, chartIsEmpty, notAnsweredBreakdown, chartPoints, customPresets, hourLabel, dayCostPerQualified, dayLabel, dayRate, firstName, formatMinutes, funnelStages,
+  greeting, previousLabel, runningSub, setupSteps, statusLine, type Tiles,
   type CampaignItem,
 } from "./dashboardOverview";
 
 const camp = (over: Partial<CampaignItem> = {}): CampaignItem => ({
-  id: "c1", name: "Spring", status: "Active", contacts_count: 10, completed_count: 4, state: "dialing", active_now: 0,
-  stall_reason: null, warnings: [], errors: 0, last_error: null, waiting_for_hours: false, ...over,
+  id: "c1", name: "Spring", status: "Active", state: "dialing", stall_reason: null, errors: 0, last_error: null, ...over,
 });
 const view = (items: CampaignItem[] = []) => ({ campaigns: { counts: { active: 0, paused: 0, inactive: 0 }, items } });
 
@@ -32,23 +31,10 @@ describe("formatters", () => {
     expect(formatMinutes(119.7)).toBe("2h 00m");   // never "1h 60m"
     expect(formatMinutes(null)).toBe("0.0 min");
   });
-  it("formats a duration", () => {
-    expect(formatDuration(45)).toBe("0:45");
-    expect(formatDuration(723)).toBe("12:03");
-    expect(formatDuration(null)).toBe("0:00");
-  });
   it("reads a day as a calendar date, not an instant", () => {
     expect(dayLabel("2026-10-26")).toBe("Oct 26");
     expect(dayLabel("2026-01-01")).toBe("Jan 1");
     expect(dayLabel("junk")).toBe("junk");
-  });
-});
-
-describe("progressPct", () => {
-  it("is whole percent, 0 for an empty list and never above 100", () => {
-    expect(progressPct({ contacts_count: 10, completed_count: 4 })).toBe(40);
-    expect(progressPct({ contacts_count: 0, completed_count: 0 })).toBe(0);
-    expect(progressPct({ contacts_count: 3, completed_count: 9 })).toBe(100);
   });
 });
 

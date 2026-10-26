@@ -1,6 +1,6 @@
 """Dashboard home API, mounted under /dashboard: one read-only snapshot for the landing page (headline tiles for a
-date range with their change against the range before, a daily trend, the active campaigns,
-the latest calls and which first steps the account has taken). All the work is in services/dashboard_overview.py, which
+date range with their change against the range before, a daily trend, what the account has set up,
+top campaigns / agents / receptionists and which first steps it has taken). All the work is in services/dashboard_overview.py, which
 reuses the Cost per Lead and Call Consumption engines for its numbers.
 
 Open to every team role (GET only, so Viewers see it too) and scoped to the account owner, like the other reports.

@@ -4,7 +4,7 @@ Dashboard home (services/dashboard_overview.py, routers/dashboard.py: GET /dashb
 Covered: the headline tiles agree with the Cost per Lead report for the same window (the reuse guarantee), the answered
 rate / minutes / cost per qualified lead (None, never 0, with no qualified lead), the change against the previous range
 (and none when that range was empty), today / 7d / 30d windows, the zero-filled trend (at least 7 days), sample rows and
-other accounts left out, the Active / Paused campaign list with progress, the account inventory, the Top campaigns / agents / receptionists tables, the live strip (calls running now, calls today), the latest calls, the first-steps checklist, team members and
+other accounts left out, the running campaigns (with what the dialer says), the account inventory, the Top campaigns / agents / receptionists tables, the live strip (calls running now, calls today), the first-steps checklist, team members and
 Viewers seeing the owner's numbers, and the 400s.
 
 Run from the backend folder:  python -m unittest discover -s tests -p "test_dashboard_overview.py" -v
@@ -176,7 +176,6 @@ class Tiles(Base):
         self.assertEqual((t["calls"]["value"], t["spend"]["value"], t["minutes"]["value"]), (0, 0.0, 0.0))
         self.assertIsNone(t["answered_rate"]["value"])                    # nothing finished: no rate, not 0%
         self.assertIsNone(t["cost_per_qualified_lead"]["value"])
-        self.assertEqual(d["recent_calls"], [])
         self.assertEqual(d["trend"] and sum(p["calls"] for p in d["trend"]), 0)
 
     def test_answered_rate_change_is_in_points(self):
@@ -320,59 +319,35 @@ class Trend(Base):
 
 
 class Campaigns(Base):
-    def setUp(self):
-        super().setUp()
-        self.lst = supabase.table("lists").insert({"user_id": self.user, "name": "L"}).execute().data[0]["id"]
-        self.contacts = [supabase.table("contacts").insert(
-            {"user_id": self.user, "name": f"C{i}", "list_id": self.lst, "phone": f"+1555000{i:04d}"}).execute().data[0]["id"]
-            for i in range(4)]
+    def campaign(self, name, status, user=None):
+        return supabase.table("outbound_campaigns").insert({"user_id": user or self.user, "name": name, "status": status}).execute().data[0]["id"]
 
-    def campaign(self, name, status, list_id=None, user=None, **extra):
-        return supabase.table("outbound_campaigns").insert(
-            {"user_id": user or self.user, "name": name, "status": status, "list_id": list_id, **extra}).execute().data[0]["id"]
-
-    def test_lists_active_then_paused_and_counts_every_status(self):
+    def test_counts_every_status_and_lists_only_the_running_campaigns(self):
         self.campaign("Running", "Active")
         self.campaign("Parked", "Paused")
         self.campaign("Draft", "Inactive")
         self.campaign("Theirs", "Active", user=self.other)
         c = self.data()["campaigns"]
         self.assertEqual(c["counts"], {"active": 1, "paused": 1, "inactive": 1})
-        self.assertEqual([(i["name"], i["status"]) for i in c["items"]], [("Running", "Active"), ("Parked", "Paused")])
+        self.assertEqual([(i["name"], i["status"]) for i in c["items"]], [("Running", "Active")])
 
-    def test_progress_counts_contacts_with_a_completed_call_by_id_or_by_phone(self):
-        cid = self.campaign("P", "Active", self.lst)
-        insert_call(self.user, noon(0), contact_id=self.contacts[0], phone="+19990000000")          # by contact id
-        insert_call(self.user, noon(0), phone="(555) 000-0001", contact="x")                        # by phone, other format
-        insert_call(self.user, noon(0), contact_id=self.contacts[2], status="No Answer")            # not Completed: no
-        item = next(i for i in self.data()["campaigns"]["items"] if i["id"] == str(cid))
-        self.assertEqual((item["contacts_count"], item["completed_count"]), (4, 2))
+    def test_an_account_with_no_campaigns(self):
+        self.assertEqual(self.data(user=h.make_user("bare"))["campaigns"], {"counts": {"active": 0, "paused": 0, "inactive": 0}, "items": []})
 
-    def test_progress_matches_the_campaigns_page(self):
-        from routers.telephony import _enrich_campaign_progress
-        cid = self.campaign("P", "Active", self.lst)
-        insert_call(self.user, noon(0), contact_id=self.contacts[1])
-        insert_call(self.user, noon(0), phone="+1 555 000 0003")
-        page = [{"id": cid, "list_id": self.lst}]
-        _enrich_campaign_progress(self.user, page)
-        item = next(i for i in self.data()["campaigns"]["items"] if i["id"] == str(cid))
-        self.assertEqual((item["contacts_count"], item["completed_count"]), (page[0]["contacts_count"], page[0]["completed_count"]))
+    def test_a_running_campaign_carries_what_the_dialer_says_about_it(self):
+        from unittest.mock import patch
+        cid = self.campaign("Running", "Active")
+        live = {str(cid): {"state": "stalled", "stall_reason": "balance", "counters": {"errors": 3, "last_error": "no funds"}}}
+        with patch("services.dialer.live_states", return_value=live):
+            item = self.data()["campaigns"]["items"][0]
+        self.assertEqual((item["state"], item["stall_reason"], item["errors"], item["last_error"]), ("stalled", "balance", 3, "no funds"))
 
-    def test_a_campaign_without_a_list_has_zero_progress(self):
-        self.campaign("NoList", "Paused")
-        item = self.data()["campaigns"]["items"][0]
-        self.assertEqual((item["contacts_count"], item["completed_count"]), (0, 0))
-
-    def test_a_run_the_calling_hours_stopped_is_marked_as_waiting(self):
-        self.campaign("Stopped", "Paused", stopped_by_hours_at=datetime.now(UTC))
-        self.assertTrue(self.data()["campaigns"]["items"][0]["waiting_for_hours"])
-
-    def test_the_list_is_capped(self):
-        for i in range(dash.MAX_CAMPAIGNS + 3):
-            self.campaign(f"C{i}", "Active")
-        c = self.data()["campaigns"]
-        self.assertEqual(len(c["items"]), dash.MAX_CAMPAIGNS)
-        self.assertEqual(c["counts"]["active"], dash.MAX_CAMPAIGNS + 3)
+    def test_a_campaign_the_dialer_knows_nothing_about_is_quiet(self):
+        from unittest.mock import patch
+        self.campaign("Running", "Active")
+        with patch("services.dialer.live_states", return_value={}):
+            item = self.data()["campaigns"]["items"][0]
+        self.assertEqual((item["state"], item["stall_reason"], item["errors"], item["last_error"]), (None, None, 0, None))
 
     def test_a_dialer_failure_does_not_break_the_page(self):
         from unittest.mock import patch
@@ -381,24 +356,18 @@ class Campaigns(Base):
             c = self.data()["campaigns"]
         self.assertEqual(c["items"][0]["state"], None)
 
+    def test_the_dialer_is_not_asked_when_nothing_is_running(self):
+        from unittest.mock import patch
+        self.campaign("Parked", "Paused")
+        with patch("services.dialer.live_states") as live:
+            self.data()
+        live.assert_not_called()
 
-class RecentAndSetup(Base):
-    def test_recent_calls_are_newest_first_capped_and_without_samples(self):
-        for i in range(10):
-            insert_call(self.user, noon(0) + timedelta(minutes=i), contact=f"R{i}")
-        rows = self.data()["recent_calls"]
-        self.assertEqual(len(rows), dash.RECENT_CALLS)
-        self.assertEqual(rows[0]["contact_name"], "R9")
-        self.assertNotIn("[SAMPLE] Demo", [r["contact_name"] for r in rows])
-        self.assertEqual(rows[0]["direction"], "outbound")
+    def test_the_page_no_longer_carries_a_recent_conversations_list(self):
+        self.assertNotIn("recent_calls", self.data())
 
-    def test_recent_calls_carry_the_agent_and_campaign_names(self):
-        agent = supabase.table("ai_agents").insert({"user_id": self.user, "name": "Sara"}).execute().data[0]["id"]
-        camp = supabase.table("outbound_campaigns").insert({"user_id": self.user, "name": "Spring"}).execute().data[0]["id"]
-        insert_call(self.user, noon(0) + timedelta(hours=3), contact="Zed", agent=agent, campaign=camp, qualified=True)
-        top = self.data()["recent_calls"][0]
-        self.assertEqual((top["contact_name"], top["agent_name"], top["campaign_name"], top["qualified"]), ("Zed", "Sara", "Spring", True))
 
+class Setup(Base):
     def test_setup_checklist(self):
         fresh = h.make_user("fresh")
         s = self.data(user=fresh)["setup"]

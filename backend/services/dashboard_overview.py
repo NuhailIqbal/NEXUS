@@ -45,9 +45,6 @@ LIVE_MAX_AGE_MINUTES = 30
 HOURLY_MAX_DAYS = 2
 # How many rows each "Top ..." table lists.
 TOP_N = 5
-# How many campaigns / recent calls the page lists.
-MAX_CAMPAIGNS = 8
-RECENT_CALLS = 8
 
 SAMPLE_SQL = "left(coalesce(c.contact_name, ''), 8) <> '[SAMPLE]'"
 
@@ -185,39 +182,17 @@ def headline(owner_id: str, range_key: str, tz: str, win: dict) -> tuple[dict, l
 
 # --------------------------------------------------------------------------------------- campaigns
 
-def _progress(owner_id: str, list_ids: list) -> dict:
-    """{list id: (contacts, completed)} with the same meaning as the Campaigns page (routers.telephony.
-    _enrich_campaign_progress: a contact is completed when it has a Completed call, matched by contact id or by the last
-    10 digits of the phone), but counted in one SQL pass over just these lists instead of loading every contact and call."""
-    if not list_ids:
-        return {}
-    rows = _rows(
-        "WITH done AS ("
-        "  SELECT contact_id, right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 10) AS pk"
-        "  FROM public.conversations WHERE user_id = %(owner)s::uuid AND status = 'Completed'"
-        "), contacts AS ("
-        "  SELECT id, list_id, right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 10) AS pk"
-        "  FROM public.contacts WHERE user_id = %(owner)s::uuid AND list_id = ANY(%(lists)s::uuid[])"
-        ") SELECT list_id, count(*)::int AS contacts,"
-        "  (count(*) FILTER (WHERE id IN (SELECT contact_id FROM done WHERE contact_id IS NOT NULL)"
-        "     OR (pk <> '' AND pk IN (SELECT pk FROM done WHERE pk <> ''))))::int AS completed"
-        " FROM contacts GROUP BY list_id", {"owner": owner_id, "lists": [str(i) for i in list_ids]})
-    return {str(r["list_id"]): (r["contacts"], r["completed"]) for r in rows}
-
-
 def campaigns(owner_id: str) -> dict:
-    """{counts: {active, paused, inactive}, items: [...]}: the Active and Paused campaigns (Active first, then the most
-    recently changed), each with progress and, for the running ones, what the dialer is doing right now."""
+    """{counts: {active, paused, inactive}, items: [...]}: how many campaigns the account has in each status, and the
+    Active ones with what the dialer is doing right now (its state, why it is stalled, its last call error). The counts
+    feed the live strip and the status line; the items feed the needs-attention list."""
     counts = {"active": 0, "paused": 0, "inactive": 0}
     for r in _rows("SELECT status, count(*)::int AS n FROM public.outbound_campaigns WHERE user_id = %s::uuid GROUP BY status", (owner_id,)):
         counts[str(r["status"]).lower()] = r["n"]
-    rows = _rows(
-        "SELECT id, name, status, list_id, stopped_by_hours_at FROM public.outbound_campaigns"
-        " WHERE user_id = %s::uuid AND status IN ('Active', 'Paused')"
-        f" ORDER BY (status = 'Active') DESC, updated_at DESC LIMIT {MAX_CAMPAIGNS}", (owner_id,))
-    progress = _progress(owner_id, [r["list_id"] for r in rows if r["list_id"]])
+    rows = _rows("SELECT id, name, status FROM public.outbound_campaigns WHERE user_id = %s::uuid AND status = 'Active'"
+                 " ORDER BY updated_at DESC", (owner_id,))
     live: dict = {}
-    if any(r["status"] == "Active" for r in rows):
+    if rows:
         try:
             from services import dialer  # lazy: the dialing engine is heavy and only matters when something is running
             live = dialer.live_states(owner_id)
@@ -225,37 +200,15 @@ def campaigns(owner_id: str) -> dict:
             logger.warning("dashboard: could not read the live dialing state", exc_info=True)
     items = []
     for r in rows:
-        contacts, completed = progress.get(str(r["list_id"]), (0, 0)) if r["list_id"] else (0, 0)
         ls = live.get(str(r["id"])) or {}
         counters = ls.get("counters") or {}
-        items.append({
-            "id": str(r["id"]), "name": r["name"], "status": r["status"],
-            "contacts_count": contacts, "completed_count": completed,
-            "state": ls.get("state"), "active_now": ls.get("active_now", 0),
-            "stall_reason": ls.get("stall_reason"), "warnings": ls.get("warnings") or [],
-            "errors": counters.get("errors", 0), "last_error": counters.get("last_error"),
-            # A run the calling hours stopped carries on by itself when they open.
-            "waiting_for_hours": bool(r["stopped_by_hours_at"]) and r["status"] == "Paused",
-        })
+        items.append({"id": str(r["id"]), "name": r["name"], "status": r["status"], "state": ls.get("state"),
+                      "stall_reason": ls.get("stall_reason"), "errors": counters.get("errors", 0),
+                      "last_error": counters.get("last_error")})
     return {"counts": counts, "items": items}
 
 
-# --------------------------------------------------------------------------------------- recent calls + setup
-
-def recent_calls(owner_id: str) -> list[dict]:
-    rows = _rows(
-        "SELECT c.id, c.contact_name, c.phone, c.status, c.direction, c.duration_seconds, c.call_time, c.qualified,"
-        " a.name AS agent_name, o.name AS campaign_name"
-        " FROM public.conversations c LEFT JOIN public.ai_agents a ON a.id = c.agent_id"
-        " LEFT JOIN public.outbound_campaigns o ON o.id = c.campaign_id"
-        f" WHERE c.user_id = %s::uuid AND {SAMPLE_SQL} ORDER BY c.call_time DESC LIMIT {RECENT_CALLS}", (owner_id,))
-    return [{
-        "id": str(r["id"]), "contact_name": r["contact_name"], "phone": r["phone"], "status": r["status"],
-        "direction": r["direction"] or "outbound", "duration_seconds": r["duration_seconds"] or 0,
-        "call_time": _iso(r["call_time"]), "qualified": bool(r["qualified"]),
-        "agent_name": r["agent_name"] or "", "campaign_name": r["campaign_name"] or "",
-    } for r in rows]
-
+# --------------------------------------------------------------------------------------- setup
 
 def setup(owner_id: str) -> dict:
     """Which of the first steps the account has taken (any row at all counts). Existence checks, not counts: cheap."""
@@ -408,6 +361,5 @@ def overview(owner_id: str, range_key: str, tz: str, from_date: date | None = No
         "campaigns": campaigns(owner_id),
         "inventory": inventory(owner_id),
         "tops": tops(owner_id, cc.Filters(from_date=win["current"][0], to_date=win["current"][1], tz=tz)),
-        "recent_calls": recent_calls(owner_id),
         "setup": setup(owner_id),
     }

@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { ymd } from "@/lib/callConsumption";
 
 vi.mock("@/services/api", () => ({
-  api: { getDashboardOverview: vi.fn(), getDashboardLive: vi.fn(), getMyRole: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn() },
+  api: { getDashboardOverview: vi.fn(), getDashboardLive: vi.fn() },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 // jsdom cannot measure, so Recharts would draw nothing: a stand-in that records what the chart is given.
@@ -27,10 +27,7 @@ import { LIVE_REFRESH_MS, customPresets, type DashboardOverview, type LiveData }
 import DashboardIndex from "./DashboardIndex";
 
 const getOverview = api.getDashboardOverview as ReturnType<typeof vi.fn>;
-const getRole = api.getMyRole as ReturnType<typeof vi.fn>;
 const getLive = api.getDashboardLive as ReturnType<typeof vi.fn>;
-const pause = api.pauseCampaign as ReturnType<typeof vi.fn>;
-const resume = api.resumeCampaign as ReturnType<typeof vi.fn>;
 
 const OK = (data: unknown) => Promise.resolve({ data, error: null });
 const FAIL = (error = "boom") => Promise.resolve({ data: null, error });
@@ -65,10 +62,8 @@ const overview = (over: Partial<DashboardOverview> = {}): DashboardOverview => (
   campaigns: {
     counts: { active: 1, paused: 1, inactive: 0 },
     items: [
-      { id: "c1", name: "Spring Push", status: "Active", contacts_count: 200, completed_count: 50, state: "dialing", active_now: 3,
-        stall_reason: null, warnings: [], errors: 0, last_error: null, waiting_for_hours: false },
-      { id: "c2", name: "Listings", status: "Paused", contacts_count: 10, completed_count: 10, state: null, active_now: 0,
-        stall_reason: null, warnings: [], errors: 0, last_error: null, waiting_for_hours: false },
+      { id: "c1", name: "Spring Push", status: "Active", state: "dialing", stall_reason: null, errors: 0, last_error: null },
+      { id: "c2", name: "Listings", status: "Paused", state: null, stall_reason: null, errors: 0, last_error: null },
     ],
   },
   inventory: { agents: { total: 5, active: 4 }, receptionists: { total: 1, active: 1 } },
@@ -80,12 +75,6 @@ const overview = (over: Partial<DashboardOverview> = {}): DashboardOverview => (
     agents: [{ id: "a1", name: "Sara", calls: 100, leads: 14, qualified_leads: 10, spend: 60, cost_per_qualified_lead: 6 }],
     receptionists: [{ id: "q1", name: "Front desk", calls: 12, leads: 3, qualified_leads: 2, spend: 6, cost_per_qualified_lead: 3 }],
   },
-  recent_calls: [
-    { id: "v1", contact_name: "Pat Smith", phone: "+15551234567", status: "Completed", direction: "outbound", duration_seconds: 75,
-      call_time: "2026-10-26T14:05:00Z", qualified: true, agent_name: "Sara", campaign_name: "Spring Push" },
-    { id: "v2", contact_name: null, phone: "+15557654321", status: "No Answer", direction: "inbound", duration_seconds: 0,
-      call_time: "2026-10-26T13:00:00Z", qualified: false, agent_name: "Max", campaign_name: "" },
-  ],
   setup: { agent: true, phone: true, campaign: true, receptionist: false, calls: true, complete: true },
   ...over,
 });
@@ -99,9 +88,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOverview.mockImplementation(() => OK(overview()));
   getLive.mockImplementation(() => OK(liveData()));
-  getRole.mockResolvedValue({ data: { is_owner: true }, error: null });
-  pause.mockResolvedValue({ data: { status: "Paused" }, error: null });
-  resume.mockResolvedValue({ data: { status: "Active" }, error: null });
 });
 
 const strip = () => screen.findByTestId("live-strip");
@@ -563,14 +549,13 @@ describe("Dashboard home", () => {
         minutes: { value: 0, previous: 0, change_pct: null }, spend: { value: 0, previous: 0, change_pct: null },
         cost_per_qualified_lead: { value: null, previous: null, change_pct: null },
       },
-      trend: trend(0), recent_calls: [],
+      trend: trend(0),
     })));
     renderPage();
     await screen.findByText("No calls in this period");
     expect(within(tile("Answered rate")).getByText("—")).toBeInTheDocument();
     expect(within(tile("Cost per qualified lead")).getByText("—")).toBeInTheDocument();
     expect(screen.getAllByText("No calls in this period yet.")).toHaveLength(2);              // the chart and the funnel
-    expect(screen.getByText(/No conversations yet/)).toBeInTheDocument();
     expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
   });
 
@@ -580,65 +565,6 @@ describe("Dashboard home", () => {
     renderPage();
     await tileValue("120");
     expect(screen.queryByText(/vs yesterday/)).not.toBeInTheDocument();
-  });
-
-  describe("campaigns", () => {
-    it("lists them with status and progress", async () => {
-      renderPage();
-      const list = await screen.findByTestId("campaign-list");
-      expect(within(list).getByText("Spring Push")).toBeInTheDocument();
-      expect(within(list).getByText("50 / 200 reached")).toBeInTheDocument();
-      expect(within(list).getByText("3 calls in progress.")).toBeInTheDocument();
-      expect(within(list).getByText("Paused.")).toBeInTheDocument();
-      expect(screen.getByText("1 active, 1 paused")).toBeInTheDocument();
-    });
-    it("pauses an active campaign and refreshes", async () => {
-      renderPage();
-      fireEvent.click(await screen.findByRole("button", { name: "Pause Spring Push" }));
-      await waitFor(() => expect(pause).toHaveBeenCalledWith("c1"));
-      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Spring Push paused."));
-      await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
-    });
-    it("resumes a paused campaign", async () => {
-      renderPage();
-      fireEvent.click(await screen.findByRole("button", { name: "Resume Listings" }));
-      await waitFor(() => expect(resume).toHaveBeenCalledWith("c2"));
-    });
-    it("reports a failed pause and does not claim success", async () => {
-      pause.mockResolvedValue({ data: null, error: "Nope" });
-      renderPage();
-      fireEvent.click(await screen.findByRole("button", { name: "Pause Spring Push" }));
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope"));
-      expect(toast.success).not.toHaveBeenCalled();
-    });
-    it("hides pause / resume from Viewers, who still see the campaigns", async () => {
-      getRole.mockResolvedValue({ data: { is_owner: false, role: "viewer" }, error: null });
-      renderPage();
-      await screen.findByTestId("campaign-list");
-      await waitFor(() => expect(getRole).toHaveBeenCalled());
-      expect(screen.queryByRole("button", { name: /^(Pause|Resume) / })).not.toBeInTheDocument();
-    });
-    it("keeps pause / resume for team Members", async () => {
-      getRole.mockResolvedValue({ data: { is_owner: false, role: "member" }, error: null });
-      renderPage();
-      expect(await screen.findByRole("button", { name: "Pause Spring Push" })).toBeInTheDocument();
-    });
-    it("explains an empty list", async () => {
-      const o = overview();
-      getOverview.mockImplementation(() => OK({ ...o, campaigns: { counts: { active: 0, paused: 0, inactive: 2 }, items: [] } }));
-      renderPage();
-      expect(await screen.findByText("No active campaigns yet.")).toBeInTheDocument();
-    });
-  });
-
-  it("lists recent conversations that link to the Conversations page", async () => {
-    renderPage();
-    const list = await screen.findByTestId("recent-calls");
-    expect(within(list).getByText("Pat Smith")).toBeInTheDocument();
-    expect(within(list).getByText("Qualified")).toBeInTheDocument();
-    expect(within(list).getByText("1:15")).toBeInTheDocument();
-    expect(within(list).getByText("+15557654321")).toBeInTheDocument();             // no name: the number
-    expect(screen.getByRole("link", { name: "View all" })).toHaveAttribute("href", "/dashboard/conversations");
   });
 
   describe("needs attention", () => {
@@ -671,7 +597,7 @@ describe("Dashboard home", () => {
     const fresh = () => overview({
       setup: { agent: false, phone: false, campaign: false, receptionist: false, calls: false, complete: false },
       tiles: { ...overview().tiles, has_data: false, has_previous: false },
-      recent_calls: [], campaigns: { counts: { active: 0, paused: 0, inactive: 0 }, items: [] },
+      campaigns: { counts: { active: 0, paused: 0, inactive: 0 }, items: [] },
     });
     it("shows the first steps with a way into Quick Setup", async () => {
       getOverview.mockImplementation(() => OK(fresh()));
@@ -713,14 +639,41 @@ describe("Dashboard home", () => {
       expect(await screen.findByText("Failed to load the dashboard. Please try again.")).toBeInTheDocument();
     });
     it("keeps the numbers when only a later refresh fails", async () => {
-      renderPage();
-      await tileValue("120");
-      getOverview.mockImplementationOnce(() => FAIL("blip"));
-      fireEvent.click(await screen.findByRole("button", { name: "Pause Spring Push" }));      // triggers a quiet refresh
-      await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
-      expect(within(screen.getByTestId("home-tiles")).getByText("120")).toBeInTheDocument();
-      expect(screen.queryByText("blip")).not.toBeInTheDocument();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderPage();
+        await tileValue("120");
+        getOverview.mockImplementationOnce(() => FAIL("blip"));
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000 + 100); });          // the page's own minute refresh
+        await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
+        expect(within(screen.getByTestId("home-tiles")).getByText("120")).toBeInTheDocument();
+        expect(screen.queryByText("blip")).not.toBeInTheDocument();
+        expect(toast.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
+    it("refreshes by itself every minute", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        renderPage();
+        await tileValue("120");
+        const o = overview();
+        getOverview.mockImplementation(() => OK({ ...o, tiles: { ...o.tiles, calls: { ...o.tiles.calls, value: 130 } } }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000 + 100); });
+        expect(await tileValue("130")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("has no campaigns list, recent conversations list or pause / resume buttons: it only reads", async () => {
+    renderPage();
+    await tileValue("120");
+    expect(screen.queryByText("Recent conversations")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("campaign-list")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Pause|Resume) / })).not.toBeInTheDocument();
   });
 
   it("never mentions the voice vendor", async () => {

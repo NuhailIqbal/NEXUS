@@ -1,13 +1,12 @@
 /**
  * Dashboard home (route /dashboard): "how is my calling doing right now?" at a glance. One request
  * (GET /dashboard/overview) feeds everything: headline tiles for Today (the default) / 7 days / 30 days against the range before, a
- * daily trend, the running campaigns (pause / resume), the latest conversations and,
+ * daily trend, the funnel, the top campaigns / agents / receptionists and,
  * for an account that cannot take calls yet, a first-steps card that leads to Quick Setup. The numbers are the Cost per
  * Lead and Call Consumption reports' own (see services/dashboard_overview.py).
  *
  * The page refreshes itself every minute without blanking. Switching the range keeps the old numbers on screen
- * (dimmed) until the new ones arrive. Viewers see everything; pause / resume are hidden for them (the server refuses it
- * anyway). A failed first load shows an error with Retry, never a half-empty page.
+ * (dimmed) until the new ones arrive. Viewers see everything (the page only reads). A failed first load shows an error with Retry, never a half-empty page.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -16,7 +15,7 @@ import { AlertTriangle } from "lucide-react";
 import { SectionCard } from "@/components/call-consumption/SectionCard";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AttentionList, CampaignsCard, RecentCallsCard } from "@/components/dashboard-home/HomePanels";
+import { AttentionList } from "@/components/dashboard-home/AttentionList";
 import { FunnelCard } from "@/components/dashboard-home/FunnelCard";
 import { HomeTiles } from "@/components/dashboard-home/HomeTiles";
 import { LiveStrip } from "@/components/dashboard-home/LiveStrip";
@@ -28,7 +27,7 @@ import { browserTimeZone, rangeDays, rangeError, ymd } from "@/lib/callConsumpti
 import { useAuth } from "@/contexts/AuthContext";
 import {
   LIVE_REFRESH_MS, RANGES, ROUTES, chartIsEmpty, chartPoints, customPresets, firstName, greeting,
-  type CampaignItem, type CustomRange, type DashboardOverview, type LiveData, type RangeKey,
+  type CustomRange, type DashboardOverview, type LiveData, type RangeKey,
 } from "@/lib/dashboardOverview";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
@@ -87,7 +86,7 @@ function useOverview(range: RangeKey, custom: CustomRange) {
     };
   }, [load]);
 
-  return { data, loading, error, reload: () => void load(false), refresh: () => load(true) };
+  return { data, loading, error, reload: () => void load(false) };
 }
 
 /**
@@ -131,36 +130,8 @@ const DashboardIndex = () => {
     setDraft(next);
     if (next.from && next.to && !rangeError(next.from, next.to)) setApplied(next);
   };
-  const { data, loading, error, reload, refresh } = useOverview(range, applied);
+  const { data, loading, error, reload } = useOverview(range, applied);
   const live = useLive();
-  const [canManage, setCanManage] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  // Owners and Members may pause / resume; Viewers are read-only.
-  useEffect(() => {
-    api.getMyRole()
-      .then(({ data: r }) => {
-        const role = r as { is_owner?: boolean; role?: string } | null;
-        setCanManage(!!role && (role.is_owner === true || role.role !== "viewer"));
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const toggleCampaign = async (c: CampaignItem) => {
-    setBusyId(c.id);
-    const pausing = c.status === "Active";
-    try {
-      const { error: e } = pausing ? await api.pauseCampaign(c.id) : await api.resumeCampaign(c.id);
-      if (e) toast.error(typeof e === "string" ? e : `Could not ${pausing ? "pause" : "resume"} ${c.name}.`);
-      else toast.success(pausing ? `${c.name} paused.` : `${c.name} resumed.`);
-      await refresh();
-    } catch {
-      toast.error(`Could not ${pausing ? "pause" : "resume"} ${c.name}.`);
-    } finally {
-      setBusyId(null);
-    }
-  };
-
   const first = loading && !data;       // nothing to show yet
   const failed = !!error && !data;      // first load failed
   const stale = loading && !!data;      // range switched: old numbers stay, dimmed
@@ -246,13 +217,6 @@ const DashboardIndex = () => {
 
           <TopLists tops={d?.tops ?? null} loading={first} />
 
-          <div className="grid gap-6 lg:grid-cols-2">
-            <CampaignsCard
-              campaigns={d?.campaigns ?? { counts: { active: 0, paused: 0, inactive: 0 }, items: [] }}
-              loading={first} canManage={canManage} busyId={busyId} onToggle={toggleCampaign}
-            />
-            <RecentCallsCard calls={d?.recent_calls ?? []} loading={first} />
-          </div>
         </div>
       )}
     </div>

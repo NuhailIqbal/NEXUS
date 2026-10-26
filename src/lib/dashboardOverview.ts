@@ -74,32 +74,15 @@ export type TrendPoint = {
   spend: number; minutes: number; answered: number; finished: number;
 };
 
+/** A running campaign, as far as the needs-attention list cares: what the dialer says about it. */
 export type CampaignItem = {
   id: string;
   name: string;
   status: "Active" | "Paused";
-  contacts_count: number;
-  completed_count: number;
   state: string | null;
-  active_now: number;
   stall_reason: string | null;
-  warnings: string[];
   errors: number;
   last_error: string | null;
-  waiting_for_hours: boolean;
-};
-
-export type RecentCall = {
-  id: string;
-  contact_name: string | null;
-  phone: string | null;
-  status: string;
-  direction: "inbound" | "outbound";
-  duration_seconds: number;
-  call_time: string | null;
-  qualified: boolean;
-  agent_name: string;
-  campaign_name: string;
 };
 
 export type Setup = { agent: boolean; phone: boolean; campaign: boolean; receptionist: boolean; calls: boolean; complete: boolean };
@@ -150,7 +133,6 @@ export type DashboardOverview = {
   inventory: Inventory;
   chart: ChartInfo;
   tops: Tops;
-  recent_calls: RecentCall[];
   setup: Setup;
 };
 
@@ -197,17 +179,6 @@ export function formatMinutes(minutes: number | null | undefined): string {
     return rest === 60 ? `${h + 1}h 00m` : `${h}h ${String(rest).padStart(2, "0")}m`;
   }
   return `${m >= 10 ? Math.round(m) : m.toFixed(1)} min`;
-}
-
-/** Seconds as "0:45" / "12:03" (the Conversations page's duration style). */
-export function formatDuration(seconds: number | null | undefined): string {
-  const s = Math.max(0, Math.round(seconds ?? 0));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** Percent of a campaign's contacts that have been reached (0-100, whole), 0 for an empty list. */
-export function progressPct(c: Pick<CampaignItem, "contacts_count" | "completed_count">): number {
-  return c.contacts_count > 0 ? Math.min(100, Math.round((c.completed_count / c.contacts_count) * 100)) : 0;
 }
 
 /** One thing that needs a person's attention, with where to go. */
