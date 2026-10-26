@@ -48,6 +48,7 @@ const PAGES: { label: string; to: string }[] = [
   { label: "Reports — Hourly Heatmap", to: "/dashboard/call-consumption/hourly-heatmap" },
   { label: "Reports — Inbound & Outbound", to: "/dashboard/call-consumption/direction" },
   { label: "Reports — Weekly & Monthly", to: "/dashboard/call-consumption/periodic" },
+  { label: "Reports — Cost per Lead", to: "/dashboard/call-consumption/lead-roi" },
   { label: "Call Events", to: "/dashboard/call-events" },
   { label: "Call Events — Callbacks", to: "/dashboard/call-events/callbacks" },
   { label: "Automation", to: "/dashboard/automation" },

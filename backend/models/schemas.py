@@ -625,3 +625,14 @@ class VoiceWidgetUpdate(BaseModel):
     agent_id: Optional[str] = None
     status: Optional[str] = None
     config: Optional[dict] = None
+
+
+class LeadValuesUpdate(BaseModel):
+    """Body for PUT /call-consumption/lead-roi/values (account owner only): what a lead is worth, for the whole
+    account (`campaign_id` null) or one campaign. A null value means "not set" (a campaign then inherits the
+    account's). Ranges are validated in services/lead_roi, not by this model."""
+    campaign_id: Optional[str] = None
+    # Money one lead that was handed to a human is worth.
+    value_per_qualified_lead: Optional[float] = None
+    # Money one other lead (a callback request or a booked meeting, not transferred) is worth.
+    value_per_lead: Optional[float] = None

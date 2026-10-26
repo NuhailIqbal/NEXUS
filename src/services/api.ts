@@ -82,6 +82,11 @@ function post<T = any>(path: string, body?: any) {
   return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 }
 
+/** PUT `path` with a JSON body. */
+function put<T = any>(path: string, body: any) {
+  return request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+}
+
 /** PATCH `path` with a JSON body. */
 function patch<T = any>(path: string, body: any) {
   return request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
@@ -362,6 +367,10 @@ export const api = {
     get<T>(`/call-consumption${path}${queryString(params)}`),
   downloadCallConsumption: (path: string, params: Record<string, string | undefined>, filename: string) =>
     downloadFile(`/call-consumption${path}${queryString(params)}`, filename),
+  // Cost per lead & ROI: what a lead is worth (owner only to save). campaign_id null = the account-wide value.
+  getLeadValues: () => get("/call-consumption/lead-roi/values"),
+  saveLeadValues: (data: { campaign_id: string | null; value_per_qualified_lead: number | null; value_per_lead: number | null }) =>
+    put("/call-consumption/lead-roi/values", data),
 
   // Automation
   getFlows: () => get("/automation/flows"),

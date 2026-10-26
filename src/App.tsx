@@ -66,6 +66,7 @@ import CallConsumptionPeriodic from "./pages/dashboard/call-consumption/Periodic
 import CallConsumptionDirection from "./pages/dashboard/call-consumption/InboundOutbound";
 import CallConsumptionHourly from "./pages/dashboard/call-consumption/HourlyHeatmap";
 import CallConsumptionReasons from "./pages/dashboard/call-consumption/NonConsumptionReasons";
+import LeadRoi from "./pages/dashboard/lead-roi/LeadRoi";
 import { AutomationList } from "./pages/dashboard/automation/AutomationList.tsx";
 import CallEvents from "./pages/dashboard/CallEvents";
 import CallEventsLayout from "./pages/dashboard/CallEventsLayout";
@@ -163,6 +164,7 @@ const App = () => {
                   <Route path="call-consumption/periodic" element={<CallConsumptionPeriodic />} />
                   <Route path="call-consumption/hourly-heatmap" element={<CallConsumptionHourly />} />
                   <Route path="call-consumption/reasons" element={<CallConsumptionReasons />} />
+                  <Route path="call-consumption/lead-roi" element={<LeadRoi />} />
                   <Route path="call-events" element={<CallEventsLayout />}>
                     <Route index element={<CallEvents />} />
                     <Route path="callbacks" element={<Callbacks />} />

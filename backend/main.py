@@ -29,6 +29,7 @@ from routers import (
     integrations,
     analytics,
     call_consumption,
+    lead_roi,
     team,
     profile,
     webhooks,
@@ -277,6 +278,7 @@ app.include_router(voice_widgets.router)
 app.include_router(integrations.router)
 app.include_router(analytics.router)
 app.include_router(call_consumption.router)
+app.include_router(lead_roi.router)
 app.include_router(team.router)
 app.include_router(profile.router)
 app.include_router(webhooks.router)

@@ -90,6 +90,7 @@ const NAV: NavItem[] = [
       { label: "Hourly Heatmap", to: "/dashboard/call-consumption/hourly-heatmap" },
       { label: "Inbound & Outbound", to: "/dashboard/call-consumption/direction" },
       { label: "Weekly & Monthly", to: "/dashboard/call-consumption/periodic" },
+      { label: "Cost per Lead", to: "/dashboard/call-consumption/lead-roi" },
     ],
   },
   { label: "Call Events", to: "/dashboard/call-events", icon: Zap },

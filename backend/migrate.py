@@ -826,6 +826,19 @@ def _ensure_columns(conn) -> None:
         'CREATE UNIQUE INDEX IF NOT EXISTS campaign_attempts_one_open_call_idx ON public.campaign_attempts (user_id, phone_key) WHERE ended_at IS NULL',
         'CREATE INDEX IF NOT EXISTS campaign_attempts_call_idx ON public.campaign_attempts (vapi_call_id)',
         'CREATE INDEX IF NOT EXISTS campaign_attempts_lead_idx ON public.campaign_attempts (lead_id, attempt_number)',
+        # Cost per lead & ROI report (services/lead_roi.py): what a lead is worth to the account. campaign_id NULL is
+        # the account-wide default; a row with a campaign_id overrides it for that campaign, field by field (a NULL
+        # value inherits the default). No row / NULL value = "not set": the report then shows costs only.
+        '''CREATE TABLE IF NOT EXISTS public.lead_values (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            campaign_id uuid REFERENCES public.outbound_campaigns(id) ON DELETE CASCADE,
+            value_per_qualified_lead numeric(12,2) CHECK (value_per_qualified_lead >= 0),
+            value_per_lead numeric(12,2) CHECK (value_per_lead >= 0),
+            updated_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        'CREATE UNIQUE INDEX IF NOT EXISTS lead_values_account_uidx ON public.lead_values (user_id) WHERE campaign_id IS NULL',
+        'CREATE UNIQUE INDEX IF NOT EXISTS lead_values_campaign_uidx ON public.lead_values (user_id, campaign_id) WHERE campaign_id IS NOT NULL',
     ]
     for stmt in statements:
         try:
