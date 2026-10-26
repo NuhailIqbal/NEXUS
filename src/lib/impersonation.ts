@@ -24,11 +24,11 @@ const FLAG_KEY = "nexus_impersonating";      // holds the impersonated user's em
 /**
  * Builds the main-app URL that carries the impersonation token and email as query params
  * (the cross-origin handoff); AuthContext consumes and strips them on load. The landing
- * page is /dashboard/quick-setup.
+ * page is /dashboard.
  */
 function impersonationUrl(token: string, email: string): string {
   const params = new URLSearchParams({ impersonate_token: token, impersonate_email: email });
-  return `${mainAppOrigin()}/dashboard/quick-setup?${params.toString()}`;
+  return `${mainAppOrigin()}/dashboard?${params.toString()}`;
 }
 
 /** Begin impersonating in a given window/tab (used for the "open in new tab" flow). */
