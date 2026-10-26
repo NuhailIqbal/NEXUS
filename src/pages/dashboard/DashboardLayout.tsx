@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-dom";
 import {
-  LayoutDashboard, Bot, Mic, Database, Phone,
+  LayoutDashboard, Home, Bot, Mic, Database, Phone,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
   Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap, PhoneCall,
 } from "lucide-react";
@@ -41,6 +41,7 @@ type NavItem = {
 
 /** Sidebar menu definition, rendered in order by Sidebar. Group labels double as the keys of its open/closed state. */
 const NAV: NavItem[] = [
+  { label: "Dashboard", to: "/dashboard", icon: Home },
   { label: "Quick Setup", to: "/dashboard/quick-setup", icon: LayoutDashboard },
   { label: "AI Agents", to: "/dashboard/ai-agents", icon: Bot },
   { label: "AI Voices", to: "/dashboard/ai-voices", icon: Mic },
@@ -308,7 +309,7 @@ function Sidebar({
       )}
     >
       <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-5">
-        <Link to="/dashboard/quick-setup" className="flex items-center">
+        <Link to="/dashboard" className="flex items-center">
           <Logo linked={false} />
         </Link>
         <button

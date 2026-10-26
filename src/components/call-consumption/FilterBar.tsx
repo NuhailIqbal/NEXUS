@@ -39,11 +39,11 @@ const parseYmd = (v: string) => (v ? new Date(`${v}T00:00:00`) : undefined);
 const show = (v: string) => { const d = parseYmd(v); return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-GB") : "dd/mm/yyyy"; };
 
 /** A date field that opens a calendar popup (Today / Clear in its footer). `value` and `onChange` are YYYY-MM-DD. */
-function DateField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+export function DateField({ label, value, onChange, className }: { label: string; value: string; onChange: (v: string) => void; className?: string }) {
   const [open, setOpen] = useState(false);
   const selected = parseYmd(value);
   return (
-    <div className="min-w-[9.5rem] flex-1 space-y-1">
+    <div className={cn("min-w-[9.5rem] flex-1 space-y-1", className)}>
       <Label className="text-xs text-muted-foreground">{label}</Label>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>

@@ -27,6 +27,7 @@ type ResultItem = {
  * Billing tabs, so a new route needs an entry here to be findable.
  */
 const PAGES: { label: string; to: string }[] = [
+  { label: "Dashboard", to: "/dashboard" },
   { label: "Quick Setup", to: "/dashboard/quick-setup" },
   { label: "AI Agents", to: "/dashboard/ai-agents" },
   { label: "AI Voices", to: "/dashboard/ai-voices" },

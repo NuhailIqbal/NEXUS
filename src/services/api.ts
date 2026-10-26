@@ -372,6 +372,14 @@ export const api = {
   saveLeadValues: (data: { campaign_id: string | null; value_per_qualified_lead: number | null; value_per_lead: number | null }) =>
     put("/call-consumption/lead-roi/values", data),
 
+  // Dashboard home: one snapshot (tiles, chart, campaigns, top lists, recent calls, setup) for a range; `custom` adds From / To.
+  getDashboardOverview: (range: string, tz: string, custom?: { from: string; to: string }) =>
+    get(`/dashboard/overview?range=${encodeURIComponent(range)}&tz=${encodeURIComponent(tz)}${
+      custom ? `&from=${encodeURIComponent(custom.from)}&to=${encodeURIComponent(custom.to)}` : ""}`),
+
+  // Dashboard home, the part that is polled every few seconds: calls running now and calls today.
+  getDashboardLive: (tz: string) => get(`/dashboard/live?tz=${encodeURIComponent(tz)}`),
+
   // Automation
   getFlows: () => get("/automation/flows"),
   createFlow: (data: any) => post("/automation/flows", data),
