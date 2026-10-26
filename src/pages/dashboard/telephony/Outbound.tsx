@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Plus, PhoneOutgoing, Play, Pause as PauseIcon,
-  CheckCircle2, XCircle, Loader2, AlertTriangle,
+  CheckCircle2, XCircle, Loader2, AlertTriangle, Rocket,
   Users, TrendingUp, Radio, BarChart2, Bot, Phone, Clock, Repeat, ListChecks, Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -179,6 +179,15 @@ const Outbound = () => {
   const [preflightTarget, setPreflightTarget] = useState<Campaign | null>(null);
   const [checks, setChecks] = useState<CheckItem[]>([]);
   const [launching, setLaunching] = useState(false);
+  // How many checklist rows have been revealed so far. Results arrive together, but are shown one by one.
+  const [revealed, setRevealed] = useState(0);
+  const shownChecks: CheckItem[] = checks.map((c, i) => (i < revealed ? c : { label: c.label, status: "loading" }));
+  const checksSettled = checks.length > 0 && checks.every((c) => c.status !== "loading");
+  useEffect(() => {
+    if (!checksSettled || revealed >= checks.length) return;
+    const t = setTimeout(() => setRevealed((r) => r + 1), 550);
+    return () => clearTimeout(t);
+  }, [checksSettled, revealed, checks.length]);
 
   // What the server is doing with each running campaign right now (GET /campaigns/live), and when it was read.
   const [live, setLive] = useState<Record<string, LiveState>>({});
@@ -277,6 +286,7 @@ const Outbound = () => {
    */
   const openPreflight = async (c: Campaign) => {
     setPreflightTarget(c);
+    setRevealed(0);
     const init: CheckItem[] = [
       { label: "Agent assigned & synced", status: "loading" },
       { label: "Phone number assigned & active", status: "loading" },
@@ -763,37 +773,93 @@ const Outbound = () => {
 
       {/* Pre-flight Dialog */}
       <Dialog open={!!preflightTarget} onOpenChange={(o) => { if (!o) setPreflightTarget(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader className="text-left">
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="h-4 w-4 text-yellow-500" />
-              Pre-launch Checks
-            </DialogTitle>
-            <DialogDescription>Verifying <span className="font-medium text-foreground">{preflightTarget?.name}</span> is ready to dial.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2.5 py-1">
-            {checks.map((c, i) => (
-              <div key={i} className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
-                c.status === "pass" ? "border-green-500/20 bg-green-500/5" :
-                c.status === "fail" ? "border-destructive/20 bg-destructive/5" :
-                "border-border bg-muted/30"
-              }`}>
-                {c.status === "loading" && <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />}
-                {c.status === "pass"    && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-500" />}
-                {c.status === "fail"    && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />}
-                {c.status === "warn"    && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />}
-                <div>
-                  <p className="text-sm font-medium">{c.label}</p>
-                  {c.detail && <p className="mt-0.5 text-xs text-muted-foreground">{c.detail}</p>}
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const total = shownChecks.length;
+            const passed = shownChecks.filter((c) => c.status === "pass").length;
+            const loading = shownChecks.some((c) => c.status === "loading");
+            const failed = shownChecks.some((c) => c.status === "fail");
+            const warned = shownChecks.some((c) => c.status === "warn");
+            const tone = loading ? "muted" : failed ? "bad" : warned ? "warn" : "good";
+            const title = loading ? "Running checks" : failed ? "Fix these before launching" : warned ? "Ready, with warnings" : "Ready to launch";
+            const badge = {
+              muted: "bg-muted text-muted-foreground",
+              bad: "bg-destructive/10 text-destructive",
+              warn: "bg-yellow-500/10 text-yellow-500",
+              good: "bg-green-500/10 text-green-500",
+            }[tone];
+            const bar = { muted: "bg-muted-foreground/50", bad: "bg-destructive", warn: "bg-yellow-500", good: "bg-green-500" }[tone];
+            return (
+              <>
+                <DialogHeader className="text-left">
+                  <div className="flex items-center gap-3 pr-6">
+                    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${badge}`}>
+                      {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : failed ? <XCircle className="h-5 w-5" /> : warned ? <AlertTriangle className="h-5 w-5" /> : <Rocket className="h-5 w-5" />}
+                    </div>
+                    <div className="min-w-0">
+                      <DialogTitle className="text-lg">{title}</DialogTitle>
+                      <DialogDescription className="truncate">
+                        Pre-launch checks for <span className="font-medium text-foreground">{preflightTarget?.name}</span>
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{passed} of {total} checks passed</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div className={`h-full rounded-full transition-all duration-500 ${bar}`} style={{ width: `${total ? (passed / total) * 100 : 0}%` }} />
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+
+                <div className="space-y-2">
+                  {shownChecks.map((c, i) => (
+                    <div key={i} className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 transition-colors ${
+                      c.status === "pass" ? "border-green-500/20 bg-green-500/5" :
+                      c.status === "fail" ? "border-destructive/30 bg-destructive/5" :
+                      c.status === "warn" ? "border-yellow-500/30 bg-yellow-500/5" :
+                      "border-border bg-muted/30"
+                    }`}>
+                      <div key={c.status} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full animate-in zoom-in-50 duration-300 ${
+                        c.status === "pass" ? "bg-green-500/15 text-green-500" :
+                        c.status === "fail" ? "bg-destructive/15 text-destructive" :
+                        c.status === "warn" ? "bg-yellow-500/15 text-yellow-500" :
+                        "bg-muted text-muted-foreground"
+                      }`}>
+                        {c.status === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {c.status === "pass" && <CheckCircle2 className="h-4 w-4" />}
+                        {c.status === "fail" && <XCircle className="h-4 w-4" />}
+                        {c.status === "warn" && <AlertTriangle className="h-4 w-4" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">{c.label}</p>
+                        {c.detail && (
+                          <p className={`mt-0.5 break-words text-xs ${c.status === "fail" ? "text-destructive" : "text-muted-foreground"}`}>
+                            {c.detail.replace(/\s*✓$/, "")}
+                          </p>
+                        )}
+                      </div>
+                      <span className={`shrink-0 text-xs font-medium ${
+                        c.status === "pass" ? "text-green-500" :
+                        c.status === "fail" ? "text-destructive" :
+                        c.status === "warn" ? "text-yellow-500" :
+                        "text-muted-foreground"
+                      }`}>
+                        {c.status === "pass" ? "Passed" : c.status === "fail" ? "Failed" : c.status === "warn" ? "Warning" : "Checking"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setPreflightTarget(null)}>Cancel</Button>
             <Button
               onClick={launchCampaign}
-              disabled={launching || checks.some((c) => c.status === "loading" || c.status === "fail")}
+              disabled={launching || shownChecks.some((c) => c.status === "loading" || c.status === "fail")}
             >
               {launching
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Launching…</>
