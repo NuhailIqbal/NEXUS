@@ -44,6 +44,7 @@ from routers import (
     auth,
     notifications,
     referrals,
+    support_chat,
 )
 
 # Application-level rate limiter (clients keyed by remote IP). slowapi needs it on
@@ -190,8 +191,8 @@ class TeamRoleGuard(BaseHTTPMiddleware):
     # Matched with startswith(). These routes are called without a user's team context:
     # provider webhooks, the admin portal (X-Admin-Auth instead of a user Bearer token),
     # login/signup, the voice provider's agent-tool callbacks, and a new invitee
-    # accepting a team invite.
-    EXEMPT_PATHS = {"/webhooks/", "/admin/", "/auth/", "/tools/internal/", "/team/accept-invite"}
+    # accepting a team invite. Also the support assistant chat: asking a question changes nothing, so Viewers may.
+    EXEMPT_PATHS = {"/webhooks/", "/admin/", "/auth/", "/tools/internal/", "/team/accept-invite", "/support/chat"}
     SAFE_SUFFIXES = ("/test",)  # dry-run endpoints — never persist anything
 
     async def dispatch(self, request: Request, call_next):
@@ -293,3 +294,4 @@ app.include_router(stripe_webhook.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
 app.include_router(referrals.router)
+app.include_router(support_chat.router)

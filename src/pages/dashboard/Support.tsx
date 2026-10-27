@@ -1,4 +1,5 @@
 import { LifeBuoy, MessageSquare, Mail } from "lucide-react";
+import { OPEN_SUPPORT_CHAT_EVENT } from "@/components/SupportChatBubble";
 const faqs = [
   { q: "How do I create my first AI agent?", a: "Go to AI Agents and click Add New Agent. The guided setup walks you through the agent's name, goal, industry, language and voice, its knowledge, and its system prompt and greeting, then lets you test it with a live voice call in your browser before you save." },
   { q: "How do I get a phone number?", a: "Go to Phone Numbers and click Buy Number. Choose whether it's for inbound, outbound or both, optionally assign an agent, and confirm. A US local number is provisioned to your account for $3/month, paid from your balance or by card if your balance is too low." },
@@ -21,10 +22,14 @@ const Support = () => (
     <div className="grid gap-4 md:grid-cols-3">
       {[
         { icon: LifeBuoy, label: "Help Center", desc: "Articles & guides" },
-        { icon: MessageSquare, label: "Live Chat", desc: "Mon–Fri, 9–6 ET" },
+        { icon: MessageSquare, label: "Chat assistant", desc: "AI helper, answers any time", onClick: () => window.dispatchEvent(new Event(OPEN_SUPPORT_CHAT_EVENT)) },
         { icon: Mail, label: "Email", desc: "edmnexusai@gmail.com" },
-      ].map((c) => (
-        <div key={c.label} className="rounded-xl border border-border bg-card p-5 card-interactive">
+      ].map((c: { icon: typeof LifeBuoy; label: string; desc: string; onClick?: () => void }) => (
+        <div
+          key={c.label}
+          className={`rounded-xl border border-border bg-card p-5 card-interactive ${c.onClick ? "cursor-pointer" : ""}`}
+          {...(c.onClick ? { role: "button", tabIndex: 0, onClick: c.onClick, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") c.onClick?.(); } } : {})}
+        >
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <c.icon className="h-5 w-5" />
           </div>

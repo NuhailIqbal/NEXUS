@@ -226,6 +226,8 @@ class Settings(BaseSettings):
     # "Send As" alias) — keep this equal to system_smtp_username unless you've set one up.
     system_email_from: str = "noreply@edmnexus.ai"
     system_email_from_name: str = "EDM Nexus"
+    # Where customers are told to write for things the in-product assistant cannot do (see services/support_assistant.py).
+    support_email: str = "edmnexusai@gmail.com"
 
     @model_validator(mode="after")
     def _normalize_smtp_from(self) -> "Settings":

@@ -89,6 +89,44 @@ async def chat_reply(system_prompt: str | None, user_message: str, first_message
         raise OpenAIError("Couldn't reach the AI service. Please try again.") from e
 
 
+async def chat_conversation(system_prompt: str, history: list[dict]) -> str:
+    """The NEXUS assistant's next reply in the in-product chat (routers/support_chat.py), via OpenAI (gpt-4o-mini).
+
+    `system_prompt` is already complete (the agent's prompt, its language directive and the chat rules); `history` is
+    the conversation so far as [{"role": "user" | "assistant", "content": str}], oldest first, ending with the
+    visitor's message. Returns the reply text. Raises OpenAIError (with a message safe to log, not to show to a
+    visitor) when OpenAI is not configured, refuses, or cannot be reached, and also when it returns nothing."""
+    if not settings.openai_api_key:
+        raise OpenAIError("OPENAI_API_KEY is not set on the server.")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                OPENAI_URL,
+                headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": system_prompt}, *history],
+                    "temperature": 0.5,
+                    "max_tokens": 350,
+                },
+            )
+        if r.status_code == 429:
+            raise OpenAIError("OpenAI quota exceeded or rate-limited.")
+        if r.status_code == 401:
+            raise OpenAIError("OpenAI API key is missing or invalid on the server.")
+        r.raise_for_status()
+        choices = r.json().get("choices", [])
+        reply = ((choices[0].get("message", {}).get("content") or "").strip()) if choices else ""
+    except OpenAIError:
+        raise
+    except Exception as e:
+        logger.error(f"OpenAI chat conversation failed: {e}")
+        raise OpenAIError("Couldn't reach the AI service.") from e
+    if not reply:
+        raise OpenAIError("The AI service returned an empty reply.")
+    return reply
+
+
 async def analyze_website(title: str, text: str) -> dict:
     """Given a business website's title + extracted text, suggest a main_goal and an
     industry id for the Create Agent form's "Analyze" button. Returns

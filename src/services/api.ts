@@ -445,6 +445,8 @@ export const api = {
   getMyReferrals: () => get("/referrals/me"),
 
   // Notifications
+  // The NEXUS assistant chat bubble: send the conversation so far (oldest first, ending with the user's question); `data.reply` is the answer.
+  supportChat: (messages: { role: "user" | "assistant"; content: string }[]) => post("/support/chat", { messages }),
   getNotifications: () => get("/notifications"),
   // With an id marks that one notification read; with none, marks all of the account's notifications read.
   markNotificationsRead: (id?: string) => post("/notifications/read", id ? { id } : {}),

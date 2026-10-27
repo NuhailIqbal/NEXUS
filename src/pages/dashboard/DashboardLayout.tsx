@@ -19,6 +19,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
 import LowBalanceBanner from "@/components/LowBalanceBanner";
 import ViewerBanner from "@/components/ViewerBanner";
+import SupportChatBubble from "@/components/SupportChatBubble";
 import Logo from "@/components/Logo";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
 import GlobalSearch from "@/components/dashboard/GlobalSearch";
@@ -261,6 +262,7 @@ const DashboardLayout = () => {
           <Outlet />
         </main>
       </div>
+      <SupportChatBubble firstName={displayName.split(" ")[0]} />
     </div>
   );
 };
