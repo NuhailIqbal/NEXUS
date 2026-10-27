@@ -1,6 +1,6 @@
 import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 
 vi.mock("@/services/api", () => ({
   api: { getAgents: vi.fn(), getTwilioCredentials: vi.fn() },
@@ -27,12 +27,28 @@ function setup() {
 
 /** Radix Select in jsdom: open with the keyboard, pick an option with Enter. */
 async function choose(selectName: string, optionLabel: RegExp | string) {
-  const trigger = screen.getByRole("combobox", { name: selectName });
+  // Let the dialog's own data loads (agents, connected accounts) land before interacting, as they
+  // do long before a real person clicks.
+  await act(async () => {});
+  const trigger = await screen.findByRole("combobox", { name: selectName });
   trigger.focus();
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   const option = await screen.findByRole("option", { name: optionLabel });
   fireEvent.keyDown(option, { key: "Enter" });
   await waitFor(() => expect(screen.queryByRole("option")).not.toBeInTheDocument());
+}
+
+/** Opens a Select and returns the labels of its options, in order (then closes it). */
+async function optionsOf(selectName: string) {
+  await act(async () => {});
+  const trigger = await screen.findByRole("combobox", { name: selectName });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  await screen.findAllByRole("option");
+  const labels = screen.getAllByRole("option").map((o) => o.textContent);
+  fireEvent.keyDown(screen.getAllByRole("option")[0], { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("option")).not.toBeInTheDocument());
+  return labels;
 }
 
 const create = () => fireEvent.click(screen.getByRole("button", { name: /Create/ }));
@@ -62,10 +78,7 @@ describe("CreatePhoneNumberDialog — existing Twilio flow is unchanged", () => 
 describe("CreatePhoneNumberDialog — BYOT (Twilio)", () => {
   it("is offered in the Service Provider list", async () => {
     setup();
-    const trigger = screen.getByRole("combobox", { name: "Service Provider" });
-    trigger.focus();
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    expect(await screen.findByRole("option", { name: "Twilio" })).toBeInTheDocument();
+    expect(await optionsOf("Service Provider")).toContain("Twilio");
   });
 
   it("choosing it shows the $1/month note and no connected-account message when none exist", async () => {
@@ -204,12 +217,7 @@ describe("CreatePhoneNumberDialog — BYOT (Vonage and Telnyx)", () => {
 
   it("offers Standard, Twilio, Vonage and Telnyx", async () => {
     setup();
-    const trigger = screen.getByRole("combobox", { name: "Service Provider" });
-    trigger.focus();
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    for (const name of ["Standard", "Twilio", "Vonage", "Telnyx"]) {
-      expect(await screen.findByRole("option", { name })).toBeInTheDocument();
-    }
+    expect(await optionsOf("Service Provider")).toEqual(["Standard", "Twilio", "Vonage", "Telnyx"]);
   });
 
   it("Vonage: only Vonage accounts are listed, the single one is auto-selected, and the form submits it", async () => {
@@ -221,7 +229,7 @@ describe("CreatePhoneNumberDialog — BYOT (Vonage and Telnyx)", () => {
     expect(await screen.findByText("Vonage main")).toBeInTheDocument();
     expect(screen.queryByText("Twilio main")).not.toBeInTheDocument();
     expect(screen.queryByText("Telnyx main")).not.toBeInTheDocument();
-    await choose("Number acquisition mode", /Buy a new number on my Vonage account/);
+    await choose("Number acquisition mode", /Buy a new number/);
     create();
     expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
       serviceProvider: "BYOT_VONAGE", byotCredentialId: "v1", byotMode: "purchase",
@@ -267,5 +275,54 @@ describe("CreatePhoneNumberDialog — BYOT (Vonage and Telnyx)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect a Telnyx account" }));
     const dlg = await screen.findByTestId("connect-carrier-dialog");
     expect(dlg).toHaveAttribute("data-carrier", "telnyx");
+  });
+});
+
+describe("CreatePhoneNumberDialog — outbound and both need the user's own carrier number", () => {
+  it("Outbound offers only Twilio, Vonage and Telnyx (no Standard)", async () => {
+    setup();
+    await choose("Purpose", "Outbound");
+    expect(await optionsOf("Service Provider")).toEqual(["Twilio", "Vonage", "Telnyx"]);
+  });
+
+  it("Both also offers only Twilio, Vonage and Telnyx", async () => {
+    setup();
+    await choose("Purpose", "Both");
+    expect(await optionsOf("Service Provider")).toEqual(["Twilio", "Vonage", "Telnyx"]);
+  });
+
+  it("only Inbound still offers Standard", async () => {
+    setup();
+    await choose("Purpose", "Inbound");
+    expect(await optionsOf("Service Provider")).toEqual(["Standard", "Twilio", "Vonage", "Telnyx"]);
+  });
+
+  it("switching to Outbound or Both after picking Standard clears the provider", async () => {
+    for (const purpose of ["Outbound", "Both"]) {
+      vi.clearAllMocks();
+      getAgents.mockResolvedValue({ data: [], error: null });
+      getCreds.mockResolvedValue({ data: [], error: null });
+      const { onCreate } = setup();
+      await choose("Purpose", "Inbound");
+      await choose("Service Provider", "Standard");
+      expect(screen.getByText(/This number costs/)).toBeInTheDocument();
+      await choose("Purpose", purpose);
+      expect(screen.queryByText(/This number costs/)).not.toBeInTheDocument();
+      create();
+      expect(toast.error).toHaveBeenCalledWith("Please select a service provider");
+      expect(onCreate).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
+  it("switching to Outbound keeps a carrier that was already picked", async () => {
+    getCreds.mockResolvedValue({ data: [{ id: "v1", carrier: "vonage", account_sid: "k", label: "Vonage main" }], error: null });
+    const { onCreate } = setup();
+    await choose("Purpose", "Inbound");
+    await choose("Service Provider", "Vonage");
+    await choose("Purpose", "Outbound");
+    await choose("Number acquisition mode", /Buy a new number/);
+    create();
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ serviceProvider: "BYOT_VONAGE", purpose: "outbound" }));
   });
 });

@@ -1,12 +1,13 @@
 /**
  * "Create Phone Number" dialog, opened from the Phone Numbers page ("Buy Number").
- * Collects purpose, provider (standard, or the user's own Twilio / Vonage / Telnyx account — BYOT),
- * optional BYOT account/number and inbound agent, validates, and hands a PhoneNumberData to
+ * A short guided form: what the number is for (purpose), where it comes from (a standard number
+ * from us, or the user's own Twilio / Vonage / Telnyx account — BYOT), then the account / number
+ * details, the inbound agent and the active switch. It validates and hands a PhoneNumberData to
  * onCreate; the parent calls the API.
  * Itself calls only getAgents and getTwilioCredentials, and embeds ConnectCarrierDialog.
  */
-import { useEffect, useState } from "react";
-import { X, Plus, CheckCircle2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { CheckCircle2, Info, Plug, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
@@ -49,29 +50,26 @@ type CarrierCredential = {
 };
 
 // "Twilio" is the standard (platform-provided) number; the others are the user's own carrier account.
-const PROVIDERS = ["Twilio", ...Object.values(CARRIERS).map((c) => c.providerValue)];
+const STANDARD = "Twilio";
+const PROVIDERS = [STANDARD, ...Object.values(CARRIERS).map((c) => c.providerValue)];
 
 // User-facing labels are kept generic so we don't expose the underlying carrier
 // (and the price it implies) to end users. Internal value stays "Twilio". The BYOT
 // entries are the exception — the whole point of them is the user explicitly choosing
 // their own carrier.
 const PROVIDER_LABELS: Record<string, string> = {
-  Twilio: "Standard",
+  [STANDARD]: "Standard",
   ...Object.fromEntries(Object.values(CARRIERS).map((c) => [c.providerValue, c.label])),
 };
 
+const EMPTY: PhoneNumberData = { active: false, serviceProvider: "", agentId: "", purpose: "", byotMode: "import" };
+
 /**
  * Controlled dialog (open/onOpenChange) for creating a number. Props: onCreate receives the
- * validated form data. On open it loads agents and connected Twilio accounts. State resets on close.
+ * validated form data. On open it loads agents and connected carrier accounts. State resets on close.
  */
 export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props) {
-  const [data, setData] = useState<PhoneNumberData>({
-    active: false,
-    serviceProvider: "",
-    agentId: "",
-    purpose: "",
-    byotMode: "import",
-  });
+  const [data, setData] = useState<PhoneNumberData>(EMPTY);
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
   const [credentials, setCredentials] = useState<CarrierCredential[]>([]);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -98,7 +96,7 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
     }
   }, [open]);
 
-  const reset = () => setData({ active: false, serviceProvider: "", agentId: "", purpose: "", byotMode: "import" });
+  const reset = () => setData(EMPTY);
 
   // Dialog open-change handler: closing (by any route) discards the form before notifying the parent.
   const close = (v: boolean) => {
@@ -109,6 +107,20 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   const carrier = carrierFromProviderValue(data.serviceProvider);
   const isByot = !!carrier;
   const accounts = accountsFor(credentials, data.serviceProvider);
+  const ownCarrierOnly = usesOwnCarrierOnly(data.purpose);
+  const providers = PROVIDERS.filter((p) => !(ownCarrierOnly && p === STANDARD));
+
+  const choosePurpose = (v: Purpose) => {
+    // Outbound calling (outbound or both) needs the user's own carrier number, so
+    // "Standard" isn't offered for it — drop it if it was already picked.
+    const dropStandard = usesOwnCarrierOnly(v) && data.serviceProvider === STANDARD;
+    setData({
+      ...data,
+      purpose: v,
+      agentId: v === "outbound" ? "" : data.agentId,
+      serviceProvider: dropStandard ? "" : data.serviceProvider,
+    });
+  };
 
   // Switching provider drops the previously picked account (it belongs to another carrier) and
   // auto-selects the new carrier's account when there's exactly one.
@@ -133,27 +145,31 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-lg p-0 gap-0 [&>button]:hidden">
-        {/* [&>button]:hidden removes shadcn's built-in close X — this dialog has its own in the header */}
+      {/* [&>button]:hidden removes shadcn's built-in close X — this dialog has its own in the header.
+          Header and footer stay put; only the middle scrolls on short screens. */}
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-xl flex-col gap-0 overflow-hidden p-0 sm:p-0 [&>button]:hidden">
         <VisuallyHidden>
           <DialogTitle>Create Phone Number</DialogTitle>
           <DialogDescription>Provision a new phone number</DialogDescription>
         </VisuallyHidden>
 
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-lg font-bold">Create Phone Number</h2>
-          <button onClick={() => close(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
+          <div>
+            <h2 className="text-lg font-bold leading-tight">Create Phone Number</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">Get a number ready for your AI agents in three quick steps.</p>
+          </div>
+          <button
+            onClick={() => close(false)}
+            aria-label="Close"
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="space-y-4 px-6 py-6">
-          <div>
-            <label className="block text-sm font-semibold mb-1.5">Purpose</label>
-            <Select
-              value={data.purpose}
-              onValueChange={(v) => setData({ ...data, purpose: v as Purpose, agentId: v === "outbound" ? "" : data.agentId })}
-            >
+        <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-5 py-6 sm:px-6">
+          <Section step={1} title="What will this number do?">
+            <Select value={data.purpose} onValueChange={(v) => choosePurpose(v as Purpose)}>
               <SelectTrigger aria-label="Purpose">
                 <SelectValue placeholder="Select type" />
               </SelectTrigger>
@@ -163,126 +179,146 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
                 <SelectItem value="both">Both</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </Section>
 
-          <div>
-            <label className="block text-sm font-semibold mb-1.5">Service Provider</label>
+          <Section
+            step={2}
+            title="Where does the number come from?"
+            hint={ownCarrierOnly ? "Outbound calling uses a number from your own carrier account." : undefined}
+          >
             <Select value={data.serviceProvider} onValueChange={chooseProvider}>
               <SelectTrigger aria-label="Service Provider">
                 <SelectValue placeholder="Please select your phone number provider" />
               </SelectTrigger>
               <SelectContent>
-                {PROVIDERS.map((p) => (<SelectItem key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</SelectItem>))}
+                {providers.map((p) => (
+                  <SelectItem key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
-          </div>
 
-          {data.serviceProvider === "Twilio" && (
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
-              covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
-            </div>
-          )}
+            {data.serviceProvider === STANDARD && (
+              <Callout>
+                This number costs <span className="font-medium text-foreground">$3</span>. If your account balance
+                covers it, it's deducted from your balance; otherwise you'll be taken to secure Stripe checkout to pay.
+              </Callout>
+            )}
 
-          {carrier && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">$1/month</span> platform fee. {carrier.label} bills you
-                directly for the number and call minutes.
-              </p>
-              {carrier.numberNote && <p className="text-xs text-muted-foreground">{carrier.numberNote}</p>}
+            {carrier && (
+              <div className="space-y-4 rounded-xl border border-border bg-muted/20 p-4">
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">$1/month</span> platform fee. {carrier.label} bills you
+                  directly for the number and call minutes.
+                </p>
+                {carrier.numberNote && (
+                  <Callout icon>{carrier.numberNote}</Callout>
+                )}
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-semibold">{carrier.label} account</label>
-                  {accounts.length > 0 && (
-                    <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Connected
-                    </span>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-semibold">{carrier.label} account</label>
+                    {accounts.length > 0 && (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Connected
+                      </span>
+                    )}
+                  </div>
+                  {accounts.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No {carrier.label} account connected yet.</p>
+                  ) : (
+                    <Select
+                      value={data.byotCredentialId || ""}
+                      onValueChange={(v) => setData({ ...data, byotCredentialId: v })}
+                    >
+                      <SelectTrigger aria-label={`${carrier.label} account`}>
+                        <SelectValue placeholder={`Select a connected ${carrier.label} account`} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {accounts.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.label || c.account_sid || `${carrier.label} account`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
+                  <Button type="button" variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
+                    <Plug className="mr-1.5 h-3.5 w-3.5" />
+                    {accounts.length === 0 ? `Connect a ${carrier.label} account` : `Connect another ${carrier.label} account`}
+                  </Button>
                 </div>
-                {accounts.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No {carrier.label} account connected yet.</p>
-                ) : (
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">How do you want to get the number?</label>
                   <Select
-                    value={data.byotCredentialId || ""}
-                    onValueChange={(v) => setData({ ...data, byotCredentialId: v })}
+                    value={data.byotMode || "import"}
+                    onValueChange={(v) => setData({ ...data, byotMode: v as ByotMode })}
                   >
-                    <SelectTrigger aria-label={`${carrier.label} account`}>
-                      <SelectValue placeholder={`Select a connected ${carrier.label} account`} />
+                    <SelectTrigger aria-label="Number acquisition mode">
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {accounts.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.label || c.account_sid || `${carrier.label} account`}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="import">I already own a number</SelectItem>
+                      <SelectItem value="purchase">Buy a new number on my {carrier.label} account</SelectItem>
                     </SelectContent>
                   </Select>
-                )}
-                <Button type="button" variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
-                  {accounts.length === 0 ? `Connect a ${carrier.label} account` : `Connect another ${carrier.label} account`}
-                </Button>
-              </div>
+                </div>
 
+                {data.byotMode !== "purchase" && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-semibold" htmlFor="byot-number">Your phone number</label>
+                    <Input
+                      id="byot-number"
+                      value={data.byotNumber || ""}
+                      onChange={(e) => setData({ ...data, byotNumber: e.target.value })}
+                      placeholder="+1XXXXXXXXXX"
+                      inputMode="tel"
+                      autoComplete="off"
+                    />
+                    <p className="text-xs text-muted-foreground">Include the country code, e.g. +15551234567.</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </Section>
+
+          <Section step={3} title="Agent and status">
+            {data.purpose !== "outbound" ? (
               <div className="space-y-1.5">
-                <label className="block text-sm font-semibold">How do you want to get the number?</label>
+                <label className="text-sm font-semibold">Assign AI Agent</label>
                 <Select
-                  value={data.byotMode || "import"}
-                  onValueChange={(v) => setData({ ...data, byotMode: v as ByotMode })}
+                  value={data.agentId || "__none__"}
+                  onValueChange={(v) => setData({ ...data, agentId: v === "__none__" ? "" : v })}
                 >
-                  <SelectTrigger aria-label="Number acquisition mode">
-                    <SelectValue />
+                  <SelectTrigger aria-label="Assign AI Agent">
+                    <SelectValue placeholder="No agent assigned" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="import">I already own a number</SelectItem>
-                    <SelectItem value="purchase">Buy a new number on my {carrier.label} account</SelectItem>
+                    <SelectItem value="__none__">No agent assigned</SelectItem>
+                    {agents.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">Agent that handles inbound calls on this number.</p>
               </div>
+            ) : (
+              <Callout icon>
+                You can add this number to a campaign from Outbound → Campaigns once it's created.
+              </Callout>
+            )}
 
-              {data.byotMode !== "purchase" && (
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-semibold">Your phone number</label>
-                  <Input
-                    value={data.byotNumber || ""}
-                    onChange={(e) => setData({ ...data, byotNumber: e.target.value })}
-                    placeholder="+1XXXXXXXXXX"
-                  />
-                </div>
-              )}
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-border px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold">Active</div>
+                <div className="text-xs text-muted-foreground">Turn it on to start using the number straight away.</div>
+              </div>
+              <Switch aria-label="Active" checked={data.active} onCheckedChange={(v) => setData({ ...data, active: v })} />
             </div>
-          )}
-
-          {data.purpose !== "outbound" ? (
-            <div>
-              <label className="block text-sm font-semibold mb-1.5">Assign AI Agent</label>
-              <Select
-                value={data.agentId || "__none__"}
-                onValueChange={(v) => setData({ ...data, agentId: v === "__none__" ? "" : v })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="No agent assigned" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No agent assigned</SelectItem>
-                  {agents.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="mt-1 text-xs text-muted-foreground">Agent that handles inbound calls on this number.</p>
-            </div>
-          ) : (
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              You can add this number to a campaign from Outbound → Campaigns once it's created.
-            </div>
-          )}
-
-          <ToggleRow label="Active" checked={data.active} onChange={(v) => setData({ ...data, active: v })} />
+          </Section>
         </div>
 
-        <div className="flex flex-col-reverse gap-2 border-t border-border px-6 py-4 bg-muted/20 sm:flex-row sm:items-center sm:justify-end">
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-border bg-muted/20 px-5 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
           <Button variant="outline" onClick={() => close(false)} className="w-full sm:w-auto">
             <X className="mr-1 h-4 w-4" /> Cancel
           </Button>
@@ -297,18 +333,39 @@ export function CreatePhoneNumberDialog({ open, onOpenChange, onCreate }: Props)
   );
 }
 
+/** Purposes that place outbound calls: those need a number from the user's own carrier (no "Standard"). */
+const usesOwnCarrierOnly = (purpose: string) => purpose === "outbound" || purpose === "both";
+
 /** The saved accounts that belong to the carrier behind a provider value (none for Standard). */
 function accountsFor(list: CarrierCredential[], providerValue: string): CarrierCredential[] {
   const c = carrierFromProviderValue(providerValue);
   return c ? list.filter((a) => carrierOf(a.carrier).key === c.key) : [];
 }
 
-/** Labelled on/off switch row. */
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+/** A numbered step with a title and an optional one-line hint. */
+function Section({ step, title, hint, children }: { step: number; title: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-3">
-      <Switch checked={checked} onCheckedChange={onChange} />
-      <span className="text-sm font-semibold">{label}</span>
+    <section className="space-y-3">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
+          {step}
+        </span>
+        <div>
+          <h3 className="text-sm font-semibold leading-5">{title}</h3>
+          {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        </div>
+      </div>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+
+/** A quiet note box; `icon` adds an info mark in front. */
+function Callout({ icon, children }: { icon?: boolean; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+      {icon && <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+      <div>{children}</div>
     </div>
   );
 }
