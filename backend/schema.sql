@@ -654,6 +654,9 @@ CREATE TABLE IF NOT EXISTS public.outbound_campaigns (
     -- feature (they become Concurrent / 20) from new ones (Sequential / 5 / 10 / 0). The same migration adds
     -- contacts.seq, the dial_* columns of campaign_attempts, billing.max_concurrent_calls and the dial_*
     -- columns of platform_settings.
+    -- Second-chance rounds (followup_rounds, followup_gap_hours, followup_done, followup_next_at; see
+    -- services/followup_rounds.py) are added by migrate._ensure_columns, like the other per-campaign settings of
+    -- the dialing features; every existing campaign has them off (0).
     CONSTRAINT outbound_campaigns_status_check CHECK ((status = ANY (ARRAY['Active'::text, 'Paused'::text, 'Inactive'::text])))
 );
 

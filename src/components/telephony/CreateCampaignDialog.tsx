@@ -29,7 +29,7 @@ import {
 } from "@/components/hours/callingHours";
 import { DAY_LABELS } from "@/components/integrations/calendarTypes";
 import { RetryFields } from "@/components/telephony/RetryFields";
-import { defaultRetry, describeRetry, validateRetry, type RetrySettings } from "@/lib/callRetry";
+import { defaultRetry, describeFollowup, describeRetry, validateRetry, type RetrySettings } from "@/lib/callRetry";
 import { DialingFields } from "@/components/telephony/DialingFields";
 import {
   defaultDialing, describeDialing, limitWarning, validateDialing, type DialingLimits, type DialingSettings,
@@ -511,6 +511,7 @@ function Step4({
           <ReviewItem label="From Number"      value={numberLabel} />
           <ReviewItem label="Calling Hours"     value={data.hours.enabled ? describeHours(data.hours, DAY_LABELS) : "Any time"} />
           <ReviewItem label="Auto Redial"        value={describeRetry(data.retry)} />
+          <ReviewItem label="Second-chance rounds" value={describeFollowup(data.retry)} />
           <ReviewItem label="Dialing Strategy"   value={describeDialing(data.dialing)} />
         </div>
 

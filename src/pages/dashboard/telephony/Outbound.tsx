@@ -21,9 +21,10 @@ import { CreateCampaignDialog, EditCampaignDialog, type CampaignData } from "@/c
 import { RowActions } from "@/components/dashboard/RowActions";
 import { CampaignNumbersDialog } from "@/components/telephony/CampaignNumbersDialog";
 import {
-  describeRetryShort, retryFromRow, retryOutcomesNote, retryToPayload,
-  type RetryStats,
+  describeFollowupCard, describeRetryShort, retryFromRow, retryOutcomesNote, retryToPayload,
+  type FollowupInfo, type RetryStats,
 } from "@/lib/callRetry";
+import { formatDue } from "@/components/callbacks/callbackTypes";
 import {
   LIVE_STATE_LABELS, describeDialingShort, dialingFromRow, dialingToPayload, secondsBetween, stallMessage,
   type DialingInfo, type LiveState,
@@ -62,6 +63,10 @@ type Campaign = {
   retry_interval_minutes?: number;
   retry_on?: string[];
   retry_stats?: RetryStats;
+  // Second-chance rounds: the settings as stored, and where the rounds stand (done, when the next one starts).
+  followup_rounds?: number;
+  followup_gap_hours?: number;
+  followup?: FollowupInfo;
   // Dialing strategy (dial_*) as stored, and the server's view of it: the settings with the account's
   // cap applied, any warnings, and whether a run is open.
   dial_strategy?: string;
@@ -660,6 +665,12 @@ const Outbound = () => {
                   const stats = c.retry_stats;
                   const note = c.retry_enabled ? retryOutcomesNote(retry) : null;
                   const waiting = stats?.pending_retries ?? 0;
+                  const second = c.retry_enabled
+                    ? describeFollowupCard(
+                        c.followup ?? (c.followup_rounds ? { rounds: c.followup_rounds, gap_hours: c.followup_gap_hours ?? 24, done: 0, next_at: null, waiting: false } : undefined),
+                        (iso) => formatDue(iso, c.call_hours_timezone || ""),
+                      )
+                    : null;
                   return (
                     <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted/20">
                       {c.retry_enabled && (
@@ -671,6 +682,8 @@ const Outbound = () => {
                             <span className="text-muted-foreground">{describeRetryShort(retry)}</span>
                           </div>
                           {note && <p className="text-[11px] text-muted-foreground">{note}</p>}
+                          {second && <p className="text-[11px] text-muted-foreground">{second.summary}</p>}
+                          {second?.progress && <p className="text-[11px] font-medium text-foreground">{second.progress}</p>}
                           {waiting > 0 && (
                             <p className="text-[11px] font-medium text-foreground">
                               {waiting} waiting{c.status !== "Active" ? " (campaign paused)" : ""}
@@ -869,12 +882,22 @@ const Outbound = () => {
         </DialogContent>
       </Dialog>
 
-      <CampaignNumbersDialog
-        campaignId={numbersTarget?.id ?? null}
-        campaignName={numbersTarget?.name}
-        timezone={numbersTarget?.call_hours_timezone}
-        onOpenChange={(o) => { if (!o) setNumbersTarget(null); }}
-      />
+      {(() => {
+        // the card as the list has it now (it refreshes after "Retry unreached numbers"), not as it was when opened
+        const shown = campaigns.find((c) => c.id === numbersTarget?.id) ?? numbersTarget;
+        return (
+          <CampaignNumbersDialog
+            campaignId={numbersTarget?.id ?? null}
+            campaignName={shown?.name}
+            timezone={shown?.call_hours_timezone}
+            status={shown?.status}
+            unreachedCount={shown?.retry_stats?.unreached_count ?? 0}
+            running={!!shown && ((shown.dialing?.running ?? shown.dial_running) === true || (live[shown.id]?.active_now ?? 0) > 0)}
+            onRequeued={refreshAfterAction}
+            onOpenChange={(o) => { if (!o) setNumbersTarget(null); }}
+          />
+        );
+      })()}
 
       {/* Edit wizard: the same steps as creating a campaign, starting from its current values */}
       {settingsTarget && (

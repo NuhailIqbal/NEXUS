@@ -325,6 +325,11 @@ export const api = {
   startCampaign: (id: string) => post(`/telephony/campaigns/${id}/start`),
   pauseCampaign: (id: string) => post(`/telephony/campaigns/${id}/pause`),
   resumeCampaign: (id: string) => post(`/telephony/campaigns/${id}/resume`),
+  // Calls again ONLY the numbers that never picked up (final status "Max attempts reached"). They are queued as a new
+  // round; `activate` also sets a paused / stopped campaign Active so they are dialed now.
+  // Answers { requeued, skipped_busy, campaign_status, message }.
+  retryUnreached: (id: string, opts: { activate?: boolean } = {}) =>
+    post(`/telephony/campaigns/${id}/retry-unreached`, { activate: !!opts.activate }),
 
   // Telephony - Call
   // Places one outbound call. The backend rejects blocked/trial accounts, an empty wallet balance

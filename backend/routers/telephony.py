@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 import httpx
 import stripe
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_user
 from database import supabase
@@ -28,7 +28,7 @@ from models.schemas import (
     OutboundCallCreate,
     TwilioCredentialCreate, TwilioCredentialUpdate, PhoneNumberByotCreate,
 )
-from services import vapi_client, twilio_service, twilio_byot_service, carriers, whitelist_service, caller_verification, call_hours, call_retry, dial_settings, dial_limits, dialer
+from services import vapi_client, twilio_service, twilio_byot_service, carriers, whitelist_service, caller_verification, call_hours, call_retry, dial_settings, dial_limits, dialer, followup_rounds
 from config import settings
 from routers.billing import (
     outbound_call_block_reason,
@@ -1081,13 +1081,14 @@ def _attach_retry_stats(owner_id: str, campaigns: list[dict]) -> None:
         logger.warning("could not read the retry stats", exc_info=True)
         found = {}
     empty = {"total_attempts": 0, "retries_placed": 0, "answered_on_retry": 0, "max_attempts_reached": 0,
-             "pending_retries": 0, "numbers": 0}
+             "pending_retries": 0, "numbers": 0, "unreached_count": 0}
     for camp in campaigns:
         camp["retry_stats"] = found.get(camp["id"], dict(empty))
 
 
 # The dialing engine's own bookkeeping: it only means something to the server, so no response carries it.
-_ENGINE_COLUMNS = ("run_token", "dial_legacy_cursor", "dial_counters", "dial_batch_seq")
+# (followup_done / followup_next_at are shown as the campaign's `followup` object instead, see _attach_followup.)
+_ENGINE_COLUMNS = ("run_token", "dial_legacy_cursor", "dial_counters", "dial_batch_seq", "followup_done", "followup_next_at")
 
 
 def _strip_engine(campaigns: list[dict]) -> None:
@@ -1095,6 +1096,13 @@ def _strip_engine(campaigns: list[dict]) -> None:
     for camp in campaigns:
         for col in _ENGINE_COLUMNS:
             camp.pop(col, None)
+
+
+def _attach_followup(campaigns: list[dict]) -> None:
+    """Give each campaign a `followup`: {rounds, gap_hours, done, next_at, waiting} (services/followup_rounds.describe),
+    its second-chance round settings and where it is (`waiting` is true while a round is scheduled)."""
+    for camp in campaigns:
+        camp["followup"] = followup_rounds.describe(camp)
 
 
 def _attach_dialing_state(owner_id: str, campaigns: list[dict]) -> None:
@@ -1149,6 +1157,7 @@ async def list_campaigns(user=Depends(get_current_user)):
     _attach_hours_state(campaigns)
     _attach_retry_stats(owner_id, campaigns)
     _attach_dialing_state(owner_id, campaigns)
+    _attach_followup(campaigns)
     _strip_engine(campaigns)
     return {"data": campaigns, "error": None}
 
@@ -1164,7 +1173,8 @@ async def create_campaign(body: CampaignCreate, user=Depends(get_current_user)):
         row.update(call_hours.validate(call_hours.CAMPAIGN, None, row))
         row.update(call_retry.validate(None, row))
         row.update(dial_settings.validate(None, row))
-    except (call_hours.HoursError, call_retry.RetryError, dial_settings.DialError) as e:
+        row.update(followup_rounds.validate(None, row))
+    except (call_hours.HoursError, call_retry.RetryError, dial_settings.DialError, followup_rounds.FollowupError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     if body.list_id:
@@ -1235,6 +1245,7 @@ async def get_campaign(campaign_id: str, user=Depends(get_current_user)):
     _attach_hours_state([camp])
     _attach_retry_stats(owner_id, [camp])
     _attach_dialing_state(owner_id, [camp])
+    _attach_followup([camp])
     _strip_engine([camp])
     return {"data": camp, "error": None}
 
@@ -1272,7 +1283,8 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
     hours_touched = call_hours.touched(call_hours.CAMPAIGN, updates)
     retry_touched = call_retry.touched(updates)
     dial_touched = dial_settings.touched(updates)
-    if hours_touched or retry_touched or dial_touched or "list_id" in updates or "status" in updates:
+    followup_touched = followup_rounds.touched(updates)
+    if hours_touched or retry_touched or dial_touched or followup_touched or "list_id" in updates or "status" in updates:
         existing = (
             supabase.table("outbound_campaigns").select("*")
             .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
@@ -1305,11 +1317,23 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
             if any(dial[k] != existing.get(k) for k in dial_settings.FIELDS):
                 updates["dial_next_at"] = None
                 updates["dial_stall"] = None
+        if followup_touched or retry_touched:
+            # The second-chance rounds, checked with the retry switch as it will be stored (they need Auto Redial).
+            # Turning them off, or lowering them to the rounds already done, cancels a round that is scheduled; a new
+            # gap never moves a time that is already scheduled (it applies from the next scheduling).
+            try:
+                follow = followup_rounds.validate(existing, updates)
+            except followup_rounds.FollowupError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            updates.update(follow)
+            if follow["followup_rounds"] <= int(existing.get("followup_done") or 0):
+                updates["followup_next_at"] = None
         # dial_cursor (where a run stopped when the hours closed) only means something for the
         # same list; with another list the next start begins at the top, so the pass the old list
         # had open is over (dial_seq / dial_legacy_cursor are the dialing engine's own places in it).
         if "list_id" in updates and updates["list_id"] != existing.get("list_id"):
-            updates.update({"dial_cursor": None, "dial_seq": None, "dial_legacy_cursor": None, "dial_running": False})
+            updates.update({"dial_cursor": None, "dial_seq": None, "dial_legacy_cursor": None, "dial_running": False,
+                            "followup_done": 0, "followup_next_at": None})     # another list: second chances begin again
         # Anything a person does to the campaign takes it out of the automatic continuing: a different
         # status (they Paused/Activated/Inactivated it on purpose), a different list, or hours switched
         # off. Saving the settings with the same status and hours keeps it waiting.
@@ -1693,6 +1717,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             "status": "Active", "dial_running": True, "dial_seq": None, "dial_cursor": None, "dial_legacy_cursor": None,
             "dial_pass_started_at": now_iso, "dial_next_at": None, "dial_stall": None, "dial_counters": {},
             "dial_batch_seq": 0, "stopped_by_hours_at": None, "contacts_count": dialable,
+            "followup_done": 0, "followup_next_at": None,        # a new pass begins the second-chance rounds again too
         }).eq("id", campaign_id).eq("dial_running", False).is_("dial_cursor", "null").execute().data
     if not won:
         # Somebody changed the campaign between the read and the update (a second Start got there first).
@@ -1739,6 +1764,55 @@ async def resume_campaign(campaign_id: str, user=Depends(get_current_user)):
     supabase.table("outbound_campaigns").update({"status": "Active"}).eq("id", campaign_id).eq("user_id", owner_id).execute()
     dialer.nudge()
     return {"data": {"status": "Active"}, "error": None}
+
+
+class RetryUnreachedBody(BaseModel):
+    activate: StrictBool = False
+
+
+@router.post("/campaigns/{campaign_id}/retry-unreached")
+async def retry_unreached(campaign_id: str, body: RetryUnreachedBody | None = None, user=Depends(get_current_user)):
+    """Call again ONLY the numbers that never picked up even after every redial (final status "Max attempts
+    reached"): each goes into a new round (attempts 0, due now) and the dialing engine places it as redials-first
+    work, under the campaign's dialing strategy, calling hours, pause/resume and the account caps. It works with Auto
+    Redial switched off too: the first call of a requeued number is always placed; what follows it obeys the campaign's
+    retry settings. Numbers that answered, were transferred, disqualified, asked not to be called, were invalid or
+    were not retried are not touched. Idempotent: a second click while they are queued requeues none.
+
+    An Active campaign dials them right away. A campaign that is not Active keeps them queued, and is only set Active
+    when `activate` is true. 404 if the campaign isn't this account's. Returns requeued / skipped_busy (queued numbers
+    that are on another call now and are dialed when free) / campaign_status / message."""
+    owner_id = resolve_owner_id(user["user_id"])
+    camp = (
+        supabase.table("outbound_campaigns").select("*")
+        .eq("id", campaign_id).eq("user_id", owner_id).maybe_single().execute()
+    ).data
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    done = await asyncio.to_thread(call_retry.requeue_unreached, camp)
+    n, busy = done["requeued"], done["skipped_busy"]
+    if n:
+        # A second-chance round that was scheduled has nothing left to call once these numbers are queued; the rounds
+        # used so far and the campaign's other settings are untouched (the button is independent of them).
+        from services import campaign_scheduler
+        await asyncio.to_thread(campaign_scheduler.release_followup_if_none_unreached, campaign_id)
+    status = camp.get("status")
+    activate = bool(body and body.activate)
+    if n and status != "Active" and activate:
+        supabase.table("outbound_campaigns").update({"status": "Active", "stopped_by_hours_at": None}) \
+            .eq("id", campaign_id).eq("user_id", owner_id).execute()
+        status = "Active"
+    if n:
+        dialer.nudge()
+    if not n:
+        message = "There are no unreached numbers to call again."
+    elif status == "Active":
+        message = f"{n} number{'s' if n != 1 else ''} queued to be called again."
+        if busy:
+            message += f" {busy} {'is' if busy == 1 else 'are'} on another call right now and will be dialed as soon as the line is free."
+    else:
+        message = (f"{n} number{'s' if n != 1 else ''} queued. They will be dialed when the campaign is Active.")
+    return {"data": {"requeued": n, "skipped_busy": busy, "campaign_status": status, "message": message}, "error": None}
 
 
 # ── Inbound Queues ──

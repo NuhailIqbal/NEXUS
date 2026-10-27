@@ -81,4 +81,87 @@ describe("RetryFields", () => {
     rerender(<Harness initial={{ ...defaultRetry(), enabled: true }} onValue={vi.fn()} editing />);
     expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
   });
+
+  describe("second-chance rounds", () => {
+    const on = { ...defaultRetry(), enabled: true };
+
+    it("are off by default and the controls are disabled, with a hint, while Auto Redial is off", () => {
+      render(<Harness initial={defaultRetry()} onValue={vi.fn()} />);
+      expect(screen.getByText("Second-chance rounds")).toBeInTheDocument();
+      expect(screen.getByLabelText("Rounds")).toBeDisabled();
+      expect(screen.getByLabelText("Rounds")).toHaveTextContent("Off");
+      expect(screen.getByLabelText("Wait between rounds")).toBeDisabled();
+      expect(screen.getByRole("button", { name: "4 h" })).toBeDisabled();
+      expect(screen.getByText(/Turn on Auto Redial above/)).toBeInTheDocument();
+    });
+
+    it("switching Auto Redial on enables the rounds, which are still off", () => {
+      render(<Harness initial={defaultRetry()} onValue={vi.fn()} />);
+      fireEvent.click(toggle());
+      expect(screen.getByLabelText("Rounds")).toBeEnabled();
+      expect(screen.getByLabelText("Rounds")).toHaveTextContent("Off");
+      expect(screen.getByLabelText("Wait between rounds")).toBeDisabled();
+      expect(screen.getByText(/Off: numbers that never picked up are left as they are/)).toBeInTheDocument();
+    });
+
+    it("offers Off, 1, 2 and 3 rounds", () => {
+      render(<Harness initial={on} onValue={vi.fn()} />);
+      fireEvent.click(screen.getByLabelText("Rounds"));
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Off", "1 round", "2 rounds", "3 rounds"]);
+    });
+
+    it("choosing rounds shows the explanation with the number, and enables the wait", async () => {
+      const seen = vi.fn();
+      render(<Harness initial={on} onValue={seen} />);
+      await choose("Rounds", "2 rounds");
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ followupRounds: 2, followupGapHours: 24 }));
+      expect(screen.getByText(/called again, up to 2 more times\. Numbers that answered, were transferred, disqualified, asked not to be called or are invalid are never called again\. Calling hours always apply\./))
+        .toBeInTheDocument();
+      expect(screen.getByLabelText("Wait between rounds")).toBeEnabled();
+      await choose("Rounds", "1 round");
+      expect(screen.getByText(/up to 1 more time\./)).toBeInTheDocument();
+    });
+
+    it("the wait is a number of hours, with presets of 4, 12, 24 (next day) and 48", () => {
+      const seen = vi.fn();
+      render(<Harness initial={{ ...on, followupRounds: 2 }} onValue={seen} />);
+      expect(screen.getByLabelText("Wait between rounds")).toHaveValue(24);
+      expect(screen.getByRole("button", { name: "24 h (next day)" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByRole("button", { name: "4 h" }));
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ followupGapHours: 4 }));
+      expect(screen.getByLabelText("Wait between rounds")).toHaveValue(4);
+      expect(screen.getByRole("button", { name: "4 h" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByRole("button", { name: "12 h" }));
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ followupGapHours: 12 }));
+      fireEvent.click(screen.getByRole("button", { name: "48 h" }));
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ followupGapHours: 48 }));
+      fireEvent.change(screen.getByLabelText("Wait between rounds"), { target: { value: "30" } });
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ followupGapHours: 30 }));
+      for (const p of ["4 h", "12 h", "24 h (next day)", "48 h"]) expect(screen.getByRole("button", { name: p })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("a wait outside 1 to 48 hours, or an empty box, says so", () => {
+      render(<Harness initial={{ ...on, followupRounds: 1 }} onValue={vi.fn()} />);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Wait between rounds"), { target: { value: "49" } });
+      expect(screen.getByRole("alert")).toHaveTextContent("Wait between rounds must be a whole number of hours from 1 to 48.");
+      fireEvent.change(screen.getByLabelText("Wait between rounds"), { target: { value: "" } });
+      expect(screen.getByRole("alert")).toHaveTextContent("from 1 to 48");
+      fireEvent.change(screen.getByLabelText("Wait between rounds"), { target: { value: "1" } });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("turning Auto Redial off turns the rounds off too, so the server never gets rounds without it", () => {
+      const seen = vi.fn();
+      render(<Harness initial={{ ...on, followupRounds: 3, followupGapHours: 12 }} onValue={seen} />);
+      fireEvent.click(toggle());
+      expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false, followupRounds: 0, followupGapHours: 12 }));
+      expect(screen.getByLabelText("Rounds")).toBeDisabled();
+    });
+
+    it("never names the carrier", () => {
+      const { container } = render(<Harness initial={{ ...on, followupRounds: 2 }} onValue={vi.fn()} />);
+      expect(container.textContent?.toLowerCase()).not.toContain("vapi");
+    });
+  });
 });

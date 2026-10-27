@@ -280,7 +280,7 @@ class ReadTests(ApiBase):
         cid = self.create().json()["data"]["id"]
         d = self.api("get", f"/telephony/campaigns/{cid}").json()["data"]
         self.assertEqual(set(d["retry_stats"]), {"total_attempts", "retries_placed", "answered_on_retry",
-                                                 "max_attempts_reached", "pending_retries", "numbers"})
+                                                 "max_attempts_reached", "pending_retries", "numbers", "unreached_count"})
         self.assertEqual(set(d["auto_resume"]), {"pending", "next_at"})
 
     def test_running_and_stall_reason_follow_the_row(self):

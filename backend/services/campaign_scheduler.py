@@ -22,10 +22,14 @@ asked, dispatches the campaigns' fresh numbers too (the only way campaigns advan
 switched off with DIALER_TICK_SECONDS=0, a degraded mode: one step a minute). Redials follow the campaign's dialing
 strategy like every other call. A paused/stopped campaign keeps its due redials and places them when it is Active
 again; a redial that falls outside the hours is moved to the next opening.
+
+It also runs the campaigns' second-chance rounds (`run_followups`, settings in services/followup_rounds.py): once a
+campaign's list is complete, its numbers that never picked up are scheduled to be called again after the campaign's
+wait, and when that time comes they are put back in the queue (call_retry.requeue_unreached) for the dialing engine.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
@@ -60,11 +64,11 @@ def _rearm(campaign_id: str) -> None:
     ).eq("id", campaign_id).eq("status", "Paused").is_("stopped_by_hours_at", "null").execute()
 
 
-def _notify(user_id: str, title: str, body: str) -> None:
+def _notify(user_id: str, title: str, body: str, kind: str = "campaign_auto_resume") -> None:
     """Best-effort in-app notification; it must never affect the campaign."""
     from routers.billing import _insert_notification
 
-    _insert_notification(user_id, "campaign_auto_resume", title, body)
+    _insert_notification(user_id, kind, title, body)
 
 
 # The runs a background sweep started and has not awaited (kept so they are not garbage collected).
@@ -212,9 +216,13 @@ async def run_retries(now: datetime | None = None, wait: bool = True, *, fresh: 
         if camp.get("status") != "Active":
             result["paused"] += len(leads)       # paused/stopped: they wait, and carry on when it is Active
         elif not camp.get("retry_enabled"):
+            # Real redials are cancelled; a requeued number (attempts == 0) still gets its first call.
             for lead in leads:
-                call_retry.settle(lead, call_retry.NOT_RETRIED)
-            result["cancelled"] += len(leads)
+                if int(lead.get("attempts") or 0) > 0:
+                    call_retry.settle(lead, call_retry.NOT_RETRIED)
+                    result["cancelled"] += 1
+                else:
+                    serve = True
         elif not call_hours.is_open(camp, call_hours.CAMPAIGN, moment, if_unreadable=False):
             # Outside the hours: the redial moves to the next allowed window instead of staying "due".
             nxt = call_hours.next_opening(camp, call_hours.CAMPAIGN, moment)
@@ -241,6 +249,122 @@ async def run_retries(now: datetime | None = None, wait: bool = True, *, fresh: 
     return result
 
 
+# ── second-chance rounds ──
+
+# A campaign whose list is complete: Active, no pass open (dial_running, or the cursor an older engine left), no call
+# in progress and no number still waiting for a redial (final_status NULL). `c` is the campaign's alias.
+_QUIET = ("c.status = 'Active' AND NOT c.dial_running AND c.dial_cursor IS NULL "
+          "AND NOT EXISTS (SELECT 1 FROM public.campaign_attempts a WHERE a.campaign_id = c.id AND a.ended_at IS NULL) "
+          "AND NOT EXISTS (SELECT 1 FROM public.campaign_leads l WHERE l.campaign_id = c.id AND l.final_status IS NULL)")
+# ... with numbers that never picked up even after every redial, which is what a round calls again.
+_UNREACHED = "EXISTS (SELECT 1 FROM public.campaign_leads l WHERE l.campaign_id = c.id AND l.final_status = %s)"
+
+
+def release_followup_if_none_unreached(campaign_id: str) -> bool:
+    """Take a scheduled second-chance round off the campaign when no number that never picked up is left (the manual
+    "Retry unreached numbers" button just queued them all, so the round has nothing to call). True when one was
+    cancelled. A round that is not scheduled, or numbers that are still unreached, change nothing."""
+    return bool(dialer._q(
+        "UPDATE public.outbound_campaigns c SET followup_next_at = NULL "
+        f"WHERE c.id = %s::uuid AND c.followup_next_at IS NOT NULL AND NOT {_UNREACHED} RETURNING c.id",
+        (campaign_id, call_retry.MAX_ATTEMPTS)))
+
+
+def _revert_round(camp: dict, due) -> None:
+    """A round was claimed but could not be started: give it back (it counts as not started, due again)."""
+    dialer._q("UPDATE public.outbound_campaigns SET followup_done = greatest(followup_done - 1, 0), "
+              "followup_next_at = %s::timestamptz WHERE id = %s::uuid",
+              (call_retry.iso(due) if due else None, camp["id"]))
+
+
+def _serve_followup(camp: dict, moment: datetime, out: dict) -> None:
+    """One campaign's turn in the second-chance sweep: schedule its next round when the list is complete, or start
+    the round that is due. Every decision is ONE guarded UPDATE, so two sweeps (or workers) never schedule or start
+    the same round twice."""
+    cid = camp["id"]
+    rounds, done = int(camp["followup_rounds"]), int(camp["followup_done"])
+    due = call_retry.parse_time(camp.get("followup_next_at"))
+    if due is None:
+        if done >= rounds:
+            return
+        # The wait starts now, when the list is complete; a time outside the calling hours moves to the next opening
+        # (the same rule as a redial).
+        at = call_retry.schedule(camp, moment + timedelta(hours=int(camp["followup_gap_hours"])))
+        won = dialer._q(
+            "UPDATE public.outbound_campaigns c SET followup_next_at = %s::timestamptz "
+            "WHERE c.id = %s::uuid AND c.followup_next_at IS NULL AND c.followup_rounds > 0 "
+            f"AND c.followup_done < c.followup_rounds AND c.retry_enabled AND {_QUIET} AND {_UNREACHED} RETURNING c.id",
+            (call_retry.iso(at), cid, call_retry.MAX_ATTEMPTS))
+        out["scheduled" if won else "idle"] += 1
+        return
+    if due > moment:
+        out["waiting"] += 1
+        return
+    # Due. Claim the round (this is the one place it is consumed); the campaign must still be complete.
+    claimed = dialer._q(
+        "UPDATE public.outbound_campaigns c SET followup_done = c.followup_done + 1, followup_next_at = NULL "
+        "WHERE c.id = %s::uuid AND c.followup_next_at IS NOT NULL AND c.followup_next_at <= %s::timestamptz "
+        f"AND c.followup_done < c.followup_rounds AND c.retry_enabled AND {_QUIET} AND {_UNREACHED} RETURNING c.*",
+        (cid, call_retry.iso(moment), call_retry.MAX_ATTEMPTS))
+    if not claimed:
+        # Nothing unreached when the time came (a person called them by hand, say): the schedule is dropped and no
+        # round is used up. Anything else (paused, a call still open, redials waiting) keeps the schedule: it just waits.
+        dropped = dialer._q(
+            "UPDATE public.outbound_campaigns c SET followup_next_at = NULL "
+            "WHERE c.id = %s::uuid AND c.followup_next_at IS NOT NULL AND c.followup_next_at <= %s::timestamptz "
+            f"AND {_QUIET} AND NOT {_UNREACHED} RETURNING c.id",
+            (cid, call_retry.iso(moment), call_retry.MAX_ATTEMPTS))
+        out["cleared" if dropped else "waiting"] += 1
+        return
+    row = claimed[0]
+    try:
+        got = call_retry.requeue_unreached(row, moment)
+    except Exception:
+        _revert_round(row, due)
+        raise
+    if not got["requeued"]:
+        _revert_round(row, due)
+        return
+    out["started"] += 1
+    dialer.nudge()
+    n, k = int(row["followup_done"]), got["requeued"]
+    logger.info("second-chance round %s of %s of campaign %s started: %s numbers", n, rounds, cid, k)
+    _notify(row["user_id"], f"{row.get('name') or 'Campaign'}: second-chance round {n} of {rounds} started",
+            f"Second-chance round {n} of {rounds} started: {k} number{'s' if k != 1 else ''} that never picked up "
+            f"{'are' if k != 1 else 'is'} being called again.", kind="campaign_followup")
+
+
+def _followup_sweep(moment: datetime) -> dict:
+    out = {"scheduled": 0, "started": 0, "cleared": 0, "waiting": 0, "idle": 0}
+    # A schedule that can no longer happen (the rounds were turned off or are used up, Auto Redial is off) is dropped.
+    dialer._q("UPDATE public.outbound_campaigns SET followup_next_at = NULL WHERE followup_next_at IS NOT NULL "
+              "AND (followup_rounds <= followup_done OR NOT retry_enabled)")
+    rows = dialer._q("SELECT * FROM public.outbound_campaigns WHERE followup_rounds > 0 AND retry_enabled "
+                     "AND (followup_next_at IS NOT NULL OR followup_done < followup_rounds)")
+    for camp in rows:
+        try:
+            _serve_followup(camp, moment, out)
+        except Exception:  # noqa: BLE001 - one campaign must not stop the others
+            logger.exception("second-chance round of campaign %s failed", camp.get("id"))
+    return out
+
+
+async def run_followups(now: datetime | None = None) -> dict:
+    """One sweep of the second-chance rounds (services/followup_rounds.py), every campaign that has them on:
+      - a campaign whose list is complete (Active, no pass open, no call in progress, no redial waiting) with numbers
+        that never picked up gets its next round SCHEDULED: due `followup_gap_hours` from now, or from the next
+        opening of its calling hours when that falls outside them;
+      - a round that is due on an Active, complete campaign is STARTED: those numbers go back in the queue
+        (call_retry.requeue_unreached, which is what the manual button calls: strategy, hours and caps apply),
+        `followup_done` goes up by one and the owner gets one notification. A paused or inactive campaign just
+        waits and carries on when it is Active again; a round is never started more than `followup_rounds` times;
+      - when nothing is unreached any more at that time the schedule is dropped and no round is used up.
+    Returns counts: scheduled, started, cleared (schedule dropped, nothing to call), waiting (scheduled, not due or
+    not possible yet), idle (not complete yet). `now` fixes the clock (tests); otherwise the real time is read."""
+    moment = now if now is not None else datetime.now(timezone.utc)
+    return await asyncio.to_thread(_followup_sweep, moment)
+
+
 async def campaign_loop() -> None:
     """Background task that sweeps for waiting campaigns and due redials forever, every
     `campaign_sweep_interval_seconds`. Started from main.py at app startup when that setting is
@@ -258,4 +382,8 @@ async def campaign_loop() -> None:
             await run_retries(wait=False, fresh=True)
         except Exception as e:  # noqa: BLE001
             logger.exception("redial sweep failed: %s", e)
+        try:
+            await run_followups()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("second-chance sweep failed: %s", e)
         await asyncio.sleep(interval)

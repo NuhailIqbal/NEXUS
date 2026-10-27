@@ -490,7 +490,8 @@ def _pick_redials(row: dict, t: datetime, need: int, res: TickResult, skip: set 
         if lead["id"] in skip:
             continue
         contact = contacts.get(lead.get("contact_id"))
-        if not row.get("retry_enabled"):
+        first_of_round = int(lead.get("attempts") or 0) == 0     # a requeued number (call_retry.requeue_unreached): its first call is always placed
+        if not row.get("retry_enabled") and not first_of_round:
             # Retrying is off: a redial still waiting is a future attempt that will not happen.
             call_retry.settle(lead, call_retry.NOT_RETRIED)
             res.redials["cancelled"] += 1

@@ -2,7 +2,9 @@
  * Call retry / redial for outbound campaigns (backend: services/call_retry.py). A number that did not pick
  * up is called again after a set delay, up to a maximum number of calls; all of it is set per campaign.
  * The settings are four columns of the campaign row: retry_enabled, retry_max_attempts,
- * retry_interval_minutes and retry_on.
+ * retry_interval_minutes and retry_on. Second-chance rounds (backend: services/followup_rounds.py) belong to the
+ * same form: after the list is complete the campaign calls the numbers that never picked up again, up to
+ * followup_rounds more times, followup_gap_hours apart. They need Auto Redial.
  */
 
 /** The outcomes that can trigger a redial (the "Retry on" checkboxes), in the order they are shown. */
@@ -20,18 +22,36 @@ export const RETRY_OUTCOME_LABELS: Record<RetryOutcome, string> = {
 export const MAX_ATTEMPT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 export const INTERVAL_OPTIONS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60];
 
+/** Second-chance rounds: how many extra rounds (0 = off) and the wait between them, in hours. */
+export const FOLLOWUP_ROUND_OPTIONS = [0, 1, 2, 3];
+export const FOLLOWUP_MAX_ROUNDS = 3;
+export const FOLLOWUP_GAP_RANGE = { min: 1, max: 48 };
+/** One-click waits next to the hours box. */
+export const FOLLOWUP_GAP_PRESETS = [
+  { hours: 4, label: "4 h" },
+  { hours: 12, label: "12 h" },
+  { hours: 24, label: "24 h (next day)" },
+  { hours: 48, label: "48 h" },
+];
+
 /** The retry form's value. */
 export type RetrySettings = {
   enabled: boolean;
   maxAttempts: number;
   intervalMinutes: number;
   retryOn: RetryOutcome[];
+  /** Extra rounds that call the numbers that never picked up again once the list is complete (0 = off). */
+  followupRounds: number;
+  /** Hours between the end of one round and the start of the next (an emptied box is NaN, which validation reports). */
+  followupGapHours: number;
 };
 
-/** Off, 3 calls in all, 10 minutes apart, every outcome ticked. */
+/** Off, 3 calls in all, 10 minutes apart, every outcome ticked; no second-chance rounds, 24 hours apart. */
 export function defaultRetry(): RetrySettings {
-  return { enabled: false, maxAttempts: 3, intervalMinutes: 10, retryOn: [...RETRY_OUTCOMES] };
+  return { enabled: false, maxAttempts: 3, intervalMinutes: 10, retryOn: [...RETRY_OUTCOMES], followupRounds: 0, followupGapHours: 24 };
 }
+
+const gapOk = (h: number) => Number.isInteger(h) && h >= FOLLOWUP_GAP_RANGE.min && h <= FOLLOWUP_GAP_RANGE.max;
 
 /** The retry settings of a campaign row from the API (missing fields fall back to the defaults). */
 export function retryFromRow(row: Record<string, unknown> | null | undefined): RetrySettings {
@@ -43,16 +63,25 @@ export function retryFromRow(row: Record<string, unknown> | null | undefined): R
     maxAttempts: typeof row.retry_max_attempts === "number" ? row.retry_max_attempts : d.maxAttempts,
     intervalMinutes: typeof row.retry_interval_minutes === "number" ? row.retry_interval_minutes : d.intervalMinutes,
     retryOn: RETRY_OUTCOMES.filter((o) => on.includes(o)),
+    followupRounds:
+      typeof row.followup_rounds === "number" && FOLLOWUP_ROUND_OPTIONS.includes(row.followup_rounds) ? row.followup_rounds : d.followupRounds,
+    followupGapHours: typeof row.followup_gap_hours === "number" && gapOk(row.followup_gap_hours) ? row.followup_gap_hours : d.followupGapHours,
   };
 }
 
-/** The request fields for create/update (snake_case, as the backend takes them). */
+/**
+ * The request fields for create/update (snake_case, as the backend takes them). The rounds go as 0 while Auto Redial
+ * is off (the server refuses rounds without it), and a wait that is not a whole number of hours from 1 to 48 goes as
+ * the default (validateRetry has already stopped a save that needs it).
+ */
 export function retryToPayload(r: RetrySettings) {
   return {
     retry_enabled: r.enabled,
     retry_max_attempts: r.maxAttempts,
     retry_interval_minutes: r.intervalMinutes,
     retry_on: RETRY_OUTCOMES.filter((o) => r.retryOn.includes(o)),
+    followup_rounds: r.enabled ? r.followupRounds : 0,
+    followup_gap_hours: gapOk(r.followupGapHours) ? r.followupGapHours : 24,
   };
 }
 
@@ -60,6 +89,9 @@ export function retryToPayload(r: RetrySettings) {
 export function validateRetry(r: RetrySettings): string | null {
   if (!r.enabled) return null;
   if (r.retryOn.length === 0) return "Choose at least one outcome to redial on.";
+  if (r.followupRounds > 0 && !gapOk(r.followupGapHours)) {
+    return `Wait between rounds must be a whole number of hours from ${FOLLOWUP_GAP_RANGE.min} to ${FOLLOWUP_GAP_RANGE.max}.`;
+  }
   return null;
 }
 
@@ -74,6 +106,37 @@ export function describeRetry(r: RetrySettings): string {
 /** "Up to 2 calls · every 5 min": the short form shown on the campaign card. */
 export function describeRetryShort(r: RetrySettings): string {
   return `Up to ${r.maxAttempts === 1 ? "1 call" : `${r.maxAttempts} calls`} · every ${r.intervalMinutes} min`;
+}
+
+/** "Off", or "2 rounds, 24 h apart" (for the review step); the rounds need Auto Redial, so they read as off without it. */
+export function describeFollowup(r: RetrySettings): string {
+  if (!r.enabled || r.followupRounds === 0) return "Off";
+  return `${r.followupRounds === 1 ? "1 round" : `${r.followupRounds} rounds`}, ${r.followupGapHours} h apart`;
+}
+
+/** What the campaign list returns next to each campaign for the second-chance rounds. */
+export type FollowupInfo = {
+  rounds: number;
+  gap_hours: number;
+  /** Rounds already started in this run of the campaign. */
+  done: number;
+  /** When the next round starts (UTC), while one is scheduled. */
+  next_at: string | null;
+  waiting: boolean;
+};
+
+/**
+ * The second-chance line of the campaign card: "Second chance: 2 rounds, 24 h apart", then where it stands: "Round 2 of
+ * 2 starts Oct 29, 10:00 AM" (in the campaign's own time zone) while a round is scheduled, or "Round 1 of 2 done".
+ * Null when the campaign has no rounds.
+ */
+export function describeFollowupCard(f: FollowupInfo | undefined, formatAt: (iso: string) => string): { summary: string; progress: string | null } | null {
+  if (!f || f.rounds <= 0) return null;
+  const summary = `Second chance: ${f.rounds === 1 ? "1 round" : `${f.rounds} rounds`}, ${f.gap_hours} h apart`;
+  let progress: string | null = null;
+  if (f.waiting && f.next_at) progress = `Round ${Math.min(f.done + 1, f.rounds)} of ${f.rounds} starts ${formatAt(f.next_at)}`;
+  else if (f.done > 0) progress = `Round ${Math.min(f.done, f.rounds)} of ${f.rounds} done`;
+  return { summary, progress };
 }
 
 /** "Redials on: no answer, busy", or null when every outcome is ticked (nothing worth pointing out). */
@@ -91,6 +154,8 @@ export type RetryStats = {
   max_attempts_reached: number;
   pending_retries: number;
   numbers: number;
+  /** Numbers that never picked up even after every redial: what "Retry unreached numbers" calls again. */
+  unreached_count?: number;
 };
 
 /** How one call of a number ended (the outcomes the server classifies). */

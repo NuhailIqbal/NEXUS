@@ -5,7 +5,8 @@
  * campaign's own time zone when it has one, else the viewer's (named either way).
  */
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,14 @@ type Props = {
   campaignName?: string;
   /** The campaign's calling-hours zone, if it has one chosen. */
   timezone?: string | null;
+  /** The campaign's status ("Active", "Paused", "Inactive"). */
+  status?: string;
+  /** Numbers that never picked up even after every redial (retry_stats.unreached_count): the button shows when > 0. */
+  unreachedCount?: number;
+  /** A pass over the list is still going: the unreached numbers are not offered then. */
+  running?: boolean;
+  /** Called after unreached numbers were queued, so the page can refresh the campaign list. */
+  onRequeued?: () => void;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -31,7 +40,9 @@ const statusClass = (s: string) =>
     : ["max_attempts", "not_retried", "invalid_number", "do_not_call", "disqualified"].includes(s) ? "text-muted-foreground"
       : "text-primary";
 
-export function CampaignNumbersDialog({ campaignId, campaignName, timezone, onOpenChange }: Props) {
+export function CampaignNumbersDialog({
+  campaignId, campaignName, timezone, status, unreachedCount = 0, running = false, onRequeued, onOpenChange,
+}: Props) {
   const [filter, setFilter] = useState("all");
   const [rows, setRows] = useState<CampaignNumber[]>([]);
   const [total, setTotal] = useState(0);
@@ -39,6 +50,8 @@ export function CampaignNumbersDialog({ campaignId, campaignName, timezone, onOp
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [requeuing, setRequeuing] = useState(false);
 
   const load = useCallback(async (offset: number, replace: boolean) => {
     if (!campaignId) return;
@@ -61,6 +74,29 @@ export function CampaignNumbersDialog({ campaignId, campaignName, timezone, onOp
     setOpen(null);
     load(0, true);
   }, [campaignId, filter, load]);
+
+  useEffect(() => { setConfirming(false); }, [campaignId]);
+
+  const active = status === undefined || status === "Active";
+  const canRetry = unreachedCount > 0 && !running;
+
+  /** Queue the unreached numbers again (`activate` also sets a campaign that is not Active running). */
+  const retryUnreached = async (activate: boolean) => {
+    if (!campaignId) return;
+    setRequeuing(true);
+    const { data, error: err } = await api.retryUnreached(campaignId, { activate });
+    setRequeuing(false);
+    if (err || !data) {
+      toast.error(err || "Could not queue the numbers again.");
+      return;
+    }
+    setConfirming(false);
+    const d = data as { requeued: number; message?: string };
+    const text = d.message || (d.requeued > 0 ? "The numbers are queued to be called again." : "There are no unreached numbers to call again.");
+    if (d.requeued > 0) toast.success(text); else toast.info(text);
+    load(0, true);
+    onRequeued?.();
+  };
 
   const when = (v: string | null) => (v ? formatInZone(v, timezone) : "—");
   const outcome = (v: string | null) => (v ? OUTCOME_LABELS[v] ?? v : "—");
@@ -90,6 +126,46 @@ export function CampaignNumbersDialog({ campaignId, campaignName, timezone, onOp
         </div>
 
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+
+        {canRetry && (
+          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+            {!confirming ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  {unreachedCount.toLocaleString()} number{unreachedCount === 1 ? "" : "s"} never picked up, even after every redial.
+                </p>
+                <Button size="sm" variant="outline" onClick={() => setConfirming(true)}>
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Retry unreached numbers ({unreachedCount.toLocaleString()})
+                </Button>
+              </div>
+            ) : (
+              <div role="group" aria-label="Confirm retrying unreached numbers" className="space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  Call {unreachedCount.toLocaleString()} number{unreachedCount === 1 ? "" : "s"} that never picked up again?
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Numbers that answered, were transferred, disqualified or asked not to be called are not called.
+                  {!active && " This campaign is not running: choose whether to start it now or only queue the numbers for when it is Active."}
+                </p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button size="sm" variant="ghost" disabled={requeuing} onClick={() => setConfirming(false)}>Cancel</Button>
+                  {active ? (
+                    <Button size="sm" disabled={requeuing} onClick={() => retryUnreached(false)}>
+                      {requeuing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}Call them again
+                    </Button>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="outline" disabled={requeuing} onClick={() => retryUnreached(false)}>Only queue them</Button>
+                      <Button size="sm" disabled={requeuing} onClick={() => retryUnreached(true)}>
+                        {requeuing && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}Call them now (start campaign)
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full min-w-[720px] text-sm">

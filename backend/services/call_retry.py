@@ -403,8 +403,9 @@ def settle(lead: dict, final_status: str) -> bool:
 
 def cancel_pending(campaign_id: str) -> None:
     """Retrying was switched off: the redials still waiting will not be placed ("Not retried")."""
+    # A requeued number (attempts == 0, see requeue_unreached) still gets its one call: only real redials are cancelled.
     (_table("campaign_leads").update({"final_status": NOT_RETRIED, "next_attempt_at": None, "updated_at": iso(_now())})
-     .eq("campaign_id", campaign_id).is_("final_status", "null").not_.is_("next_attempt_at", "null").execute())
+     .eq("campaign_id", campaign_id).is_("final_status", "null").not_.is_("next_attempt_at", "null").gt("attempts", 0).execute())
 
 
 def schedule(camp: dict, moment: datetime) -> datetime:
@@ -614,7 +615,7 @@ def stats(user_id: str, campaign_ids: list[str]) -> dict:
     round of each number (Start again begins a new round, whose figures start from zero; the earlier rounds stay
     in each number's history)."""
     out = {cid: {"total_attempts": 0, "retries_placed": 0, "answered_on_retry": 0, "max_attempts_reached": 0,
-                 "pending_retries": 0, "numbers": 0} for cid in campaign_ids}
+                 "pending_retries": 0, "numbers": 0, "unreached_count": 0} for cid in campaign_ids}
     if not campaign_ids:
         return out
     with _get_pool().connection() as conn:
@@ -636,7 +637,39 @@ def stats(user_id: str, campaign_ids: list[str]) -> dict:
             o = out[r["cid"]]
             o["numbers"], o["answered_on_retry"] = r["numbers"], r["answered_on_retry"]
             o["max_attempts_reached"], o["pending_retries"] = r["max_reached"], r["pending"]
+            # the numbers "Retry unreached numbers" would call again: never picked up, even after every redial
+            o["unreached_count"] = r["max_reached"]
     return out
+
+
+def requeue_unreached(camp: dict, now: datetime | None = None) -> dict:
+    """Put every number of the campaign that never picked up (final status max_attempts) into a NEW round, due now:
+    round + 1, attempts 0, no final status, next_attempt_at = now. The dispatcher then places them as redials-first
+    work under the campaign's dialing strategy, calling hours, pause/resume and the account caps. Numbers that
+    answered, were transferred, disqualified, asked not to be called, were invalid or were "not retried" are never touched.
+
+    attempts == 0 with a due next_attempt_at is the marker of "first call of a requeued number": the dispatcher
+    places it even when Auto Redial is off (what happens AFTER that call follows the retry settings, as always).
+    last_outcome is kept (the numbers view still shows how the number last ended); the earlier rounds' history stays.
+
+    Idempotent: numbers already requeued have no final status any more. Returns {"requeued", "skipped_busy"}:
+    `requeued` is how many numbers were queued, `skipped_busy` how many of those are on another call right now (they
+    stay queued and are dialed as soon as the line is free; none is lost)."""
+    moment = now or _now()
+    with _get_pool().connection() as conn:
+        rows = conn.execute(
+            "UPDATE public.campaign_leads l SET round = l.round + 1, attempts = 0, final_status = NULL, "
+            "next_attempt_at = %s::timestamptz, updated_at = %s::timestamptz "
+            "WHERE l.campaign_id = %s::uuid AND l.user_id = %s::uuid AND l.final_status = %s "
+            "AND NOT EXISTS (SELECT 1 FROM public.campaign_attempts a WHERE a.lead_id = l.id AND a.ended_at IS NULL) "
+            "RETURNING l.phone",
+            (iso(moment), iso(moment), camp["id"], camp["user_id"], MAX_ATTEMPTS),
+        ).fetchall()
+        busy_keys = {r["phone_key"] for r in conn.execute(
+            "SELECT DISTINCT phone_key FROM public.campaign_attempts WHERE user_id = %s::uuid AND ended_at IS NULL",
+            (camp["user_id"],)).fetchall()} if rows else set()
+    busy = sum(1 for r in rows if phone_key(r["phone"]) in busy_keys)
+    return {"requeued": len(rows), "skipped_busy": busy}
 
 
 def numbers(camp: dict, status: str = "all", limit: int = 100, offset: int = 0) -> dict:

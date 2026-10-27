@@ -267,7 +267,7 @@ class AcceptanceTests(RetryBase):
         self.assertEqual((n["attempts"], n["status"], n["final_status"], n["next_attempt_at"]), (3, "max_attempts", "max_attempts", None))
         self.assertEqual([h["attempt_number"] for h in n["history"]], [1, 2, 3])
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 3, "retries_placed": 2, "answered_on_retry": 0,
-                                               "max_attempts_reached": 1, "pending_retries": 0, "numbers": 1})
+                                               "max_attempts_reached": 1, "pending_retries": 0, "numbers": 1, "unreached_count": 1})
 
     def test_a_number_that_answers_on_attempt_two_is_not_called_again(self):
         c = self.campaign()
@@ -283,7 +283,7 @@ class AcceptanceTests(RetryBase):
             self.assertEqual(self.sweep(later)["placed"], 0)
         self.assertEqual(len(self.calls_to(phone)), 2)
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 2, "retries_placed": 1, "answered_on_retry": 1,
-                                               "max_attempts_reached": 0, "pending_retries": 0, "numbers": 1})
+                                               "max_attempts_reached": 0, "pending_retries": 0, "numbers": 1, "unreached_count": 0})
 
     def test_an_answer_on_the_first_attempt_is_not_a_retry_answer(self):
         c = self.campaign()
@@ -792,13 +792,13 @@ class StatsAndViewTests(RetryBase):
         self.end_call(d, at=T0 + MIN)                                         # never answers
         self.end_call(e, "customer-busy", at=T0 + MIN)                        # never answers
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 4, "retries_placed": 0, "answered_on_retry": 0,
-                                               "max_attempts_reached": 0, "pending_retries": 3, "numbers": 4})
+                                               "max_attempts_reached": 0, "pending_retries": 3, "numbers": 4, "unreached_count": 0})
         self.assertEqual(self.sweep(T0 + 11 * MIN)["placed"], 3)
         self.end_call(self.calls_to(phones[1])[1], "customer-ended-call", 40, at=T0 + 12 * MIN)
         self.end_call(self.calls_to(phones[2])[1], at=T0 + 12 * MIN)
         self.end_call(self.calls_to(phones[3])[1], "customer-busy", at=T0 + 12 * MIN)
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 7, "retries_placed": 3, "answered_on_retry": 1,
-                                               "max_attempts_reached": 2, "pending_retries": 0, "numbers": 4})
+                                               "max_attempts_reached": 2, "pending_retries": 0, "numbers": 4, "unreached_count": 2})
         listing = self.api("get", "/telephony/campaigns").json()["data"]
         self.assertEqual(next(x for x in listing if x["id"] == c["id"])["retry_stats"]["retries_placed"], 3)
 
@@ -1074,11 +1074,11 @@ class ReviewFixTests(RetryBase):
         self.assertEqual(self.sweep(T0 + 11 * MIN)["placed"], 1)
         self.end_call(self.placed[1], at=T0 + 12 * MIN)
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 2, "retries_placed": 1, "answered_on_retry": 0,
-                                               "max_attempts_reached": 1, "pending_retries": 0, "numbers": 1})
+                                               "max_attempts_reached": 1, "pending_retries": 0, "numbers": 1, "unreached_count": 1})
         self.at(T0 + 3 * 24 * 60 * MIN)
         self.start(c["id"])                                     # Start again: a new round for the number
         self.assertEqual(self.stats(c["id"]), {"total_attempts": 1, "retries_placed": 0, "answered_on_retry": 0,
-                                               "max_attempts_reached": 0, "pending_retries": 0, "numbers": 1})
+                                               "max_attempts_reached": 0, "pending_retries": 0, "numbers": 1, "unreached_count": 0})
         self.assertEqual(len(self.numbers(c["id"])["rows"][0]["history"]), 3, "the earlier round stays in the number's history")
 
 

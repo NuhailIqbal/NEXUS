@@ -10,7 +10,7 @@ vi.mock("@/services/api", () => ({
     getCampaigns: vi.fn(), getAgents: vi.fn(), getPhoneNumbers: vi.fn(), getAnalyticsOverview: vi.fn(), getContacts: vi.fn(),
     getLists: vi.fn(), getDncStatus: vi.fn(), getDialingLimits: vi.fn(), getCampaignsLive: vi.fn(),
     createCampaign: vi.fn(), updateCampaign: vi.fn(), deleteCampaign: vi.fn(),
-    startCampaign: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn(), getCampaignNumbers: vi.fn(),
+    startCampaign: vi.fn(), pauseCampaign: vi.fn(), resumeCampaign: vi.fn(), getCampaignNumbers: vi.fn(), retryUnreached: vi.fn(),
   },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
@@ -457,7 +457,7 @@ describe("Outbound campaigns: creating one with hours", () => {
     render(<Outbound />);
     await createThroughWizard(false);
     await waitFor(() => expect(api.createCampaign).toHaveBeenCalled());
-    expect(fn(api.createCampaign).mock.calls[0][0]).toMatchObject({ call_hours_enabled: false });
+    expect(fn(api.createCampaign).mock.calls[0][0]).toMatchObject({ call_hours_enabled: false, followup_rounds: 0, followup_gap_hours: 24 });
   });
 });
 
@@ -843,6 +843,62 @@ describe("Outbound campaigns: auto redial", () => {
     expect(api.getCampaignNumbers).toHaveBeenCalledWith("c1", { status: "all", limit: 100, offset: 0 });
   });
 
+  describe("retry unreached numbers", () => {
+    const UNREACHED = { ...STATS, unreached_count: 2 };
+    const emptyView = () => fn(api.getCampaignNumbers).mockResolvedValue({
+      data: { rows: [], total: 0, retry: { enabled: true, max_attempts: 3, interval_minutes: 10 } }, error: null,
+    });
+    const openNumbers = async () => {
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      fireEvent.click(within(cardOf("Spring Push")).getByRole("button", { name: /Numbers/ }));
+      return screen.findByRole("dialog");
+    };
+
+    it("is offered in the numbers view of a campaign with unreached numbers, and refreshes the list after it", async () => {
+      mock([retryCampaign({ retry_stats: UNREACHED })]);
+      emptyView();
+      fn(api.retryUnreached).mockResolvedValue({
+        data: { requeued: 2, skipped_busy: 0, campaign_status: "Active", message: "2 numbers queued to be called again." }, error: null,
+      });
+      const dialog = await openNumbers();
+      fireEvent.click(await within(dialog).findByRole("button", { name: /Retry unreached numbers \(2\)/ }));
+      const campaignReads = fn(api.getCampaigns).mock.calls.length;
+      fireEvent.click(within(dialog).getByRole("button", { name: "Call them again" }));
+      await waitFor(() => expect(api.retryUnreached).toHaveBeenCalledWith("c1", { activate: false }));
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("2 numbers queued to be called again."));
+      await waitFor(() => expect(fn(api.getCampaigns).mock.calls.length).toBeGreaterThan(campaignReads));
+    });
+
+    it("offers to start a campaign that is not Active", async () => {
+      mock([retryCampaign({ retry_stats: UNREACHED, status: "Paused" })]);
+      emptyView();
+      fn(api.retryUnreached).mockResolvedValue({
+        data: { requeued: 2, skipped_busy: 0, campaign_status: "Active", message: "2 numbers queued to be called again." }, error: null,
+      });
+      const dialog = await openNumbers();
+      fireEvent.click(await within(dialog).findByRole("button", { name: /Retry unreached numbers/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: /Call them now \(start campaign\)/ }));
+      await waitFor(() => expect(api.retryUnreached).toHaveBeenCalledWith("c1", { activate: true }));
+    });
+
+    it("is not offered when nothing is unreached, or while a pass is still dialing", async () => {
+      mock([retryCampaign({ retry_stats: { ...STATS, unreached_count: 0 } })]);
+      emptyView();
+      const dialog = await openNumbers();
+      await waitFor(() => expect(api.getCampaignNumbers).toHaveBeenCalled());
+      expect(within(dialog).queryByRole("button", { name: /Retry unreached numbers/ })).not.toBeInTheDocument();
+    });
+
+    it("is not offered while a pass is still dialing", async () => {
+      mock([retryCampaign({ retry_stats: UNREACHED, dial_running: true })]);
+      emptyView();
+      const dialog = await openNumbers();
+      await waitFor(() => expect(api.getCampaignNumbers).toHaveBeenCalled());
+      expect(within(dialog).queryByRole("button", { name: /Retry unreached numbers/ })).not.toBeInTheDocument();
+    });
+  });
+
   it("the settings open with the stored retry settings", async () => {
     mock([retryCampaign({ retry_max_attempts: 6, retry_interval_minutes: 25, retry_on: ["voicemail"] })]);
     render(<Outbound />);
@@ -888,6 +944,73 @@ describe("Outbound campaigns: auto redial", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
     expect(toast.error).toHaveBeenCalledWith("Choose at least one outcome to redial on.");
     expect(api.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  describe("second-chance rounds", () => {
+    const FOLLOW = { rounds: 2, gap_hours: 24, done: 0, next_at: null, waiting: false };
+    const withRounds = (followup: Record<string, unknown> | undefined, over: Record<string, unknown> = {}) =>
+      retryCampaign({ followup_rounds: 2, followup_gap_hours: 24, followup, ...over });
+
+    it("the card says how many rounds and how far apart", async () => {
+      mock([withRounds(FOLLOW)]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      const card = cardOf("Spring Push");
+      expect(card).toHaveTextContent("Second chance: 2 rounds, 24 h apart");
+      expect(card).not.toHaveTextContent(/Round \d of/);
+    });
+
+    it("while a round is scheduled, the card says which one and when, in the campaign's time zone", async () => {
+      mock([withRounds({ ...FOLLOW, done: 1, next_at: "2026-10-29T14:00:00Z", waiting: true }, { call_hours_timezone: "America/New_York" })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(cardOf("Spring Push")).toHaveTextContent(/Round 2 of 2 starts .*Oct 29, 10:00 AM/);
+    });
+
+    it("after a round has run and none is scheduled, the card says it is done", async () => {
+      mock([withRounds({ ...FOLLOW, done: 1 })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(cardOf("Spring Push")).toHaveTextContent("Round 1 of 2 done");
+    });
+
+    it("a campaign without rounds shows no second-chance line", async () => {
+      mock([withRounds({ ...FOLLOW, rounds: 0 }, { followup_rounds: 0 })]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Second chance/);
+      expect(cardOf("Spring Push")).toHaveTextContent("Auto redial");
+    });
+
+    it("a campaign from before the feature (no followup at all) shows no second-chance line", async () => {
+      mock([retryCampaign()]);
+      render(<Outbound />);
+      await screen.findByText("Spring Push");
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Second chance/);
+    });
+
+    it("the settings open with the stored rounds and wait, and saving sends them", async () => {
+      mock([withRounds({ ...FOLLOW, rounds: 2, gap_hours: 12 }, { followup_gap_hours: 12 })]);
+      render(<Outbound />);
+      await openSettings();
+      expect(screen.getByLabelText("Rounds")).toHaveTextContent("2 rounds");
+      expect(screen.getByLabelText("Wait between rounds")).toHaveValue(12);
+      await choose("Rounds", "3 rounds");
+      fireEvent.click(screen.getByRole("button", { name: "4 h" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+      expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({ retry_enabled: true, followup_rounds: 3, followup_gap_hours: 4 });
+    });
+
+    it("turning Auto Redial off in the settings sends no rounds, so the server accepts it", async () => {
+      mock([withRounds({ ...FOLLOW })]);
+      render(<Outbound />);
+      await openSettings();
+      fireEvent.click(retrySwitch());
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(api.updateCampaign).toHaveBeenCalled());
+      expect(fn(api.updateCampaign).mock.calls[0][1]).toMatchObject({ retry_enabled: false, followup_rounds: 0 });
+    });
   });
 
   it("the launch toast mentions numbers skipped because they were already on a call", async () => {

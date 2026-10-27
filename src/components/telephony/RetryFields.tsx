@@ -1,17 +1,22 @@
 /**
  * The call-retry form shared by the create-campaign wizard and the campaign settings dialog: an on/off
  * switch and, while it is on, how many calls a number gets in all, the wait between them and which
- * outcomes trigger another call. Controlled: the parent owns the RetrySettings value and saves it.
- * No API calls. (Behaviour: backend services/call_retry.py.)
+ * outcomes trigger another call. Below it, the second-chance rounds: once the list is complete the campaign
+ * calls the numbers that never picked up again, a set number of extra times with a wait between the rounds
+ * (needs Auto Redial, so its controls are disabled while that is off). Controlled: the parent owns the
+ * RetrySettings value and saves it. No API calls. (Behaviour: backend services/call_retry.py and
+ * services/followup_rounds.py.)
  */
 import { Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
-  INTERVAL_OPTIONS, MAX_ATTEMPT_OPTIONS, RETRY_OUTCOMES, RETRY_OUTCOME_LABELS,
-  type RetryOutcome, type RetrySettings,
+  FOLLOWUP_GAP_PRESETS, FOLLOWUP_GAP_RANGE, FOLLOWUP_ROUND_OPTIONS, INTERVAL_OPTIONS, MAX_ATTEMPT_OPTIONS, RETRY_OUTCOMES,
+  RETRY_OUTCOME_LABELS, type RetryOutcome, type RetrySettings,
 } from "@/lib/callRetry";
 
 type Props = {
@@ -23,11 +28,19 @@ type Props = {
   editing?: boolean;
 };
 
+/** The number in the box (an emptied box is NaN, which validation reports). */
+const toNumber = (raw: string) => (raw.trim() === "" ? NaN : Number(raw));
+const shown = (n: number) => (Number.isFinite(n) ? String(n) : "");
+
 export function RetryFields({ idPrefix, value, onChange, editing }: Props) {
   const set = (patch: Partial<RetrySettings>) => onChange({ ...value, ...patch });
   const toggle = (o: RetryOutcome, on: boolean) =>
     set({ retryOn: RETRY_OUTCOMES.filter((x) => (x === o ? on : value.retryOn.includes(x))) });
   const noneChosen = value.enabled && value.retryOn.length === 0;
+  // The rounds need Auto Redial: while it is off they read as off and cannot be changed.
+  const rounds = value.enabled ? value.followupRounds : 0;
+  const gapProblem = value.enabled && rounds > 0 && !(Number.isInteger(value.followupGapHours)
+    && value.followupGapHours >= FOLLOWUP_GAP_RANGE.min && value.followupGapHours <= FOLLOWUP_GAP_RANGE.max);
 
   return (
     <div className="space-y-5">
@@ -44,7 +57,7 @@ export function RetryFields({ idPrefix, value, onChange, editing }: Props) {
           id={`${idPrefix}-enabled`}
           aria-label="Enable auto redial"
           checked={value.enabled}
-          onCheckedChange={(v) => set({ enabled: v })}
+          onCheckedChange={(v) => set(v ? { enabled: true } : { enabled: false, followupRounds: 0 })}
         />
       </div>
 
@@ -112,6 +125,78 @@ export function RetryFields({ idPrefix, value, onChange, editing }: Props) {
           </div>
         </>
       )}
+
+      <div className="space-y-3 border-t border-border pt-5">
+        <div>
+          <h4 className="text-sm font-semibold">Second-chance rounds</h4>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {!value.enabled
+              ? "Turn on Auto Redial above to call numbers that never picked up again."
+              : rounds > 0
+                ? `After the list is complete, numbers that never picked up are called again, up to ${rounds} more ${rounds === 1 ? "time" : "times"}. Numbers that answered, were transferred, disqualified, asked not to be called or are invalid are never called again. Calling hours always apply.`
+                : "Off: numbers that never picked up are left as they are. Choose a number of rounds to call them again after the list is complete."}
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor={`${idPrefix}-followup-rounds`}>Rounds</Label>
+            <Select
+              value={String(rounds)}
+              disabled={!value.enabled}
+              onValueChange={(v) => set({ followupRounds: Number(v) })}
+            >
+              <SelectTrigger id={`${idPrefix}-followup-rounds`} aria-label="Rounds">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FOLLOWUP_ROUND_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>{n === 0 ? "Off" : n === 1 ? "1 round" : `${n} rounds`}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`${idPrefix}-followup-gap`}>Wait between rounds</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id={`${idPrefix}-followup-gap`}
+                type="number"
+                inputMode="numeric"
+                min={FOLLOWUP_GAP_RANGE.min}
+                max={FOLLOWUP_GAP_RANGE.max}
+                step={1}
+                disabled={rounds === 0}
+                value={shown(value.followupGapHours)}
+                onChange={(e) => set({ followupGapHours: toNumber(e.target.value) })}
+                className="w-24"
+              />
+              <span className="text-sm text-muted-foreground">hours</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Wait presets">
+              {FOLLOWUP_GAP_PRESETS.map((p) => (
+                <Button
+                  key={p.hours}
+                  type="button"
+                  size="sm"
+                  variant={value.followupGapHours === p.hours ? "default" : "outline"}
+                  aria-pressed={value.followupGapHours === p.hours}
+                  disabled={rounds === 0}
+                  onClick={() => set({ followupGapHours: p.hours })}
+                  className="h-7 px-2.5 text-xs"
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Wait after a round ends before the next one starts.</p>
+          </div>
+        </div>
+        {gapProblem && (
+          <p role="alert" className="text-xs text-destructive">
+            Wait between rounds must be a whole number of hours from {FOLLOWUP_GAP_RANGE.min} to {FOLLOWUP_GAP_RANGE.max}.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

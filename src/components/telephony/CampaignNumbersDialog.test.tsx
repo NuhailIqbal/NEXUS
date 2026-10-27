@@ -3,8 +3,10 @@ import "@/test/radix-stubs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-vi.mock("@/services/api", () => ({ api: { getCampaignNumbers: vi.fn() } }));
+vi.mock("@/services/api", () => ({ api: { getCampaignNumbers: vi.fn(), retryUnreached: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+import { toast } from "sonner";
 import { api } from "@/services/api";
 import { CampaignNumbersDialog } from "./CampaignNumbersDialog";
 
@@ -132,5 +134,127 @@ describe("CampaignNumbersDialog", () => {
     render(<CampaignNumbersDialog campaignId={null} onOpenChange={vi.fn()} />);
     expect(api.getCampaignNumbers).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("CampaignNumbersDialog: retry unreached numbers", () => {
+  const renderRetry = (props: Record<string, unknown> = {}) => {
+    const onRequeued = vi.fn();
+    render(<CampaignNumbersDialog campaignId="c1" campaignName="Spring Push" timezone="UTC" status="Active" unreachedCount={3}
+      onRequeued={onRequeued} onOpenChange={vi.fn()} {...props} />);
+    return onRequeued;
+  };
+  const answer = (data: object) => fn(api.retryUnreached).mockResolvedValue({ data, error: null });
+  const QUEUED = { requeued: 3, skipped_busy: 0, campaign_status: "Active", message: "3 numbers queued to be called again." };
+
+  beforeEach(() => reply([row({ attempts: 3, final_status: "max_attempts", status: "max_attempts", next_attempt_at: null })]));
+
+  it("offers the button, with the count, when numbers never picked up", async () => {
+    renderRetry();
+    expect(await screen.findByRole("button", { name: /Retry unreached numbers \(3\)/ })).toBeInTheDocument();
+    expect(screen.getByText(/3 numbers never picked up, even after every redial/)).toBeInTheDocument();
+  });
+
+  it("says number, not numbers, for one", async () => {
+    renderRetry({ unreachedCount: 1 });
+    expect(await screen.findByRole("button", { name: /Retry unreached numbers \(1\)/ })).toBeInTheDocument();
+    expect(screen.getByText(/1 number never picked up/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["nothing is unreached", { unreachedCount: 0 }],
+    ["the count is not known", { unreachedCount: undefined }],
+    ["a pass is still going", { running: true }],
+  ])("shows no button when %s", async (_why, props) => {
+    renderRetry(props);
+    await screen.findByText("+15550001111");
+    expect(screen.queryByRole("button", { name: /Retry unreached numbers/ })).not.toBeInTheDocument();
+  });
+
+  it("asks first, and does nothing until it is confirmed", async () => {
+    renderRetry();
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    const box = screen.getByRole("group", { name: "Confirm retrying unreached numbers" });
+    expect(box).toHaveTextContent("Call 3 numbers that never picked up again?");
+    expect(box).toHaveTextContent("Numbers that answered, were transferred, disqualified or asked not to be called are not called.");
+    expect(api.retryUnreached).not.toHaveBeenCalled();
+    fireEvent.click(within(box).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: "Confirm retrying unreached numbers" })).not.toBeInTheDocument();
+    expect(api.retryUnreached).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Retry unreached numbers/ })).toBeInTheDocument();
+  });
+
+  it("an Active campaign: one confirm calls the API without activating, toasts the result and refreshes", async () => {
+    answer(QUEUED);
+    const onRequeued = renderRetry();
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    expect(screen.queryByRole("button", { name: /Only queue them/ })).not.toBeInTheDocument();
+    const loads = fn(api.getCampaignNumbers).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Call them again" }));
+    await waitFor(() => expect(api.retryUnreached).toHaveBeenCalledWith("c1", { activate: false }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("3 numbers queued to be called again."));
+    await waitFor(() => expect(fn(api.getCampaignNumbers).mock.calls.length).toBe(loads + 1));
+    expect(onRequeued).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group", { name: "Confirm retrying unreached numbers" })).not.toBeInTheDocument();
+  });
+
+  it("a campaign that is not Active offers to start it, or only to queue the numbers", async () => {
+    answer({ ...QUEUED, campaign_status: "Paused", message: "3 numbers queued. They will be dialed when the campaign is Active." });
+    renderRetry({ status: "Paused" });
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    expect(screen.getByRole("group", { name: "Confirm retrying unreached numbers" })).toHaveTextContent(/not running/);
+    expect(screen.queryByRole("button", { name: "Call them again" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Only queue them" }));
+    await waitFor(() => expect(api.retryUnreached).toHaveBeenCalledWith("c1", { activate: false }));
+    expect(toast.success).toHaveBeenCalledWith("3 numbers queued. They will be dialed when the campaign is Active.");
+  });
+
+  it("start campaign and call them sends activate: true", async () => {
+    answer({ ...QUEUED, message: "3 numbers queued to be called again." });
+    renderRetry({ status: "Inactive" });
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Call them now \(start campaign\)/ }));
+    await waitFor(() => expect(api.retryUnreached).toHaveBeenCalledWith("c1", { activate: true }));
+  });
+
+  it("zero requeued is an info message, not a success or an error", async () => {
+    answer({ requeued: 0, skipped_busy: 0, campaign_status: "Active", message: "There are no unreached numbers to call again." });
+    renderRetry();
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Call them again" }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith("There are no unreached numbers to call again."));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a failure is shown as an error, keeps the confirm open and does not refresh", async () => {
+    fn(api.retryUnreached).mockResolvedValue({ data: null, error: "Campaign not found" });
+    const onRequeued = renderRetry();
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Call them again" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Campaign not found"));
+    expect(onRequeued).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Confirm retrying unreached numbers" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Call them again" })).not.toBeDisabled());
+  });
+
+  it("the buttons are disabled while the request is out, so a double click sends one", async () => {
+    let finish: (v: unknown) => void = () => {};
+    fn(api.retryUnreached).mockReturnValue(new Promise((r) => { finish = r; }));
+    renderRetry();
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    const go = screen.getByRole("button", { name: "Call them again" });
+    fireEvent.click(go);
+    await waitFor(() => expect(go).toBeDisabled());
+    fireEvent.click(go);
+    expect(api.retryUnreached).toHaveBeenCalledTimes(1);
+    finish({ data: QUEUED, error: null });
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  it("never names the carrier", async () => {
+    renderRetry({ status: "Paused" });
+    fireEvent.click(await screen.findByRole("button", { name: /Retry unreached numbers/ }));
+    expect(screen.getByRole("dialog").textContent).not.toMatch(/vapi/i);
   });
 });
