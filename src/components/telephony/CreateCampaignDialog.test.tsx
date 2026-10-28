@@ -331,7 +331,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     expect(screen.getByText(/Step 4 of 6/)).toBeInTheDocument();
   });
 
-  it("second-chance rounds are off by default: the review says Off and none are asked for", async () => {
+  it("follow-up rounds are off by default: the review says Off and none are asked for", async () => {
     const onCreate = vi.fn();
     render(<CreateCampaignDialog open onOpenChange={vi.fn()} onCreate={onCreate} />);
     await toRetryStep();
@@ -339,7 +339,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     fireEvent.click(retrySwitch());
     expect(screen.getByLabelText("Rounds")).toHaveTextContent("Off");
     await pastRetry();
-    expect(await reviewTile("Second-chance rounds")).toHaveTextContent("Off");
+    expect(await reviewTile("Follow-up rounds")).toHaveTextContent("Off");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].retry).toMatchObject({ followupRounds: 0, followupGapHours: 24 });
   });
@@ -352,7 +352,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     await choose("Rounds", "2 rounds");
     fireEvent.click(screen.getByRole("button", { name: "12 h" }));
     await pastRetry();
-    expect(await reviewTile("Second-chance rounds")).toHaveTextContent("2 rounds, 12 h apart");
+    expect(await reviewTile("Follow-up rounds")).toHaveTextContent("2 rounds, 12 h apart");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].retry).toMatchObject({ enabled: true, followupRounds: 2, followupGapHours: 12 });
   });
@@ -376,7 +376,7 @@ describe("CreateCampaignDialog: auto redial step", () => {
     await choose("Rounds", "3 rounds");
     fireEvent.click(retrySwitch());
     await pastRetry();
-    expect(await reviewTile("Second-chance rounds")).toHaveTextContent("Off");
+    expect(await reviewTile("Follow-up rounds")).toHaveTextContent("Off");
     fireEvent.click(screen.getByRole("button", { name: /Launch Campaign/ }));
     expect(onCreate.mock.calls[0][0].retry).toMatchObject({ enabled: false, followupRounds: 0 });
   });
@@ -563,7 +563,7 @@ describe("CreateCampaignDialog: dialing strategy step", () => {
     expect(onSave.mock.calls[0][0].dialing).toEqual({ strategy: "paced", concurrentCalls: 5, callsPerMinute: 24, delaySeconds: 1 });
   });
 
-  it("when editing, the second-chance rounds start from the campaign's and are saved with the rest", async () => {
+  it("when editing, the follow-up rounds start from the campaign's and are saved with the rest", async () => {
     const initial: CampaignData = {
       status: "Active", name: "Spring", description: "", agentId: "a1", listId: "l1", phoneNumberId: "p1",
       dncScreeningEnabled: true,

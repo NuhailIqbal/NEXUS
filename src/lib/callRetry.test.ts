@@ -67,7 +67,7 @@ describe("callRetry", () => {
     expect(describeAttemptDial({ dial_strategy: "paced", dial_slot: null, dial_batch: 9, dial_source: "fresh" })).toBe("paced");
   });
 
-  describe("second-chance rounds", () => {
+  describe("follow-up rounds", () => {
     const on = { ...defaultRetry(), enabled: true };
 
     it("are off by default, 24 hours apart, and the gap presets are 4, 12, 24 and 48 hours", () => {
@@ -118,9 +118,9 @@ describe("callRetry", () => {
       expect(describeFollowupCard(undefined, at)).toBeNull();
       expect(describeFollowupCard({ rounds: 0, gap_hours: 24, done: 0, next_at: null, waiting: false }, at)).toBeNull();
       expect(describeFollowupCard({ rounds: 2, gap_hours: 24, done: 0, next_at: null, waiting: false }, at))
-        .toEqual({ summary: "Second chance: 2 rounds, 24 h apart", progress: null });
+        .toEqual({ summary: "Follow-up: 2 rounds, 24 h apart", progress: null });
       expect(describeFollowupCard({ rounds: 1, gap_hours: 4, done: 0, next_at: null, waiting: false }, at)?.summary)
-        .toBe("Second chance: 1 round, 4 h apart");
+        .toBe("Follow-up: 1 round, 4 h apart");
       expect(describeFollowupCard({ rounds: 2, gap_hours: 24, done: 1, next_at: "2026-10-29T10:00:00Z", waiting: true }, at)?.progress)
         .toBe("Round 2 of 2 starts at 2026-10-29T10:00:00Z");
       expect(describeFollowupCard({ rounds: 2, gap_hours: 24, done: 0, next_at: "2026-10-29T10:00:00Z", waiting: true }, at)?.progress)

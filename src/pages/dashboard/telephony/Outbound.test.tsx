@@ -946,7 +946,7 @@ describe("Outbound campaigns: auto redial", () => {
     expect(api.updateCampaign).not.toHaveBeenCalled();
   });
 
-  describe("second-chance rounds", () => {
+  describe("follow-up rounds", () => {
     const FOLLOW = { rounds: 2, gap_hours: 24, done: 0, next_at: null, waiting: false };
     const withRounds = (followup: Record<string, unknown> | undefined, over: Record<string, unknown> = {}) =>
       retryCampaign({ followup_rounds: 2, followup_gap_hours: 24, followup, ...over });
@@ -956,7 +956,7 @@ describe("Outbound campaigns: auto redial", () => {
       render(<Outbound />);
       await screen.findByText("Spring Push");
       const card = cardOf("Spring Push");
-      expect(card).toHaveTextContent("Second chance: 2 rounds, 24 h apart");
+      expect(card).toHaveTextContent("Follow-up: 2 rounds, 24 h apart");
       expect(card).not.toHaveTextContent(/Round \d of/);
     });
 
@@ -974,19 +974,19 @@ describe("Outbound campaigns: auto redial", () => {
       expect(cardOf("Spring Push")).toHaveTextContent("Round 1 of 2 done");
     });
 
-    it("a campaign without rounds shows no second-chance line", async () => {
+    it("a campaign without rounds shows no follow-up line", async () => {
       mock([withRounds({ ...FOLLOW, rounds: 0 }, { followup_rounds: 0 })]);
       render(<Outbound />);
       await screen.findByText("Spring Push");
-      expect(cardOf("Spring Push")).not.toHaveTextContent(/Second chance/);
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Follow-up/);
       expect(cardOf("Spring Push")).toHaveTextContent("Auto redial");
     });
 
-    it("a campaign from before the feature (no followup at all) shows no second-chance line", async () => {
+    it("a campaign from before the feature (no followup at all) shows no follow-up line", async () => {
       mock([retryCampaign()]);
       render(<Outbound />);
       await screen.findByText("Spring Push");
-      expect(cardOf("Spring Push")).not.toHaveTextContent(/Second chance/);
+      expect(cardOf("Spring Push")).not.toHaveTextContent(/Follow-up/);
     });
 
     it("the settings open with the stored rounds and wait, and saving sends them", async () => {

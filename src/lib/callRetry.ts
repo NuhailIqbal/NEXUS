@@ -2,7 +2,7 @@
  * Call retry / redial for outbound campaigns (backend: services/call_retry.py). A number that did not pick
  * up is called again after a set delay, up to a maximum number of calls; all of it is set per campaign.
  * The settings are four columns of the campaign row: retry_enabled, retry_max_attempts,
- * retry_interval_minutes and retry_on. Second-chance rounds (backend: services/followup_rounds.py) belong to the
+ * retry_interval_minutes and retry_on. Follow-up rounds (backend: services/followup_rounds.py) belong to the
  * same form: after the list is complete the campaign calls the numbers that never picked up again, up to
  * followup_rounds more times, followup_gap_hours apart. They need Auto Redial.
  */
@@ -22,7 +22,7 @@ export const RETRY_OUTCOME_LABELS: Record<RetryOutcome, string> = {
 export const MAX_ATTEMPT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 export const INTERVAL_OPTIONS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60];
 
-/** Second-chance rounds: how many extra rounds (0 = off) and the wait between them, in hours. */
+/** Follow-up rounds: how many extra rounds (0 = off) and the wait between them, in hours. */
 export const FOLLOWUP_ROUND_OPTIONS = [0, 1, 2, 3];
 export const FOLLOWUP_MAX_ROUNDS = 3;
 export const FOLLOWUP_GAP_RANGE = { min: 1, max: 48 };
@@ -46,7 +46,7 @@ export type RetrySettings = {
   followupGapHours: number;
 };
 
-/** Off, 3 calls in all, 10 minutes apart, every outcome ticked; no second-chance rounds, 24 hours apart. */
+/** Off, 3 calls in all, 10 minutes apart, every outcome ticked; no follow-up rounds, 24 hours apart. */
 export function defaultRetry(): RetrySettings {
   return { enabled: false, maxAttempts: 3, intervalMinutes: 10, retryOn: [...RETRY_OUTCOMES], followupRounds: 0, followupGapHours: 24 };
 }
@@ -114,7 +114,7 @@ export function describeFollowup(r: RetrySettings): string {
   return `${r.followupRounds === 1 ? "1 round" : `${r.followupRounds} rounds`}, ${r.followupGapHours} h apart`;
 }
 
-/** What the campaign list returns next to each campaign for the second-chance rounds. */
+/** What the campaign list returns next to each campaign for the follow-up rounds. */
 export type FollowupInfo = {
   rounds: number;
   gap_hours: number;
@@ -126,13 +126,13 @@ export type FollowupInfo = {
 };
 
 /**
- * The second-chance line of the campaign card: "Second chance: 2 rounds, 24 h apart", then where it stands: "Round 2 of
+ * The follow-up line of the campaign card: "Follow-up: 2 rounds, 24 h apart", then where it stands: "Round 2 of
  * 2 starts Oct 29, 10:00 AM" (in the campaign's own time zone) while a round is scheduled, or "Round 1 of 2 done".
  * Null when the campaign has no rounds.
  */
 export function describeFollowupCard(f: FollowupInfo | undefined, formatAt: (iso: string) => string): { summary: string; progress: string | null } | null {
   if (!f || f.rounds <= 0) return null;
-  const summary = `Second chance: ${f.rounds === 1 ? "1 round" : `${f.rounds} rounds`}, ${f.gap_hours} h apart`;
+  const summary = `Follow-up: ${f.rounds === 1 ? "1 round" : `${f.rounds} rounds`}, ${f.gap_hours} h apart`;
   let progress: string | null = null;
   if (f.waiting && f.next_at) progress = `Round ${Math.min(f.done + 1, f.rounds)} of ${f.rounds} starts ${formatAt(f.next_at)}`;
   else if (f.done > 0) progress = `Round ${Math.min(f.done, f.rounds)} of ${f.rounds} done`;

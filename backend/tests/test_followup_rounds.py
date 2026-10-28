@@ -1,5 +1,5 @@
 """
-Second-chance rounds: a campaign calls its unreached numbers again by itself (services/followup_rounds.py, the engine
+Follow-up rounds: a campaign calls its unreached numbers again by itself (services/followup_rounds.py, the engine
 `run_followups` in services/campaign_scheduler.py, the settings on create / PATCH, the `followup` object of the
 campaign API, Start resetting the rounds, and the manual "Retry unreached numbers" button staying independent).
 
@@ -195,7 +195,7 @@ class StartRoundTests(FollowBase):
         notes = self.notes()
         self.assertEqual(len(notes), 1)
         self.assertIn("round 1 of 2", notes[0]["title"])
-        self.assertIn("Second-chance round 1 of 2 started: 3 numbers", notes[0]["body"])
+        self.assertIn("Follow-up round 1 of 2 started: 3 numbers", notes[0]["body"])
         self.sweep(due + MIN)
         self.sweep(due + 2 * MIN)
         self.assertEqual(len(self.notes()), 1, "no second notification for the same round")
@@ -490,7 +490,7 @@ class EditTests(FollowBase):
     def test_turning_auto_redial_off_needs_the_rounds_off_too(self):
         c, g = self.build(unreached=2, followup_rounds=2)
         r = self.patch(c["id"], expect=400, retry_enabled=False)
-        self.assertEqual(r.json()["detail"], "Second-chance rounds need Auto Redial to be on.")
+        self.assertEqual(r.json()["detail"], "Follow-up rounds need Auto Redial to be on.")
         self.assertTrue(self.row(c["id"])["retry_enabled"], "nothing was saved")
         self.patch(c["id"], retry_enabled=False, followup_rounds=0)
         row = self.row(c["id"])
@@ -544,12 +544,12 @@ class ApiTests(FollowBase):
 
     def test_rounds_need_auto_redial(self):
         r = self.create(expect=400, retry_enabled=False, followup_rounds=1)
-        self.assertEqual(r.json()["detail"], "Second-chance rounds need Auto Redial to be on.")
+        self.assertEqual(r.json()["detail"], "Follow-up rounds need Auto Redial to be on.")
         r = self.create(expect=400, followup_rounds=2)           # the default is off
-        self.assertEqual(r.json()["detail"], "Second-chance rounds need Auto Redial to be on.")
+        self.assertEqual(r.json()["detail"], "Follow-up rounds need Auto Redial to be on.")
         d = self.create(retry_enabled=False, followup_rounds=0).json()["data"]
         r = self.patch(d["id"], expect=400, followup_rounds=1)
-        self.assertEqual(r.json()["detail"], "Second-chance rounds need Auto Redial to be on.")
+        self.assertEqual(r.json()["detail"], "Follow-up rounds need Auto Redial to be on.")
         self.assertEqual(self.row(d["id"])["followup_rounds"], 0)
         self.patch(d["id"], retry_enabled=True, followup_rounds=1)       # both in one request is fine
         self.assertEqual(self.row(d["id"])["followup_rounds"], 1)
@@ -558,7 +558,7 @@ class ApiTests(FollowBase):
         for rounds in (-1, 4, 100):
             with self.subTest(rounds=rounds):
                 r = self.create(expect=400, retry_enabled=True, followup_rounds=rounds)
-                self.assertEqual(r.json()["detail"], "Second-chance rounds must be a whole number from 0 to 3.")
+                self.assertEqual(r.json()["detail"], "Follow-up rounds must be a whole number from 0 to 3.")
         for gap in (0, -5, 49, 1000):
             with self.subTest(gap=gap):
                 r = self.create(expect=400, retry_enabled=True, followup_rounds=1, followup_gap_hours=gap)
@@ -659,7 +659,7 @@ class StrategyTests(FollowBase):
 
 
 class LoopTests(unittest.TestCase):
-    """campaign_loop runs the second-chance sweep every pass, and a failure in it never stops the loop."""
+    """campaign_loop runs the follow-up sweep every pass, and a failure in it never stops the loop."""
 
     def run_loop(self, followups):
         calls = {"sleep": 0}

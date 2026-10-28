@@ -82,12 +82,12 @@ describe("RetryFields", () => {
     expect(screen.getByText(/not to calls already in progress/)).toBeInTheDocument();
   });
 
-  describe("second-chance rounds", () => {
+  describe("follow-up rounds", () => {
     const on = { ...defaultRetry(), enabled: true };
 
     it("are off by default and the controls are disabled, with a hint, while Auto Redial is off", () => {
       render(<Harness initial={defaultRetry()} onValue={vi.fn()} />);
-      expect(screen.getByText("Second-chance rounds")).toBeInTheDocument();
+      expect(screen.getByText("Follow-up rounds")).toBeInTheDocument();
       expect(screen.getByLabelText("Rounds")).toBeDisabled();
       expect(screen.getByLabelText("Rounds")).toHaveTextContent("Off");
       expect(screen.getByLabelText("Wait between rounds")).toBeDisabled();

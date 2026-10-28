@@ -1100,7 +1100,7 @@ def _strip_engine(campaigns: list[dict]) -> None:
 
 def _attach_followup(campaigns: list[dict]) -> None:
     """Give each campaign a `followup`: {rounds, gap_hours, done, next_at, waiting} (services/followup_rounds.describe),
-    its second-chance round settings and where it is (`waiting` is true while a round is scheduled)."""
+    its follow-up round settings and where it is (`waiting` is true while a round is scheduled)."""
     for camp in campaigns:
         camp["followup"] = followup_rounds.describe(camp)
 
@@ -1318,7 +1318,7 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
                 updates["dial_next_at"] = None
                 updates["dial_stall"] = None
         if followup_touched or retry_touched:
-            # The second-chance rounds, checked with the retry switch as it will be stored (they need Auto Redial).
+            # The follow-up rounds, checked with the retry switch as it will be stored (they need Auto Redial).
             # Turning them off, or lowering them to the rounds already done, cancels a round that is scheduled; a new
             # gap never moves a time that is already scheduled (it applies from the next scheduling).
             try:
@@ -1333,7 +1333,7 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate, user=Depends(g
         # had open is over (dial_seq / dial_legacy_cursor are the dialing engine's own places in it).
         if "list_id" in updates and updates["list_id"] != existing.get("list_id"):
             updates.update({"dial_cursor": None, "dial_seq": None, "dial_legacy_cursor": None, "dial_running": False,
-                            "followup_done": 0, "followup_next_at": None})     # another list: second chances begin again
+                            "followup_done": 0, "followup_next_at": None})     # another list: follow-ups begin again
         # Anything a person does to the campaign takes it out of the automatic continuing: a different
         # status (they Paused/Activated/Inactivated it on purpose), a different list, or hours switched
         # off. Saving the settings with the same status and hours keeps it waiting.
@@ -1717,7 +1717,7 @@ async def start_campaign(campaign_id: str, user=Depends(get_current_user)):
             "status": "Active", "dial_running": True, "dial_seq": None, "dial_cursor": None, "dial_legacy_cursor": None,
             "dial_pass_started_at": now_iso, "dial_next_at": None, "dial_stall": None, "dial_counters": {},
             "dial_batch_seq": 0, "stopped_by_hours_at": None, "contacts_count": dialable,
-            "followup_done": 0, "followup_next_at": None,        # a new pass begins the second-chance rounds again too
+            "followup_done": 0, "followup_next_at": None,        # a new pass begins the follow-up rounds again too
         }).eq("id", campaign_id).eq("dial_running", False).is_("dial_cursor", "null").execute().data
     if not won:
         # Somebody changed the campaign between the read and the update (a second Start got there first).
@@ -1792,7 +1792,7 @@ async def retry_unreached(campaign_id: str, body: RetryUnreachedBody | None = No
     done = await asyncio.to_thread(call_retry.requeue_unreached, camp)
     n, busy = done["requeued"], done["skipped_busy"]
     if n:
-        # A second-chance round that was scheduled has nothing left to call once these numbers are queued; the rounds
+        # A follow-up round that was scheduled has nothing left to call once these numbers are queued; the rounds
         # used so far and the campaign's other settings are untouched (the button is independent of them).
         from services import campaign_scheduler
         await asyncio.to_thread(campaign_scheduler.release_followup_if_none_unreached, campaign_id)

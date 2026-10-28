@@ -23,7 +23,7 @@ switched off with DIALER_TICK_SECONDS=0, a degraded mode: one step a minute). Re
 strategy like every other call. A paused/stopped campaign keeps its due redials and places them when it is Active
 again; a redial that falls outside the hours is moved to the next opening.
 
-It also runs the campaigns' second-chance rounds (`run_followups`, settings in services/followup_rounds.py): once a
+It also runs the campaigns' follow-up rounds (`run_followups`, settings in services/followup_rounds.py): once a
 campaign's list is complete, its numbers that never picked up are scheduled to be called again after the campaign's
 wait, and when that time comes they are put back in the queue (call_retry.requeue_unreached) for the dialing engine.
 """
@@ -249,7 +249,7 @@ async def run_retries(now: datetime | None = None, wait: bool = True, *, fresh: 
     return result
 
 
-# ── second-chance rounds ──
+# ── follow-up rounds ──
 
 # A campaign whose list is complete: Active, no pass open (dial_running, or the cursor an older engine left), no call
 # in progress and no number still waiting for a redial (final_status NULL). `c` is the campaign's alias.
@@ -261,7 +261,7 @@ _UNREACHED = "EXISTS (SELECT 1 FROM public.campaign_leads l WHERE l.campaign_id 
 
 
 def release_followup_if_none_unreached(campaign_id: str) -> bool:
-    """Take a scheduled second-chance round off the campaign when no number that never picked up is left (the manual
+    """Take a scheduled follow-up round off the campaign when no number that never picked up is left (the manual
     "Retry unreached numbers" button just queued them all, so the round has nothing to call). True when one was
     cancelled. A round that is not scheduled, or numbers that are still unreached, change nothing."""
     return bool(dialer._q(
@@ -278,7 +278,7 @@ def _revert_round(camp: dict, due) -> None:
 
 
 def _serve_followup(camp: dict, moment: datetime, out: dict) -> None:
-    """One campaign's turn in the second-chance sweep: schedule its next round when the list is complete, or start
+    """One campaign's turn in the follow-up sweep: schedule its next round when the list is complete, or start
     the round that is due. Every decision is ONE guarded UPDATE, so two sweeps (or workers) never schedule or start
     the same round twice."""
     cid = camp["id"]
@@ -328,9 +328,9 @@ def _serve_followup(camp: dict, moment: datetime, out: dict) -> None:
     out["started"] += 1
     dialer.nudge()
     n, k = int(row["followup_done"]), got["requeued"]
-    logger.info("second-chance round %s of %s of campaign %s started: %s numbers", n, rounds, cid, k)
-    _notify(row["user_id"], f"{row.get('name') or 'Campaign'}: second-chance round {n} of {rounds} started",
-            f"Second-chance round {n} of {rounds} started: {k} number{'s' if k != 1 else ''} that never picked up "
+    logger.info("follow-up round %s of %s of campaign %s started: %s numbers", n, rounds, cid, k)
+    _notify(row["user_id"], f"{row.get('name') or 'Campaign'}: follow-up round {n} of {rounds} started",
+            f"Follow-up round {n} of {rounds} started: {k} number{'s' if k != 1 else ''} that never picked up "
             f"{'are' if k != 1 else 'is'} being called again.", kind="campaign_followup")
 
 
@@ -345,12 +345,12 @@ def _followup_sweep(moment: datetime) -> dict:
         try:
             _serve_followup(camp, moment, out)
         except Exception:  # noqa: BLE001 - one campaign must not stop the others
-            logger.exception("second-chance round of campaign %s failed", camp.get("id"))
+            logger.exception("follow-up round of campaign %s failed", camp.get("id"))
     return out
 
 
 async def run_followups(now: datetime | None = None) -> dict:
-    """One sweep of the second-chance rounds (services/followup_rounds.py), every campaign that has them on:
+    """One sweep of the follow-up rounds (services/followup_rounds.py), every campaign that has them on:
       - a campaign whose list is complete (Active, no pass open, no call in progress, no redial waiting) with numbers
         that never picked up gets its next round SCHEDULED: due `followup_gap_hours` from now, or from the next
         opening of its calling hours when that falls outside them;
@@ -385,5 +385,5 @@ async def campaign_loop() -> None:
         try:
             await run_followups()
         except Exception as e:  # noqa: BLE001
-            logger.exception("second-chance sweep failed: %s", e)
+            logger.exception("follow-up sweep failed: %s", e)
         await asyncio.sleep(interval)

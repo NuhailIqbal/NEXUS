@@ -427,7 +427,7 @@ class CampaignCreate(BaseModel):
     dial_concurrent_calls: int = 5
     dial_calls_per_minute: int = 10
     dial_delay_seconds: int = 0
-    # Second-chance rounds (services/followup_rounds.py): after the list is complete, the numbers that never picked
+    # Follow-up rounds (services/followup_rounds.py): after the list is complete, the numbers that never picked
     # up are called again, `followup_rounds` more times (0 = off, max 3), `followup_gap_hours` apart (1-48). Needs
     # retry_enabled. The router validates and answers 400 with a message. followup_done / followup_next_at are
     # the engine's own state and are deliberately not fields here (an unknown body key is dropped).
@@ -461,7 +461,7 @@ class CampaignUpdate(BaseModel):
     dial_concurrent_calls: Optional[int] = None
     dial_calls_per_minute: Optional[int] = None
     dial_delay_seconds: Optional[int] = None
-    # Second-chance round settings (see CampaignCreate); any subset may be sent.
+    # Follow-up round settings (see CampaignCreate); any subset may be sent.
     followup_rounds: Optional[int] = None
     followup_gap_hours: Optional[int] = None
 

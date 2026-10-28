@@ -1,5 +1,5 @@
 """
-Second-chance rounds of an outbound campaign: after the list is complete, the numbers that never picked up (final
+Follow-up rounds of an outbound campaign: after the list is complete, the numbers that never picked up (final
 status "Max attempts reached", see services/call_retry.py) are called again by the campaign itself, up to a set number
 of extra rounds, with a wait between the rounds. Off by default; the manual "Retry unreached numbers" button is a
 separate, unlimited action that does not use up these rounds.
@@ -22,17 +22,17 @@ DEFAULTS = {"followup_rounds": 0, "followup_gap_hours": 24}
 ROUNDS_RANGE = (0, 3)
 GAP_RANGE = (1, 48)
 
-# Second-chance rounds need Auto Redial: with it off, a number that never picks up is settled "Not retried", never
+# Follow-up rounds need Auto Redial: with it off, a number that never picks up is settled "Not retried", never
 # "Max attempts reached", so there would be nothing for a round to call.
-NEEDS_RETRY = "Second-chance rounds need Auto Redial to be on."
+NEEDS_RETRY = "Follow-up rounds need Auto Redial to be on."
 
 
 class FollowupError(ValueError):
-    """A second-chance setting is invalid; the message is shown to the user."""
+    """A follow-up setting is invalid; the message is shown to the user."""
 
 
 def touched(updates: dict) -> bool:
-    """True when `updates` (a request body as a dict) sets any second-chance field."""
+    """True when `updates` (a request body as a dict) sets any follow-up field."""
     return any(k in updates for k in FIELDS)
 
 
@@ -44,7 +44,7 @@ def _int(value, message: str, low: int, high: int) -> int:
 
 
 def validate(existing: dict | None, updates: dict) -> dict:
-    """The second-chance settings as they will be stored: `updates` merged over `existing` (then over the
+    """The follow-up settings as they will be stored: `updates` merged over `existing` (then over the
     defaults), checked. Both fields are always returned. A field that is None in `updates` keeps its stored value.
     `retry_enabled` is read the same way (updates over existing), so turning Auto Redial off while rounds are still on
     is refused as well. Raises FollowupError with a message for the user."""
@@ -54,7 +54,7 @@ def validate(existing: dict | None, updates: dict) -> dict:
         if v is None:
             v = (existing or {}).get(key)
         merged[key] = DEFAULTS[key] if v is None else v
-    _int(merged["followup_rounds"], "Second-chance rounds must be a whole number from 0 to 3.", *ROUNDS_RANGE)
+    _int(merged["followup_rounds"], "Follow-up rounds must be a whole number from 0 to 3.", *ROUNDS_RANGE)
     _int(merged["followup_gap_hours"], "Wait between rounds must be a whole number of hours from 1 to 48.", *GAP_RANGE)
     retry = updates.get("retry_enabled")
     if retry is None:

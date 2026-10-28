@@ -805,7 +805,7 @@ def _ensure_columns(conn) -> None:
             updated_at timestamptz DEFAULT now() NOT NULL,
             UNIQUE (campaign_id, contact_id)
         )''',
-        # Second-chance rounds (services/followup_rounds.py): after the list is complete the campaign calls the numbers
+        # Follow-up rounds (services/followup_rounds.py): after the list is complete the campaign calls the numbers
         # that never picked up again, up to followup_rounds more times, followup_gap_hours apart. Off (0) for every
         # campaign that exists. followup_done / followup_next_at are the engine's own state (server-written only).
         'ALTER TABLE public.outbound_campaigns ADD COLUMN IF NOT EXISTS followup_rounds integer DEFAULT 0 NOT NULL',

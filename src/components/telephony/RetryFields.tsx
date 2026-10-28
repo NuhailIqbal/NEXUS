@@ -1,7 +1,7 @@
 /**
  * The call-retry form shared by the create-campaign wizard and the campaign settings dialog: an on/off
  * switch and, while it is on, how many calls a number gets in all, the wait between them and which
- * outcomes trigger another call. Below it, the second-chance rounds: once the list is complete the campaign
+ * outcomes trigger another call. Below it, the follow-up rounds: once the list is complete the campaign
  * calls the numbers that never picked up again, a set number of extra times with a wait between the rounds
  * (needs Auto Redial, so its controls are disabled while that is off). Controlled: the parent owns the
  * RetrySettings value and saves it. No API calls. (Behaviour: backend services/call_retry.py and
@@ -128,7 +128,7 @@ export function RetryFields({ idPrefix, value, onChange, editing }: Props) {
 
       <div className="space-y-3 border-t border-border pt-5">
         <div>
-          <h4 className="text-sm font-semibold">Second-chance rounds</h4>
+          <h4 className="text-sm font-semibold">Follow-up rounds</h4>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {!value.enabled
               ? "Turn on Auto Redial above to call numbers that never picked up again."

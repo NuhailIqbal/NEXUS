@@ -63,7 +63,7 @@ type Campaign = {
   retry_interval_minutes?: number;
   retry_on?: string[];
   retry_stats?: RetryStats;
-  // Second-chance rounds: the settings as stored, and where the rounds stand (done, when the next one starts).
+  // Follow-up rounds: the settings as stored, and where the rounds stand (done, when the next one starts).
   followup_rounds?: number;
   followup_gap_hours?: number;
   followup?: FollowupInfo;

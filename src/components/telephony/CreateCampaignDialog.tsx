@@ -511,7 +511,7 @@ function Step4({
           <ReviewItem label="From Number"      value={numberLabel} />
           <ReviewItem label="Calling Hours"     value={data.hours.enabled ? describeHours(data.hours, DAY_LABELS) : "Any time"} />
           <ReviewItem label="Auto Redial"        value={describeRetry(data.retry)} />
-          <ReviewItem label="Second-chance rounds" value={describeFollowup(data.retry)} />
+          <ReviewItem label="Follow-up rounds" value={describeFollowup(data.retry)} />
           <ReviewItem label="Dialing Strategy"   value={describeDialing(data.dialing)} />
         </div>
 
