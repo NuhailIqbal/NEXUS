@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { isSameDay } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   SortableColumnHeader, TableTextFilter, TableSelectFilter, TableDateFilter, TablePagination,
 } from "@/components/dashboard/table/TableControls";
 import { api } from "@/services/api";
+import { hasReceipt } from "@/lib/billingDocuments";
 import { PurchaseTxn, TXN_LABELS } from "./types";
 
 type TxnColumnKey = "created_at" | "kind" | "description" | "amount" | "balance_after";
@@ -37,6 +40,7 @@ const Transactions = () => {
   const [txnDateFilter, setTxnDateFilter] = useState<Date | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [receiptBusy, setReceiptBusy] = useState<string | null>(null);
 
   useEffect(() => {
     api.getWalletTransactions().then(({ data }) => {
@@ -44,6 +48,13 @@ const Transactions = () => {
       setLoading(false);
     });
   }, []);
+
+  const downloadReceipt = async (id: string) => {
+    setReceiptBusy(id);
+    const { error } = await api.downloadBillingReceipt(id);
+    setReceiptBusy(null);
+    if (error) toast.error(error);
+  };
 
   const toggleTxnSort = (key: TxnColumnKey) => {
     if (txnSortKey !== key) { setTxnSortKey(key); setTxnSortDir("asc"); return; }
@@ -144,6 +155,7 @@ const Transactions = () => {
                     />
                   </th>
                 ))}
+                <th className="px-4 py-3 text-center">Receipt</th>
               </tr>
               <tr className="divide-x divide-border border-t border-border">
                 {TXN_COLUMNS.map(({ key, label }) => (
@@ -162,12 +174,13 @@ const Transactions = () => {
                     )}
                   </th>
                 ))}
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {visibleTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                     No transactions match your filters.
                   </td>
                 </tr>
@@ -191,6 +204,21 @@ const Transactions = () => {
                       </td>
                       <td className="px-4 py-3 text-center text-foreground">
                         {t.balance_after != null ? `$${t.balance_after.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {hasReceipt(t) ? (
+                          <Button
+                            size="sm" variant="outline" disabled={receiptBusy === t.id}
+                            aria-label={`Download receipt for ${new Date(t.created_at).toLocaleDateString()} top-up`}
+                            onClick={() => downloadReceipt(t.id)}
+                          >
+                            {receiptBusy === t.id
+                              ? <Loader2 className="h-4 w-4 animate-spin" />
+                              : <><Download className="mr-1.5 h-4 w-4" /> PDF</>}
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </td>
                     </tr>
                   );

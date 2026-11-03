@@ -55,6 +55,7 @@ import Transactions from "./components/billing/Transactions.tsx";
 import CallCosts from "./components/billing/CallCosts.tsx";
 import PaymentMethods from "./components/billing/PaymentMethods.tsx";
 import Promotions from "./components/billing/Promotions.tsx";
+import Statements from "./components/billing/Statements.tsx";
 import Admin from "./pages/dashboard/Admin.tsx";
 import {
   AnalyticsChannel,
@@ -178,6 +179,7 @@ const App = () => {
                     <Route index element={<BillingOverview />} />
                     <Route path="transactions" element={<Transactions />} />
                     <Route path="call-costs" element={<CallCosts />} />
+                    <Route path="statements" element={<Statements />} />
                     <Route path="payment-methods" element={<PaymentMethods />} />
                     <Route path="promotions" element={<Promotions />} />
                   </Route>

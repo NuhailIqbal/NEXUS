@@ -17,3 +17,5 @@ email-validator==2.2.0
 beautifulsoup4==4.15.0
 
 tzdata
+# PDF statements and receipts (services/billing_pdf.py)
+reportlab==5.0.1

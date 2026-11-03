@@ -445,6 +445,12 @@ export const api = {
   // Promotions
   getPromotions: () => get("/billing/promotions"),
   redeemPromoCode: (code: string) => post("/billing/promotions/redeem", { code }),
+  // Billing documents: monthly statements (months with activity) and per-top-up receipts.
+  getBillingStatements: () => get("/billing/statements"),
+  downloadBillingStatement: (month: string) =>
+    downloadFile(`/billing/statements/${encodeURIComponent(month)}/pdf`, `EDM-Nexus-Statement-${month}.pdf`),
+  downloadBillingReceipt: (transactionId: string) =>
+    downloadFile(`/billing/receipts/${encodeURIComponent(transactionId)}/pdf`, `EDM-Nexus-Receipt-${transactionId.split("-")[0].toUpperCase()}.pdf`),
 
   // Referrals
   getMyReferrals: () => get("/referrals/me"),

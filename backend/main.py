@@ -39,6 +39,7 @@ from routers import (
     calendar,
     callbacks,
     billing,
+    billing_documents,
     stripe_webhook,
     admin,
     auth,
@@ -291,6 +292,7 @@ app.include_router(call_events.router)
 app.include_router(calendar.router)
 app.include_router(callbacks.router)
 app.include_router(billing.router)
+app.include_router(billing_documents.router)
 app.include_router(stripe_webhook.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)

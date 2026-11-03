@@ -1,7 +1,7 @@
 /**
  * Shell for the /dashboard/billing section: page title, tab bar, and an Outlet
  * that renders the active child route (overview, transactions, call costs,
- * payment methods, promotions). Routes are declared in App.tsx.
+ * statements, payment methods, promotions). Routes are declared in App.tsx.
  */
 import { NavLink, Outlet } from "react-router-dom";
 
@@ -11,6 +11,7 @@ const TABS = [
   { to: "/dashboard/billing", label: "Overview", end: true },
   { to: "/dashboard/billing/transactions", label: "Transactions", end: false },
   { to: "/dashboard/billing/call-costs", label: "Call Costs", end: false },
+  { to: "/dashboard/billing/statements", label: "Statements", end: false },
   { to: "/dashboard/billing/payment-methods", label: "Payment methods", end: false },
   { to: "/dashboard/billing/promotions", label: "Promotions", end: false },
 ];
