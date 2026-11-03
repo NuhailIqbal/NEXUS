@@ -156,6 +156,21 @@ def _ensure_referral_code(user_id: str) -> str:
     return ""
 
 
+def _record_partner_referral_if_valid(referee_id: str, code: str) -> None:
+    """Attribute a new signup to the ACTIVE referral partner owning `code` (already upper-cased).
+    A paused partner's link still lets people register but attributes nobody. Never raises
+    (the caller wraps it): partner_referrals.user_id is UNIQUE, so a user is attributed once."""
+    partner = (
+        supabase.table("referral_partners").select("id, status").eq("code", code)
+        .maybe_single().execute().data
+    )
+    if not partner or partner.get("status") != "active":
+        return
+    supabase.table("partner_referrals").insert({
+        "partner_id": partner["id"], "user_id": referee_id, "status": "pending",
+    }).execute()
+
+
 def _record_referral_if_valid(referee_id: str, referral_code: str | None) -> None:
     """Best-effort: if referral_code resolves to an existing user's code, create a
     'pending' referrals row. Never raises — a bad/unknown/malformed code must never
@@ -169,8 +184,12 @@ def _record_referral_if_valid(referee_id: str, referral_code: str | None) -> Non
             supabase.table("profiles").select("id").eq("referral_code", code)
             .maybe_single().execute().data
         )
-        if not referrer or referrer["id"] == referee_id:
-            return  # unknown code, or (structurally impossible) self-referral
+        if not referrer:
+            # Not a user's own code — it may be a referral PARTNER's code (admin-managed affiliate).
+            _record_partner_referral_if_valid(referee_id, code)
+            return
+        if referrer["id"] == referee_id:
+            return  # (structurally impossible) self-referral
         # referrals.referee_id is UNIQUE, so a user is attributed to at most one referrer; a
         # repeat insert raises and is swallowed by the except below.
         supabase.table("referrals").insert({
@@ -349,6 +368,10 @@ async def verify_email(body: VerifyBody):
     supabase.table("referrals").update(
         {"status": "verified", "verified_at": datetime.now(timezone.utc).isoformat()}
     ).eq("referee_id", uid).eq("status", "pending").execute()
+    # Same for a referral-partner attribution (this is what makes a fixed-fee commission payable).
+    supabase.table("partner_referrals").update(
+        {"status": "verified", "verified_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("user_id", uid).eq("status", "pending").execute()
 
     # The token row only stores user_id, so re-read the email for the JWT.
     u = supabase.table("users").select("email").eq("id", uid).maybe_single().execute().data

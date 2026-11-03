@@ -45,6 +45,7 @@ from routers import (
     notifications,
     referrals,
     support_chat,
+    partners,
 )
 
 # Application-level rate limiter (clients keyed by remote IP). slowapi needs it on
@@ -295,3 +296,5 @@ app.include_router(admin.router)
 app.include_router(notifications.router)
 app.include_router(referrals.router)
 app.include_router(support_chat.router)
+app.include_router(partners.admin_router)
+app.include_router(partners.router)

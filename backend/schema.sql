@@ -764,6 +764,39 @@ CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON public.referrals (referrer_
 
 
 --
+-- Name: referral_partners / partner_referrals; Type: TABLE; Schema: public; Owner: -
+-- Admin-managed referral partners. user_id is the partner's own login (optional);
+-- commission_type is 'percent' (share of the profit on the referred users' call usage) or
+-- 'fixed' (a one-time amount per verified signup). partner_referrals attributes a signup
+-- (UNIQUE user_id: one partner per user) to the partner whose code it registered with.
+--
+
+CREATE TABLE IF NOT EXISTS public.referral_partners (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    user_id uuid UNIQUE REFERENCES public.users(id) ON DELETE SET NULL,
+    name text NOT NULL,
+    email text NOT NULL,
+    code text NOT NULL UNIQUE,
+    status text DEFAULT 'active' NOT NULL,
+    commission_type text DEFAULT 'percent' NOT NULL,
+    commission_value numeric(10,2) DEFAULT 0 NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.partner_referrals (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    partner_id uuid NOT NULL REFERENCES public.referral_partners(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    verified_at timestamp with time zone
+);
+
+CREATE INDEX IF NOT EXISTS partner_referrals_partner_idx ON public.partner_referrals (partner_id, created_at DESC);
+
+
+--
 -- Name: dnc_check_cache; Type: TABLE; Schema: public; Owner: -
 -- Caches DNC/litigation suppression lookups (WhitelistData integration). Scoped per user
 -- because each user screens against their OWN provider account and list scope, so a result

@@ -3,7 +3,8 @@
  * backend (POST /admin/users/{id}/impersonate, called in pages/dashboard/Admin.tsx, which then
  * uses `openImpersonation` / `startImpersonation`). `markImpersonating` and `clearImpersonation`
  * are used by contexts/AuthContext.tsx; `getImpersonatedEmail` and `stopImpersonation` by
- * components/ImpersonationBanner.tsx.
+ * components/ImpersonationBanner.tsx. A referral partner viewing as one of their users goes through
+ * `startPartnerImpersonation` instead (same origin, so the token is swapped in place and parked for the exit).
  */
 // Admin "view as user" (impersonation) helpers.
 //
@@ -20,6 +21,8 @@ import { mainAppOrigin, adminOrigin } from "@/lib/adminHost";
 const TOKEN_KEY = "nexus_token";            // must match api.ts
 /** localStorage key whose presence marks the current session as an impersonation. */
 const FLAG_KEY = "nexus_impersonating";      // holds the impersonated user's email
+/** Set only while a referral PARTNER is viewing as one of their users: holds the partner's own token so exiting restores it. */
+const PARTNER_RETURN_KEY = "nexus_partner_return_token";
 
 /**
  * Builds the main-app URL that carries the impersonation token and email as query params
@@ -50,6 +53,7 @@ export function markImpersonating(email: string) {
  *  Used by sign-out / login / expiry so a stale flag never bleeds into another session. */
 export function clearImpersonation() {
   localStorage.removeItem(FLAG_KEY);
+  localStorage.removeItem(PARTNER_RETURN_KEY);
 }
 
 /** The email being impersonated, or null when not impersonating. */
@@ -62,10 +66,37 @@ export function isImpersonating(): boolean {
   return !!localStorage.getItem(FLAG_KEY);
 }
 
-/** End impersonation: log out of the impersonated dashboard session and return to the admin
- *  portal. The admin's own session lives entirely on the admin origin and was never disturbed. */
+/** True when the current impersonation was started by a referral partner (not an admin). */
+export function isPartnerImpersonation(): boolean {
+  return isImpersonating() && !!localStorage.getItem(PARTNER_RETURN_KEY);
+}
+
+/**
+ * A referral partner starts viewing as one of their referred users, in the CURRENT tab. Unlike the admin flow
+ * the partner and the dashboard share one origin, hence one localStorage, so the partner's own token is parked
+ * under PARTNER_RETURN_KEY and swapped back by stopImpersonation(). (Other open tabs of the same browser follow
+ * the swap, as they all read the same token.)
+ */
+export function startPartnerImpersonation(token: string, email: string) {
+  // Keep the partner's own token across a second "view as" without ever parking an impersonation token as theirs.
+  const own = localStorage.getItem(TOKEN_KEY);
+  if (own && !localStorage.getItem(FLAG_KEY)) localStorage.setItem(PARTNER_RETURN_KEY, own);
+  localStorage.setItem(TOKEN_KEY, token);
+  markImpersonating(email);
+  window.location.href = "/dashboard";
+}
+
+/** End impersonation. An admin's session is dropped and the browser returns to the admin portal (whose own
+ *  session was never disturbed). A partner's own token is restored and they land back on their Partner page. */
 export function stopImpersonation() {
-  localStorage.removeItem(TOKEN_KEY);
+  const partnerToken = localStorage.getItem(PARTNER_RETURN_KEY);
   localStorage.removeItem(FLAG_KEY);
+  localStorage.removeItem(PARTNER_RETURN_KEY);
+  if (partnerToken) {
+    localStorage.setItem(TOKEN_KEY, partnerToken);
+    window.location.href = "/dashboard/partner";
+    return;
+  }
+  localStorage.removeItem(TOKEN_KEY);
   window.location.href = adminOrigin();
 }

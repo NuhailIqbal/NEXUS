@@ -9,7 +9,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from "react-router-do
 import {
   LayoutDashboard, Home, Bot, Mic, Database, Phone,
   PhoneOutgoing, PhoneIncoming, BarChart3, Users, LifeBuoy, LogOut, ChevronDown, ChevronRight,
-  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap, PhoneCall,
+  Menu, X, MessageSquare, CreditCard, Plug, Share2, Workflow, Zap, PhoneCall, Handshake,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -104,6 +104,9 @@ const NAV: NavItem[] = [
   { label: "Support", to: "/dashboard/support", icon: LifeBuoy },
 ];
 
+/** Extra entry shown only to accounts an admin has set up as referral partners (GET /partner/me), right after Referrals. */
+const PARTNER_NAV: NavItem = { label: "Partner Portal", to: "/dashboard/partner", icon: Handshake };
+
 /**
  * Layout route component for /dashboard. Waits for AuthContext to resolve, then redirects to
  * /login if nobody is signed in; until then it shows a loading placeholder instead of the
@@ -116,6 +119,7 @@ const DashboardLayout = () => {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
   const [roleLabel, setRoleLabel] = useState("Account Owner");
+  const [isPartner, setIsPartner] = useState(false);
 
   // Auth guard: `loading` must be false first, otherwise a page refresh (session still being
   // restored) would bounce a signed-in user to /login.
@@ -148,6 +152,10 @@ const DashboardLayout = () => {
         }
       });
     };
+
+    // One-off: is this account a referral partner? (decides whether the Partner Portal menu shows.) A failed
+    // lookup just leaves the menu hidden.
+    api.getPartnerMe().then(({ data }) => setIsPartner(!!data?.is_partner));
 
     // Re-checked every 20s so a revoked collaborator is signed out without having to reload.
     pollRole();
@@ -201,6 +209,7 @@ const DashboardLayout = () => {
         onClose={() => setMobileOpen(false)}
         profile={profile}
         onSignOut={handleSignOut}
+        isPartner={isPartner}
       />
 
       <div className="flex min-w-0 flex-1 flex-col lg:pl-72">
@@ -278,11 +287,13 @@ function Sidebar({
   onClose,
   profile,
   onSignOut,
+  isPartner,
 }: {
   mobileOpen: boolean;
   onClose: () => void;
   profile: SidebarProfile;
   onSignOut: () => void;
+  isPartner: boolean;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -295,6 +306,10 @@ function Sidebar({
     return acc;
   }, {});
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(initialOpen);
+  // The Partner Portal link joins the menu (after Referrals) only for referral partners.
+  const navItems = isPartner
+    ? NAV.flatMap((item) => (item.to === "/dashboard/referrals" ? [item, PARTNER_NAV] : [item]))
+    : NAV;
 
   // True on an exact match or a nested path. Matching on `to + "/"` (not a bare prefix) keeps
   // e.g. /telephony/inbound from also lighting up for /telephony/inbound-logs.
@@ -337,7 +352,7 @@ function Sidebar({
 
       <nav className="mt-4 flex-1 overflow-y-auto px-2 pb-4">
         <ul className="space-y-0.5">
-          {NAV.map((item) => {
+          {navItems.map((item) => {
             if (item.children) {
               const open = openGroups[item.label];
               const groupActive = item.children.some((c) => isActive(c.to));

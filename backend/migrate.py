@@ -483,6 +483,30 @@ def _ensure_columns(conn) -> None:
             verified_at timestamptz
         )''',
         'CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON public.referrals (referrer_id, created_at DESC)',
+        # Referral PARTNERS (admin-managed affiliates with a commission). A partner is a row here, usually
+        # linked to a normal user login (user_id) so they sign in to the main app and see /dashboard/partner.
+        # partner_referrals attributes each signup that arrived through a partner's code to that partner.
+        '''CREATE TABLE IF NOT EXISTS public.referral_partners (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            user_id uuid UNIQUE REFERENCES public.users(id) ON DELETE SET NULL,
+            name text NOT NULL,
+            email text NOT NULL,
+            code text NOT NULL UNIQUE,
+            status text DEFAULT 'active' NOT NULL,
+            commission_type text DEFAULT 'percent' NOT NULL,
+            commission_value numeric(10,2) DEFAULT 0 NOT NULL,
+            notes text,
+            created_at timestamptz DEFAULT now() NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS public.partner_referrals (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            partner_id uuid NOT NULL REFERENCES public.referral_partners(id) ON DELETE CASCADE,
+            user_id uuid NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+            status text DEFAULT 'pending' NOT NULL,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            verified_at timestamptz
+        )''',
+        'CREATE INDEX IF NOT EXISTS partner_referrals_partner_idx ON public.partner_referrals (partner_id, created_at DESC)',
         # team_members.role/status were constrained to a stale Admin/Manager/Editor/Viewer
         # and Invited/Active/Removed set that the app never actually wrote — the invite API
         # only ever sends lowercase 'member'/'viewer' and 'Active'/'Pending', so every invite

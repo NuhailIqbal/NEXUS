@@ -449,6 +449,14 @@ export const api = {
   // Referrals
   getMyReferrals: () => get("/referrals/me"),
 
+  // Referral partners (the partner's own side; 403 for accounts that are not partners)
+  // `data.is_partner` tells the dashboard whether to show the Partner menu.
+  getPartnerMe: () => get("/partner/me"),
+  getPartnerOverview: () => get("/partner/overview"),
+  getPartnerActivity: () => get("/partner/activity"),
+  // A 2h "view as" token for one of the partner's own referred users (lib/impersonation.ts installs it).
+  partnerImpersonateUser: (id: string) => post(`/partner/users/${id}/impersonate`),
+
   // Notifications
   // The NEXUS assistant chat bubble: send the conversation so far (oldest first, ending with the user's question); `data.reply` is the answer.
   supportChat: (messages: { role: "user" | "assistant"; content: string }[]) => post("/support/chat", { messages }),
@@ -466,6 +474,18 @@ export const api = {
   getAdminAgents: () => adminGet("/admin/agents"),
   getAdminPhoneNumbers: () => adminGet("/admin/phone-numbers"),
   getAdminReferrals: () => adminGet("/admin/referrals"),
+  // Referral partners (admin): list with billed vs platform cost vs profit, create, one partner's detail, edit, live feed.
+  getAdminPartners: () => adminGet("/admin/partners"),
+  createAdminPartner: (data: {
+    name: string; email: string; password?: string; code?: string;
+    commission_type: string; commission_value: number; notes?: string;
+  }) => adminPost("/admin/partners", data),
+  getAdminPartner: (id: string) => adminGet(`/admin/partners/${id}`),
+  updateAdminPartner: (id: string, data: {
+    name?: string; notes?: string; status?: string; commission_type?: string; commission_value?: number;
+  }) => adminPatch(`/admin/partners/${id}`, data),
+  getAdminPartnerActivity: (partnerId?: string) =>
+    adminGet(`/admin/partners/activity${partnerId ? `?partner_id=${encodeURIComponent(partnerId)}` : ""}`),
   getAdminPayments: () => adminGet("/admin/payments"),
   getAdminRevenue: () => adminGet("/admin/revenue"),
   getAdminAgentsReport: () => adminGet("/admin/agents-report"),

@@ -1,7 +1,7 @@
 /**
  * Admin portal page: a password-gated, sidebar-driven console for platform operators
  * (overview, users, agents, phone numbers, payments, revenue/agent/user reports, promotions
- * and referrals). It authenticates with POST /admin/login and then calls the /admin/* API
+ * referrals and referral partners). It authenticates with POST /admin/login and then calls the /admin/* API
  * via the api.getAdmin* / api.*Admin* helpers, which send the token in the X-Admin-Auth
  * header. Section state lives in this component (no sub-routes); App.tsx renders it as the
  * catch-all route on the admin host (see lib/adminHost), separate from the user dashboard.
@@ -11,7 +11,7 @@ import {
   Users, Bot, PhoneOutgoing, CreditCard,
   Loader2, Search, ChevronRight, ChevronDown, ToggleLeft, ToggleRight,
   Plus, LogOut, Lock,
-  LayoutDashboard, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift, Share2,
+  LayoutDashboard, DollarSign, BarChart3, FileText, Trash2, Eye, Phone, Gift, Share2, Handshake,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ import Logo from "@/components/Logo";
 import { cn } from "@/lib/utils";
 import { startImpersonation, openImpersonation } from "@/lib/impersonation";
 import ThemeToggle from "@/components/ThemeToggle";
+import PartnersAdmin from "@/components/admin/PartnersAdmin";
 
 // One row of GET /admin/users: profile + billing state + usage counts for a single user.
 type AdminUser = {
@@ -149,7 +150,7 @@ type ReferralRow = {
 // Identifiers of the admin sections; the `section` state selects which renderer is shown.
 type SectionKey =
   | "overview" | "users" | "agents" | "numbers"
-  | "payments" | "promotions" | "referrals" | "revenue" | "agent-report" | "user-report";
+  | "payments" | "promotions" | "referrals" | "partners" | "revenue" | "agent-report" | "user-report";
 
 // Sidebar model: a NavLeaf selects a section directly; a NavGroup is a collapsible parent
 // whose children are NavLeafs.
@@ -175,6 +176,7 @@ const NAV: NavEntry[] = [
   },
   { key: "promotions",   label: "Promotions",     icon: Gift },
   { key: "referrals",    label: "Referrals",      icon: Share2 },
+  { key: "partners",     label: "Partners",       icon: Handshake },
 ];
 
 /** Overview KPI tile: an icon, a large numeric value and a caption. Purely presentational. */
@@ -762,6 +764,7 @@ const Admin = () => {
               {section === "payments" && renderPayments()}
               {section === "promotions" && renderPromotions()}
               {section === "referrals" && renderReferrals()}
+              {section === "partners" && <PartnersAdmin onViewAs={handleImpersonate} />}
               {section === "revenue" && renderRevenue()}
               {section === "agent-report" && renderAgentReport()}
               {section === "user-report" && renderUserReport()}
