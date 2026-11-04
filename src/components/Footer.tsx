@@ -70,7 +70,7 @@ const Footer = () => (
       </div>
 
       <div className="border-t border-border mt-12 pt-6 flex flex-col md:flex-row items-center justify-between gap-4">
-        <p className="text-xs text-muted-foreground">© {new Date().getFullYear()} EDM Nexus. All rights reserved.</p>
+        <p className="text-xs text-muted-foreground">© {new Date().getFullYear()} EDM Nexus. All rights reserved. · v{__APP_VERSION__}</p>
         <div className="flex gap-6">
           {legalLinks.map((item) => (
             <Link key={item.label} to={item.to} className="text-xs text-muted-foreground hover:text-foreground transition-colors">

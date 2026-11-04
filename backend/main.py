@@ -15,6 +15,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from config import settings
+from version import __version__
 
 from routers import (
     auth,
@@ -57,7 +58,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="EDM Nexus API",
-    version="1.0.0",
+    version=__version__,
     description="AI-powered revenue platform backend",
 )
 
@@ -253,8 +254,8 @@ app.add_middleware(TeamRoleGuard)
 # Health
 @app.get("/health", tags=["System"])
 async def health():
-    """Liveness probe: always returns {"status": "ok"}. No authentication and no database access."""
-    return {"status": "ok"}
+    """Liveness probe: always returns {"status": "ok", "version": <release version>}. No authentication and no database access."""
+    return {"status": "ok", "version": __version__}
 
 
 from fastapi import Depends

@@ -14,6 +14,8 @@ npm run test         # Run all tests once (Vitest + jsdom)
 npm run test:watch   # Run tests in watch mode
 npx vitest run src/path/to/file.test.ts  # Run a single test file
 npm run preview      # Preview production build
+npm run version:bump -- patch|minor|major  # Release: bump version everywhere + CHANGELOG (see docs/VERSIONING.md)
+npm run version:check  # Verify package.json, lockfile, backend/version.py and CHANGELOG agree
 ```
 
 ### Backend (FastAPI)
