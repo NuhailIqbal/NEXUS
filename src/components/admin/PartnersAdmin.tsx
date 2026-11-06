@@ -2,12 +2,14 @@
  * Admin portal "Partners" section: create and manage referral partners, set each one's commission (a percentage of
  * profit or a fixed amount per verified signup), and see for each partner what their referred users were billed vs
  * what the platform paid (platform cost), the profit delta between the two, the commission owed and what the
- * platform keeps. A partner's detail view lists every referred account with the same three numbers and a live
- * activity feed. Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
- * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity (services/partners.py).
+ * platform keeps. A partner's detail view lists every referred account with the same three numbers, the payment
+ * ledger (record a payment, edit its description, void it with a reason; paid vs still owed) and a live activity
+ * feed. Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
+ * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity,
+ * POST/PATCH /admin/partners/{id}/payouts[/{pid}[/void]] (services/partners.py).
  */
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Copy, Eye, Loader2, Pause, Play, Plus } from "lucide-react";
+import { ArrowLeft, Ban, Banknote, Copy, Eye, Loader2, Pause, Pencil, Play, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,34 +22,53 @@ import { api } from "@/services/api";
 import { moneyOrDash } from "@/lib/leadRoi";
 import { cn } from "@/lib/utils";
 import {
-  commissionExplainer, parseCommission, referralUrl,
-  type AdminPartnerTotals, type CommissionType, type PartnerInfo, type PartnerSignup,
+  balanceStatus, checkPayoutAmount, commissionExplainer, parseCommission, payoutDate, referralUrl, todayISO,
+  type AdminPartnerTotals, type AdminPayout, type CommissionType, type PartnerInfo, type PartnerSignup,
 } from "@/lib/partners";
 import { mainAppOrigin } from "@/lib/adminHost";
 
 type PartnerRow = PartnerInfo & { totals: AdminPartnerTotals };
-type PartnerDetail = PartnerRow & { signups: PartnerSignup[] };
+type PartnerDetail = PartnerRow & { signups: PartnerSignup[]; payouts: AdminPayout[] };
 type ListData = { partners: PartnerRow[]; totals: AdminPartnerTotals };
 
-const Tile = ({ label, value, tone }: { label: string; value: string | number; tone?: "profit" | "neutral" }) => (
-  <div className={cn("rounded-xl border bg-card p-5", tone === "profit" ? "border-green-500/50 bg-green-500/5" : "border-border")}>
-    <div className={cn("text-2xl font-bold", tone === "profit" ? "text-green-500" : "text-foreground")}>{value}</div>
+const Tile = ({ label, value, tone }: { label: string; value: string | number; tone?: "profit" | "warn" | "neutral" }) => (
+  <div className={cn(
+    "rounded-xl border bg-card p-5",
+    tone === "profit" ? "border-green-500/50 bg-green-500/5" : tone === "warn" ? "border-amber-500/50 bg-amber-500/5" : "border-border",
+  )}>
+    <div className={cn("text-2xl font-bold", tone === "profit" ? "text-green-500" : tone === "warn" ? "text-amber-500" : "text-foreground")}>{value}</div>
     <div className="text-xs text-muted-foreground">{label}</div>
   </div>
 );
 
-/** The money tiles shared by the list (all partners) and a partner's detail: billed, platform cost, profit delta, commission, net. */
-const MoneyTiles = ({ t }: { t: AdminPartnerTotals }) => (
-  <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-    <Tile label="Billed to users" value={moneyOrDash(t.billed)} />
-    <Tile label="Platform cost" value={moneyOrDash(t.platform_cost)} />
-    <Tile label="Profit (billed − cost)" value={moneyOrDash(t.profit)} tone="profit" />
-    <Tile label="Commission owed" value={moneyOrDash(t.commission)} />
-    <Tile label="Platform keeps" value={moneyOrDash(t.net_profit)} />
-  </div>
-);
+/**
+ * The money tiles shared by the list (all partners) and a partner's detail. First row is the platform's side (billed,
+ * cost, the profit between them, what it keeps); second row is the commission: earned, actually paid, still owed.
+ */
+const MoneyTiles = ({ t }: { t: AdminPartnerTotals }) => {
+  const balance = balanceStatus(t.owed);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Tile label="Billed to users" value={moneyOrDash(t.billed)} />
+        <Tile label="Platform cost" value={moneyOrDash(t.platform_cost)} />
+        <Tile label="Profit (billed − cost)" value={moneyOrDash(t.profit)} tone="profit" />
+        <Tile label="Platform keeps (profit − commission earned)" value={moneyOrDash(t.net_profit)} />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Tile label="Commission earned" value={moneyOrDash(t.commission)} />
+        <Tile label="Paid out to partners" value={moneyOrDash(t.paid)} />
+        <Tile
+          label={balance === "overpaid" ? "Overpaid (rate was lowered after paying)" : "Still owed"}
+          value={moneyOrDash(Math.abs(t.owed))} tone={balance === "owed" || balance === "overpaid" ? "warn" : "neutral"}
+        />
+      </div>
+    </div>
+  );
+};
 
 const profitClass = (n: number) => (n > 0 ? "text-green-500" : n < 0 ? "text-destructive" : "text-muted-foreground");
+const owedClass = (n: number) => (n > 0 ? "font-semibold text-amber-500" : n < 0 ? "font-semibold text-destructive" : "text-muted-foreground");
 
 const copyLink = (path: string) => {
   navigator.clipboard.writeText(referralUrl(mainAppOrigin(), path));
@@ -92,7 +113,7 @@ export default function PartnersAdmin({ onViewAs }: Props) {
           <MoneyTiles t={list.totals} />
           <div className="overflow-hidden rounded-xl border border-border">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-sm">
+              <table className="w-full min-w-[1180px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3">Partner</th>
@@ -101,14 +122,16 @@ export default function PartnersAdmin({ onViewAs }: Props) {
                     <th className="px-4 py-3 text-right">Billed</th>
                     <th className="px-4 py-3 text-right">Platform cost</th>
                     <th className="px-4 py-3 text-right">Profit</th>
-                    <th className="px-4 py-3 text-right">Commission owed</th>
+                    <th className="px-4 py-3 text-right">Earned</th>
+                    <th className="px-4 py-3 text-right">Paid</th>
+                    <th className="px-4 py-3 text-right">Still owed</th>
                     <th className="px-4 py-3 text-right">Platform keeps</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody>
                   {list.partners.length === 0 ? (
-                    <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No partners yet. Create the first one.</td></tr>
+                    <tr><td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">No partners yet. Create the first one.</td></tr>
                   ) : list.partners.map((p) => (
                     <tr key={p.id} className="border-t border-border bg-card/30">
                       <td className="px-4 py-3">
@@ -127,6 +150,8 @@ export default function PartnersAdmin({ onViewAs }: Props) {
                       <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.platform_cost)}</td>
                       <td className={cn("px-4 py-3 text-right font-semibold", profitClass(p.totals.profit))}>{moneyOrDash(p.totals.profit)}</td>
                       <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.commission)}</td>
+                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.paid)}</td>
+                      <td className={cn("px-4 py-3 text-right", owedClass(p.totals.owed))}>{moneyOrDash(p.totals.owed)}</td>
                       <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.net_profit)}</td>
                       <td className="px-4 py-3 text-right"><Button size="sm" variant="outline" onClick={() => setSelected(p.id)}>Manage</Button></td>
                     </tr>
@@ -305,9 +330,14 @@ function PartnerDetailView({ id, onBack, onViewAs }: { id: string; onBack: () =>
       <div className="max-w-xl space-y-3 rounded-xl border border-border bg-card/40 p-5">
         <h2 className="text-lg font-semibold text-foreground">Commission level</h2>
         <CommissionFields type={type} value={value} onType={setType} onValue={setValue} />
-        <p className="text-xs text-muted-foreground">A change applies to the partner&apos;s whole history, so what they have earned is recalculated at the new rate.</p>
+        <p className="text-xs text-muted-foreground">
+          A change applies to the partner&apos;s whole history, so what they have earned is recalculated at the new rate.
+          Payments already recorded are not changed, so lowering the rate after paying can leave the partner overpaid.
+        </p>
         <Button onClick={saveCommission} disabled={!dirty || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save commission</Button>
       </div>
+
+      <PayoutsSection partnerId={id} totals={p.totals} payouts={p.payouts} onChanged={load} />
 
       <div>
         <h2 className="mb-3 text-lg font-semibold text-foreground">Referred accounts ({p.signups.length})</h2>
@@ -351,5 +381,241 @@ function PartnerDetailView({ id, onBack, onViewAs }: { id: string; onBack: () =>
 
       <ActivityFeed load={() => api.getAdminPartnerActivity(id)} />
     </div>
+  );
+}
+
+type PayoutDialogState = { kind: "record" } | { kind: "edit"; payout: AdminPayout } | { kind: "void"; payout: AdminPayout } | null;
+
+/** One partner's payment ledger: earned / paid / still owed, every payment, and record / edit / void. */
+function PayoutsSection({ partnerId, totals, payouts, onChanged }: { partnerId: string; totals: AdminPartnerTotals; payouts: AdminPayout[]; onChanged: () => void }) {
+  const [dialog, setDialog] = useState<PayoutDialogState>(null);
+  const balance = balanceStatus(totals.owed);
+  const valid = payouts.filter((x) => x.status === "paid").length;
+  const done = () => { setDialog(null); onChanged(); };
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Payments ({valid})</h2>
+          <p className="text-xs text-muted-foreground">
+            Earned {moneyOrDash(totals.commission)} · Paid {moneyOrDash(totals.paid)} ·{" "}
+            {balance === "overpaid" ? `Overpaid ${moneyOrDash(Math.abs(totals.owed))}` : `Still owed ${moneyOrDash(totals.owed)}`}
+          </p>
+        </div>
+        <Button className="gap-2" disabled={balance !== "owed"} onClick={() => setDialog({ kind: "record" })}>
+          <Banknote className="h-4 w-4" /> Record payment
+        </Button>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-sm">
+            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3">Paid on</th>
+                <th className="px-4 py-3 text-right">Amount</th>
+                <th className="px-4 py-3">Method</th>
+                <th className="px-4 py-3">Reference</th>
+                <th className="px-4 py-3">Note</th>
+                <th className="px-4 py-3">Recorded by</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {payouts.length === 0 ? (
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">No payments recorded yet.</td></tr>
+              ) : payouts.map((x) => (
+                <tr key={x.id} className={cn("border-t border-border bg-card/30", x.status === "void" && "text-muted-foreground")}>
+                  <td className="whitespace-nowrap px-4 py-3">{payoutDate(x.paid_on)}</td>
+                  <td className={cn("px-4 py-3 text-right font-semibold", x.status === "void" && "line-through")}>{moneyOrDash(x.amount)}</td>
+                  <td className="px-4 py-3">{x.method || "—"}</td>
+                  <td className="break-all px-4 py-3">{x.reference || "—"}</td>
+                  <td className="max-w-[220px] break-words px-4 py-3">{x.note || "—"}</td>
+                  <td className="px-4 py-3">{x.created_by || "—"}</td>
+                  <td className="px-4 py-3">
+                    {x.status === "paid" ? <Badge>Paid</Badge> : (
+                      <>
+                        <Badge variant="secondary">Void</Badge>
+                        <div className="mt-1 max-w-[200px] break-words text-xs">{x.void_reason}{x.voided_by ? ` · ${x.voided_by}` : ""}</div>
+                      </>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right">
+                    {x.status === "paid" && (
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDialog({ kind: "edit", payout: x })}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDialog({ kind: "void", payout: x })}><Ban className="h-3.5 w-3.5" /> Void</Button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {dialog?.kind === "record" && <RecordPayoutDialog partnerId={partnerId} owed={totals.owed} onClose={() => setDialog(null)} onDone={done} />}
+      {dialog?.kind === "edit" && <EditPayoutDialog partnerId={partnerId} payout={dialog.payout} onClose={() => setDialog(null)} onDone={done} />}
+      {dialog?.kind === "void" && <VoidPayoutDialog partnerId={partnerId} payout={dialog.payout} onClose={() => setDialog(null)} onDone={done} />}
+    </div>
+  );
+}
+
+const PAYOUT_METHODS = ["Bank transfer", "PayPal", "Wire", "Check", "Other"];
+
+function RecordPayoutDialog({ partnerId, owed, onClose, onDone }: { partnerId: string; owed: number; onClose: () => void; onDone: () => void }) {
+  const [amount, setAmount] = useState(owed.toFixed(2));
+  const [paidOn, setPaidOn] = useState(todayISO());
+  const [method, setMethod] = useState("");
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const check = checkPayoutAmount(amount, owed);
+
+  const submit = async () => {
+    if (check.error || check.value === null) return toast.error(check.error ?? "Enter the amount paid.");
+    if (!paidOn) return toast.error("Pick the date the payment was made");
+    setBusy(true);
+    const { error } = await api.recordAdminPartnerPayout(partnerId, {
+      amount: check.value, paid_on: paidOn, method: method.trim() || undefined,
+      reference: reference.trim() || undefined, note: note.trim() || undefined,
+    });
+    setBusy(false);
+    if (error) return toast.error(typeof error === "string" ? error : "Could not record the payment");
+    toast.success(`Recorded a payment of ${moneyOrDash(check.value)}`);
+    onDone();
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Record a payment</DialogTitle>
+          <DialogDescription>Log money you have already sent to this partner. It does not move any money itself.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Amount paid ($)</Label>
+              <Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              {amount.trim() !== "" && check.error
+                ? <p className="text-xs text-destructive">{check.error}</p>
+                : <p className="text-xs text-muted-foreground">Still owed: {moneyOrDash(owed)}. You cannot pay more than this.</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Paid on</Label>
+              <Input type="date" value={paidOn} max={todayISO()} onChange={(e) => setPaidOn(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Method (optional)</Label>
+              <Input list="payout-methods" value={method} maxLength={40} onChange={(e) => setMethod(e.target.value)} placeholder="Bank transfer" />
+              <datalist id="payout-methods">{PAYOUT_METHODS.map((m) => <option key={m} value={m} />)}</datalist>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reference (optional)</Label>
+              <Input value={reference} maxLength={120} onChange={(e) => setReference(e.target.value)} placeholder="Transaction ID" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Note (optional, only you see it)</Label>
+            <Input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy || check.value === null}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Record payment</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditPayoutDialog({ partnerId, payout, onClose, onDone }: { partnerId: string; payout: AdminPayout; onClose: () => void; onDone: () => void }) {
+  const [method, setMethod] = useState(payout.method);
+  const [reference, setReference] = useState(payout.reference);
+  const [note, setNote] = useState(payout.note);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    const { error } = await api.updateAdminPartnerPayout(partnerId, payout.id, { method: method.trim(), reference: reference.trim(), note: note.trim() });
+    setBusy(false);
+    if (error) return toast.error(typeof error === "string" ? error : "Could not save the payment");
+    toast.success("Payment updated");
+    onDone();
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit payment details</DialogTitle>
+          <DialogDescription>
+            {moneyOrDash(payout.amount)} paid on {payoutDate(payout.paid_on)}. The amount and date are fixed: to change them, void this payment and record a new one.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Method</Label>
+              <Input list="payout-methods" value={method} maxLength={40} onChange={(e) => setMethod(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reference</Label>
+              <Input value={reference} maxLength={120} onChange={(e) => setReference(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Note (only you see it)</Label>
+            <Input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function VoidPayoutDialog({ partnerId, payout, onClose, onDone }: { partnerId: string; payout: AdminPayout; onClose: () => void; onDone: () => void }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const usable = reason.trim().length >= 3;
+
+  const submit = async () => {
+    setBusy(true);
+    const { error } = await api.voidAdminPartnerPayout(partnerId, payout.id, reason.trim());
+    setBusy(false);
+    if (error) return toast.error(typeof error === "string" ? error : "Could not void the payment");
+    toast.success("Payment voided");
+    onDone();
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Void this payment?</DialogTitle>
+          <DialogDescription>
+            {moneyOrDash(payout.amount)} paid on {payoutDate(payout.paid_on)} goes back to &quot;still owed&quot;. It stays in the history, marked void, with your reason.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label>Reason</Label>
+          <Input value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Bank rejected the transfer" autoFocus />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Keep payment</Button>
+          <Button variant="destructive" onClick={submit} disabled={busy || !usable}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Void payment</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -10,14 +10,19 @@ The money, per partner, over the call usage of the accounts it referred ([SAMPLE
   profit         billed - platform_cost  ("how much money they're going to make")
   commission     'percent': value % of the profit (never negative);  'fixed': value per VERIFIED signup (one-off)
   net_profit     profit - commission  (what the platform keeps)
+  paid           what has actually been paid to the partner = sum(partner_payouts.amount) over non-void payments
+  owed           commission - paid  (negative = overpaid, which only happens when the rate is lowered after paying)
 A call whose provider cost was never reported has provider_cost 0, so its whole charge counts as profit.
 Phone-number monthly fees and wallet top-ups are not part of this: it is call usage only.
+
+Payments are a ledger (`partner_payouts`): recorded with record_payout (which refuses to pay more than is owed), never
+deleted, and undone with void_payout (the row stays, marked void, with who and why).
 
 Plain SQL through db_pg's pool, aggregated in the database (not row by row in Python).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from db_pg import _get_pool
@@ -38,7 +43,7 @@ def _num(v) -> float:
 
 
 def _iso(v):
-    return v.isoformat() if isinstance(v, datetime) else v
+    return v.isoformat() if isinstance(v, (datetime, date)) else v
 
 
 def commission_label(ctype: str, value) -> str:
@@ -59,11 +64,15 @@ def commission_amount(ctype: str, value, verified: int, profit: float) -> float:
 
 
 def partner_totals(partners: list[dict]) -> dict[str, dict]:
-    """{partner_id: signups, verified, calls, billed, platform_cost, profit, commission, net_profit} for each partner
-    row given (two grouped queries, whatever the number of partners). Partners with no signups get zeros."""
+    """{partner_id: signups, verified, calls, billed, platform_cost, profit, commission, net_profit, paid, owed} for
+    each partner row given (three grouped queries, whatever the number of partners). Partners with no signups get zeros."""
     if not partners:
         return {}
     ids = [str(p["id"]) for p in partners]
+    payouts = _rows(
+        "SELECT partner_id::text AS pid, coalesce(sum(amount), 0) AS paid FROM partner_payouts"
+        " WHERE partner_id = ANY(%(ids)s::uuid[]) AND status = 'paid' GROUP BY 1", {"ids": ids})
+    paid_by = {r["pid"]: round(_num(r["paid"]), 2) for r in payouts}
     signups = _rows(
         "SELECT partner_id::text AS pid, count(*) AS signups, count(*) FILTER (WHERE status = 'verified') AS verified"
         " FROM partner_referrals WHERE partner_id = ANY(%(ids)s::uuid[]) GROUP BY 1", {"ids": ids})
@@ -82,12 +91,102 @@ def partner_totals(partners: list[dict]) -> dict[str, dict]:
         profit = round(billed - cost, 2)
         verified = int(s.get("verified") or 0)
         commission = commission_amount(p.get("commission_type"), p.get("commission_value"), verified, profit)
+        paid = paid_by.get(pid, 0.0)
         out[pid] = {
             "signups": int(s.get("signups") or 0), "verified": verified, "calls": int(u.get("calls") or 0),
             "billed": billed, "platform_cost": cost, "profit": profit,
             "commission": commission, "net_profit": round(profit - commission, 2),
+            "paid": paid, "owed": round(commission - paid, 2),
         }
     return out
+
+
+# ───────────────────────────── payouts (the payment ledger) ─────────────────────────────
+
+class PayoutError(ValueError):
+    """A payment the ledger refuses (the message is shown to the admin as is)."""
+
+
+class PayoutNotFound(LookupError):
+    """The payment does not exist for that partner."""
+
+
+_PAYOUT_COLS = "id, amount, paid_on, method, reference, note, status, created_by, created_at, voided_at, voided_by, void_reason"
+
+
+def _payout_view(r: dict) -> dict:
+    return {
+        "id": str(r["id"]), "amount": round(_num(r["amount"]), 2), "paid_on": _iso(r["paid_on"]),
+        "method": r.get("method") or "", "reference": r.get("reference") or "", "note": r.get("note") or "",
+        "status": r["status"], "created_by": r.get("created_by") or "", "created_at": _iso(r["created_at"]),
+        "voided_at": _iso(r.get("voided_at")), "voided_by": r.get("voided_by") or "", "void_reason": r.get("void_reason") or "",
+    }
+
+
+def list_payouts(partner_id: str, *, include_void: bool = True) -> list[dict]:
+    """The partner's payments, newest first (void ones included for the admin, who needs the audit trail)."""
+    rows = _rows(
+        f"SELECT {_PAYOUT_COLS} FROM partner_payouts WHERE partner_id = %(pid)s::uuid"
+        + ("" if include_void else " AND status = 'paid'")
+        + " ORDER BY paid_on DESC, created_at DESC", {"pid": str(partner_id)})
+    return [_payout_view(r) for r in rows]
+
+
+def record_payout(partner: dict, amount: float, paid_on: date, method: str | None, reference: str | None,
+                  note: str | None, created_by: str) -> dict:
+    """Record a payment to the partner. Refuses more than is still owed. Takes a per-partner lock around the
+    check-and-insert so two admins cannot both pay the same balance."""
+    pid = str(partner["id"])
+    with _get_pool().connection() as conn:
+        # The pool is autocommit, so an explicit transaction is what keeps the lock held until the insert commits.
+        with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"partner_payout:{pid}",))
+            owed = partner_totals([partner])[pid]["owed"]  # reads committed rows, so a payment that just finished counts
+            if owed <= 0:
+                raise PayoutError("Nothing is owed to this partner right now.")
+            if round(amount * 100) > round(owed * 100):
+                raise PayoutError(f"That is more than what is still owed (${owed:,.2f}).")
+            row = conn.execute(
+                "INSERT INTO partner_payouts (partner_id, amount, paid_on, method, reference, note, created_by)"
+                f" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_PAYOUT_COLS}",
+                (pid, round(amount, 2), paid_on, method, reference, note, created_by)).fetchone()
+    return _payout_view(row)
+
+
+def _get_payout(conn, partner_id: str, payout_id: str) -> dict:
+    row = conn.execute(f"SELECT {_PAYOUT_COLS} FROM partner_payouts WHERE id = %s AND partner_id = %s",
+                       (payout_id, str(partner_id))).fetchone()
+    if not row:
+        raise PayoutNotFound("Payment not found.")
+    return row
+
+
+def update_payout(partner_id: str, payout_id: str, fields: dict) -> dict:
+    """Edit the descriptive fields (method, reference, note) of a payment that is still valid. The amount and date
+    never change: to correct them, void the payment and record a new one."""
+    with _get_pool().connection() as conn:
+        current = _get_payout(conn, partner_id, payout_id)
+        if current["status"] != "paid":
+            raise PayoutError("A voided payment cannot be edited.")
+        merged = {k: fields[k] if k in fields else current.get(k) for k in ("method", "reference", "note")}
+        row = conn.execute(
+            f"UPDATE partner_payouts SET method = %s, reference = %s, note = %s WHERE id = %s RETURNING {_PAYOUT_COLS}",
+            (merged["method"], merged["reference"], merged["note"], payout_id)).fetchone()
+    return _payout_view(row)
+
+
+def void_payout(partner_id: str, payout_id: str, reason: str, by: str) -> dict:
+    """Undo a payment: the row stays (audit trail) but stops counting, so the amount is owed again."""
+    with _get_pool().connection() as conn:
+        current = _get_payout(conn, partner_id, payout_id)
+        if current["status"] != "paid":
+            raise PayoutError("This payment is already voided.")
+        row = conn.execute(
+            "UPDATE partner_payouts SET status = 'void', voided_at = now(), voided_by = %s, void_reason = %s"
+            f" WHERE id = %s AND status = 'paid' RETURNING {_PAYOUT_COLS}", (by, reason, payout_id)).fetchone()
+        if not row:  # voided by someone else between the check and the update
+            raise PayoutError("This payment is already voided.")
+    return _payout_view(row)
 
 
 def partner_signups(partner_id: str) -> list[dict]:

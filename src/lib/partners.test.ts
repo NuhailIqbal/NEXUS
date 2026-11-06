@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityText, commissionExplainer, parseCommission, referralUrl, timeAgo } from "./partners";
+import {
+  activityText, balanceStatus, checkPayoutAmount, commissionExplainer, parseCommission, payoutDate, referralUrl, timeAgo, todayISO,
+} from "./partners";
 
 describe("referralUrl", () => {
   it("joins the origin and the path without a double slash", () => {
@@ -51,6 +53,55 @@ describe("parseCommission", () => {
     expect(parseCommission("percent", "abc")).toBeNull();
     expect(parseCommission("percent", "101")).toBeNull();
     expect(parseCommission("fixed", "10001")).toBeNull();
+  });
+});
+
+describe("balanceStatus", () => {
+  it("tells owed, settled and overpaid apart, ignoring float dust below a cent", () => {
+    expect(balanceStatus(4)).toBe("owed");
+    expect(balanceStatus(0.01)).toBe("owed");
+    expect(balanceStatus(0)).toBe("settled");
+    expect(balanceStatus(0.004)).toBe("settled");
+    expect(balanceStatus(-0.004)).toBe("settled");
+    expect(balanceStatus(-2)).toBe("overpaid");
+  });
+});
+
+describe("checkPayoutAmount", () => {
+  it("accepts an amount up to what is owed, rounded to cents, with a $ or thousands separators", () => {
+    expect(checkPayoutAmount("4.00", 4)).toEqual({ value: 4, error: null });
+    expect(checkPayoutAmount(" $1,250.5 ", 2000)).toEqual({ value: 1250.5, error: null });
+    expect(checkPayoutAmount("0.335", 4).value).toBe(0.34);
+    expect(checkPayoutAmount("0.01", 0.01).error).toBeNull();
+  });
+  it("refuses blanks, text, zero and negatives", () => {
+    expect(checkPayoutAmount("", 4).error).toMatch(/Enter the amount/);
+    expect(checkPayoutAmount("abc", 4).error).toMatch(/number/);
+    expect(checkPayoutAmount("0", 4).error).toMatch(/more than \$0/);
+    expect(checkPayoutAmount("-3", 4).error).toMatch(/more than \$0/);
+    expect(checkPayoutAmount("Infinity", 4).error).toMatch(/number/);
+  });
+  it("refuses more than is owed (naming the balance), and anything when nothing is owed", () => {
+    expect(checkPayoutAmount("4.01", 4)).toEqual({ value: null, error: "That is more than what is still owed ($4.00)." });
+    expect(checkPayoutAmount("1", 0).error).toMatch(/Nothing is owed/);
+    expect(checkPayoutAmount("1", -2).error).toMatch(/Nothing is owed/);
+  });
+  it("refuses a payment over the single-payment cap", () => {
+    expect(checkPayoutAmount("1000000.01", 5_000_000).error).toMatch(/1,000,000/);
+    expect(checkPayoutAmount("1000000", 5_000_000).error).toBeNull();
+  });
+});
+
+describe("todayISO and payoutDate", () => {
+  it("formats a local date as YYYY-MM-DD", () => {
+    expect(todayISO(new Date(2026, 0, 5, 23, 59))).toBe("2026-01-05");
+    expect(todayISO(new Date(2026, 10, 30, 0, 1))).toBe("2026-11-30");
+  });
+  it("shows a payment date on the same calendar day in any timezone, and nothing for bad input", () => {
+    expect(payoutDate("2026-01-05")).toBe(new Date(2026, 0, 5).toLocaleDateString());
+    expect(payoutDate("2026-01-05T00:00:00Z")).toBe(new Date(2026, 0, 5).toLocaleDateString());
+    expect(payoutDate("nonsense")).toBe("");
+    expect(payoutDate(null)).toBe("");
   });
 });
 

@@ -507,6 +507,25 @@ def _ensure_columns(conn) -> None:
             verified_at timestamptz
         )''',
         'CREATE INDEX IF NOT EXISTS partner_referrals_partner_idx ON public.partner_referrals (partner_id, created_at DESC)',
+        # Commission payouts: a ledger of what has actually been paid to a partner (commission earned is computed live;
+        # "owed" = earned - sum of non-void payouts). Rows are never deleted: a mistake is voided with a reason, and the
+        # FK is RESTRICT so a partner with a payment history cannot be removed by accident.
+        '''CREATE TABLE IF NOT EXISTS public.partner_payouts (
+            id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+            partner_id uuid NOT NULL REFERENCES public.referral_partners(id) ON DELETE RESTRICT,
+            amount numeric(12,2) NOT NULL CHECK (amount > 0),
+            paid_on date DEFAULT CURRENT_DATE NOT NULL,
+            method text,
+            reference text,
+            note text,
+            status text DEFAULT 'paid' NOT NULL,
+            created_by text,
+            created_at timestamptz DEFAULT now() NOT NULL,
+            voided_at timestamptz,
+            voided_by text,
+            void_reason text
+        )''',
+        'CREATE INDEX IF NOT EXISTS partner_payouts_partner_idx ON public.partner_payouts (partner_id, paid_on DESC, created_at DESC)',
         # team_members.role/status were constrained to a stale Admin/Manager/Editor/Viewer
         # and Invited/Active/Removed set that the app never actually wrote — the invite API
         # only ever sends lowercase 'member'/'viewer' and 'Active'/'Pending', so every invite

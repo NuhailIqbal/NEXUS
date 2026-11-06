@@ -15,6 +15,8 @@ live feed has something fresh):
   Orbit Leads         $10 per verified     3 referrals, one still unverified (so a fixed bounty is visible)
   Kestrel Consulting  25% of profit        PAUSED, 2 referrals (earned history, no new signups)
   Pine & Co           10% of profit        brand new, no signups yet (the empty state)
+Each partner that has earned something also gets payments (part paid, fully paid, and one voided entry) so the
+"Paid" / "Still owed" figures and the payment history have something to show.
 Call money follows the product's own pricing: charge = provider cost x 3.00 (routers/billing.py), so the profit
 delta is real arithmetic, not invented numbers. Calls use contact "Demo Contact" (not "[SAMPLE]", which the partner
 reports deliberately leave out).
@@ -73,6 +75,8 @@ def remove() -> None:
             # Explicit first, though the user-owned tables cascade, so a missing FK can never leave orphans.
             for table in ("conversations", "wallet_transactions", "ai_agents"):
                 conn.execute(f"DELETE FROM {table} WHERE user_id = ANY(%s::uuid[])", (ids,))
+        # The payment ledger is RESTRICTed (a partner with payments cannot be deleted), so it goes first.
+        conn.execute("DELETE FROM partner_payouts WHERE partner_id IN (SELECT id FROM referral_partners WHERE email LIKE %s)", (like,))
         conn.execute("DELETE FROM referral_partners WHERE email LIKE %s", (like,))  # cascades partner_referrals
         conn.execute("DELETE FROM users WHERE email LIKE %s", (like,))
     print(f"removed {len(ids)} demo account(s) and the demo partners")
@@ -113,12 +117,53 @@ def _calls(conn, rnd: random.Random, uid: str, signed_up: datetime, n: int) -> N
             " duration_seconds, direction, ended_reason, qualified) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows)
 
 
+# slug -> payments as (share of what is owed at seed time, days ago, method, reference). The share is of the commission
+# earned, so every amount is real arithmetic on the seeded calls. A share of 0 with a reason is a voided payment.
+PAYMENTS = {
+    "northwind":  [(0.40, 14, "Bank transfer", "NW-0912"), (0.25, 3, "PayPal", "PP-55120")],   # part paid, the rest still owed
+    "brightline": [(1.00, 8, "Wire", "BL-2210")],                                              # fully paid
+    "orbit":      [(0.50, 6, "PayPal", "OR-7781")],
+    "kestrel":    [(1.00, 5, "Bank transfer", "KC-0042")],                                     # paused, but paid up
+}
+VOIDED = {"brightline": (0.10, 20, "Bank transfer", "BL-1999", "Entered twice")}              # shown struck through to the admin
+
+
+def _seed_payments(conn, made: list) -> int:
+    """Payments for the demo partners, from what each has earned (partner_totals), plus one voided entry."""
+    from services.partners import partner_totals
+    totals = partner_totals([{"id": pid, "commission_type": ct, "commission_value": cv} for _s, pid, ct, cv in made])
+    count = 0
+    for slug, pid, _ct, _cv in made:
+        earned = totals[pid]["commission"]
+        for share, days, method, ref in PAYMENTS.get(slug, []):
+            amount = round(earned * share, 2)
+            if amount <= 0:
+                continue
+            when = NOW - timedelta(days=days)
+            conn.execute(
+                "INSERT INTO partner_payouts (partner_id, amount, paid_on, method, reference, created_by, created_at)"
+                " VALUES (%s,%s,%s,%s,%s,'demo-admin',%s)", (pid, amount, when.date(), method, ref, when))
+            count += 1
+        if slug in VOIDED:
+            share, days, method, ref, reason = VOIDED[slug]
+            amount = round(earned * share, 2)
+            if amount > 0:
+                when = NOW - timedelta(days=days)
+                conn.execute(
+                    "INSERT INTO partner_payouts (partner_id, amount, paid_on, method, reference, created_by, created_at,"
+                    " status, voided_at, voided_by, void_reason) VALUES (%s,%s,%s,%s,%s,'demo-admin',%s,'void',%s,'demo-admin',%s)",
+                    (pid, amount, when.date(), method, ref, when, when + timedelta(hours=2), reason))
+                count += 1
+    return count
+
+
 def seed() -> None:
     with _get_pool().connection() as conn:
         if conn.execute("SELECT 1 FROM referral_partners WHERE email LIKE %s LIMIT 1", (f"%@{DEMO_DOMAIN}",)).fetchone():
             sys.exit("Demo partners already exist. Use --reset to recreate them, or --remove to delete them.")
         rnd = random.Random(2026)
         users = calls = 0
+        made = []  # (slug, partner id, commission type, value) for the payments below
         for slug, name, ctype, cvalue, status, notes, referred in PARTNERS:
             created = NOW - timedelta(days=30)
             puid = _create_user(conn, _email(slug), name, True, created)
@@ -128,6 +173,7 @@ def seed() -> None:
                 "INSERT INTO referral_partners (user_id, name, email, code, status, commission_type, commission_value, notes, created_at)"
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (puid, name, _email(slug), code, status, ctype, cvalue, notes, created)).fetchone()["id"])
+            made.append((slug, pid, ctype, cvalue))
             for full_name, local, days, verified, n_calls, topup in referred:
                 signed_up = NOW - timedelta(days=days, hours=rnd.randint(0, 6))
                 uid = _create_user(conn, _email(local), full_name, verified, signed_up)
@@ -146,7 +192,8 @@ def seed() -> None:
                 users += 1
                 calls += n_calls
             print(f"  {name:<20} code {code}  {ctype} {cvalue}  {status}  ({len(referred)} referred)")
-        print(f"seeded {len(PARTNERS)} partners, {users} referred accounts, {calls} calls")
+        payments = _seed_payments(conn, made)
+        print(f"seeded {len(PARTNERS)} partners, {users} referred accounts, {calls} calls, {payments} payments")
 
 
 if __name__ == "__main__":

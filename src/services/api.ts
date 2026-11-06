@@ -490,6 +490,13 @@ export const api = {
   updateAdminPartner: (id: string, data: {
     name?: string; notes?: string; status?: string; commission_type?: string; commission_value?: number;
   }) => adminPatch(`/admin/partners/${id}`, data),
+  // The payment ledger behind "paid" / "still owed". The amount and date of a payment are fixed: void it (with a reason) and record a new one.
+  recordAdminPartnerPayout: (id: string, data: { amount: number; paid_on?: string; method?: string; reference?: string; note?: string }) =>
+    adminPost(`/admin/partners/${id}/payouts`, data),
+  updateAdminPartnerPayout: (id: string, payoutId: string, data: { method?: string; reference?: string; note?: string }) =>
+    adminPatch(`/admin/partners/${id}/payouts/${payoutId}`, data),
+  voidAdminPartnerPayout: (id: string, payoutId: string, reason: string) =>
+    adminPost(`/admin/partners/${id}/payouts/${payoutId}/void`, { reason }),
   getAdminPartnerActivity: (partnerId?: string) =>
     adminGet(`/admin/partners/activity${partnerId ? `?partner_id=${encodeURIComponent(partnerId)}` : ""}`),
   getAdminPayments: () => adminGet("/admin/payments"),

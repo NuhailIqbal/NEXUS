@@ -253,7 +253,8 @@ class PartnerSide(unittest.TestCase):
     def test_overview_shows_own_signups_and_hides_platform_money(self):
         d = client.get("/partner/overview", headers=self.hdr).json()["data"]
         self.assertEqual([s["user_id"] for s in d["signups"]], [self.u])
-        self.assertEqual(d["totals"], {"signups": 1, "verified": 1, "calls": 1, "billed": 4.0, "commission": 0.3})  # 10% of 3.00
+        self.assertEqual(d["totals"], {"signups": 1, "verified": 1, "calls": 1, "billed": 4.0, "commission": 0.3,  # 10% of 3.00
+                                       "paid": 0.0, "owed": 0.3})
         self.assertNotIn("platform_cost", d["signups"][0])
         self.assertNotIn("profit", d["signups"][0])
         self.assertNotIn("platform_cost", d["totals"])
@@ -312,6 +313,193 @@ class PartnerSide(unittest.TestCase):
         one = client.get(f"/admin/partners/activity?partner_id={self.q['id']}", headers=admin_headers()).json()["data"]
         self.assertEqual({i["user_id"] for i in one}, {self.v})
         self.assertEqual({i["partner_name"] for i in one}, {self.q["name"]})
+
+
+class Payouts(unittest.TestCase):
+    """The payment ledger: paid / still owed, partial payments, overpayment refused, void with a reason, who sees what."""
+
+    def setUp(self):
+        h.reset_rate_limits()
+        self.p, self.body = create_partner(commission_type="percent", commission_value=20)
+        self.hdr = login_headers(self.body["email"])
+        u, tok = register(self.p["code"])
+        verify(tok)
+        call(u, 30.00, 10.00)               # profit 20.00 -> commission 4.00
+        self.base = f"/admin/partners/{self.p['id']}"
+
+    def totals(self):
+        return client.get(self.base, headers=admin_headers()).json()["data"]["totals"]
+
+    def pay(self, amount, **kw):
+        return client.post(f"{self.base}/payouts", json={"amount": amount, **kw}, headers=admin_headers())
+
+    def test_a_partner_starts_with_nothing_paid(self):
+        t = self.totals()
+        self.assertEqual((t["commission"], t["paid"], t["owed"]), (4.0, 0.0, 4.0))
+        self.assertEqual(client.get(f"{self.base}/payouts", headers=admin_headers()).json()["data"]["payouts"], [])
+
+    def test_payments_reduce_what_is_owed_and_add_up(self):
+        r = self.pay(1.50, method="Bank transfer", reference="TX-1", note="first part")
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()["data"]
+        self.assertEqual((d["payout"]["amount"], d["payout"]["method"], d["payout"]["reference"], d["payout"]["status"]), (1.5, "Bank transfer", "TX-1", "paid"))
+        self.assertEqual((d["totals"]["paid"], d["totals"]["owed"]), (1.5, 2.5))
+        self.assertEqual(self.pay(2.50).status_code, 200)
+        t = self.totals()
+        self.assertEqual((t["paid"], t["owed"]), (4.0, 0.0))
+        rows = client.get(f"{self.base}/payouts", headers=admin_headers()).json()["data"]["payouts"]
+        self.assertEqual(sorted(x["amount"] for x in rows), [1.5, 2.5])
+        self.assertEqual(client.get(self.base, headers=admin_headers()).json()["data"]["payouts"], rows)
+
+    def test_overpayment_is_refused_and_nothing_is_recorded(self):
+        r = self.pay(4.01)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("$4.00", r.json()["detail"])
+        self.assertEqual(self.totals()["paid"], 0.0)
+        self.assertEqual(self.pay(4.00).status_code, 200)     # exactly what is owed is fine
+        again = self.pay(0.01)
+        self.assertEqual(again.status_code, 400)
+        self.assertIn("Nothing is owed", again.json()["detail"])
+
+    def test_invalid_amounts_and_dates_are_refused(self):
+        for bad in (0, -5, 10_000_000):
+            self.assertEqual(self.pay(bad).status_code, 400, bad)
+        self.assertEqual(client.post(f"{self.base}/payouts", json={"amount": "abc"}, headers=admin_headers()).status_code, 422)
+        self.assertEqual(client.post(f"{self.base}/payouts", json={}, headers=admin_headers()).status_code, 422)
+        self.assertEqual(self.pay(1, paid_on="2999-01-01").status_code, 400)
+        self.assertEqual(client.post(f"{self.base}/payouts", json={"amount": 1, "paid_on": "not-a-date"}, headers=admin_headers()).status_code, 422)
+        self.assertEqual(self.pay(1, reference="x" * 200).status_code, 400)
+        self.assertEqual(self.pay(1, note="x" * 600).status_code, 400)
+        self.assertEqual(self.totals()["paid"], 0.0)
+
+    def test_a_back_dated_payment_and_a_fractional_amount(self):
+        r = self.pay(0.335, paid_on="2026-01-15")            # stored to the cent
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["data"]["payout"]["paid_on"], "2026-01-15")
+        self.assertIn(r.json()["data"]["payout"]["amount"], (0.33, 0.34))
+
+    def test_void_puts_the_amount_back_and_keeps_the_audit_trail(self):
+        pid = self.pay(3.00).json()["data"]["payout"]["id"]
+        self.assertEqual(self.totals()["owed"], 1.0)
+        r = client.post(f"{self.base}/payouts/{pid}/void", json={"reason": "Bank rejected the transfer"}, headers=admin_headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["data"]["totals"]["paid"], r.json()["data"]["totals"]["owed"]), (0.0, 4.0))
+        row = client.get(f"{self.base}/payouts", headers=admin_headers()).json()["data"]["payouts"][0]
+        self.assertEqual((row["status"], row["void_reason"], row["amount"]), ("void", "Bank rejected the transfer", 3.0))
+        self.assertEqual(row["voided_by"], "qa-admin")
+        self.assertIsNotNone(row["voided_at"])
+        self.assertEqual(self.pay(4.00).status_code, 200)     # the voided amount can be paid again
+
+    def test_void_needs_a_reason_and_works_once(self):
+        pid = self.pay(1.00).json()["data"]["payout"]["id"]
+        for bad in ({"reason": ""}, {"reason": "  "}, {"reason": "x"}, {"reason": "x" * 400}):
+            self.assertEqual(client.post(f"{self.base}/payouts/{pid}/void", json=bad, headers=admin_headers()).status_code, 400, bad)
+        self.assertEqual(client.post(f"{self.base}/payouts/{pid}/void", json={}, headers=admin_headers()).status_code, 422)
+        self.assertEqual(client.post(f"{self.base}/payouts/{pid}/void", json={"reason": "duplicate"}, headers=admin_headers()).status_code, 200)
+        again = client.post(f"{self.base}/payouts/{pid}/void", json={"reason": "duplicate"}, headers=admin_headers())
+        self.assertEqual(again.status_code, 400)
+        self.assertIn("already voided", again.json()["detail"])
+
+    def test_a_payment_cannot_be_reached_through_another_partner(self):
+        other, _ = create_partner()
+        pid = self.pay(1.00).json()["data"]["payout"]["id"]
+        wrong = f"/admin/partners/{other['id']}/payouts/{pid}"
+        self.assertEqual(client.post(f"{wrong}/void", json={"reason": "not yours"}, headers=admin_headers()).status_code, 404)
+        self.assertEqual(client.patch(wrong, json={"note": "x"}, headers=admin_headers()).status_code, 404)
+        self.assertEqual(client.post(f"{self.base}/payouts/not-a-uuid/void", json={"reason": "nope"}, headers=admin_headers()).status_code, 404)
+        self.assertEqual(client.post(f"{self.base}/payouts/{uuid.uuid4()}/void", json={"reason": "nope"}, headers=admin_headers()).status_code, 404)
+        self.assertEqual(client.get("/admin/partners/not-a-uuid/payouts", headers=admin_headers()).status_code, 404)
+        self.assertEqual(self.totals()["paid"], 1.0)
+
+    def test_edit_changes_the_description_only(self):
+        pid = self.pay(2.00, method="PayPal", reference="A1").json()["data"]["payout"]["id"]
+        r = client.patch(f"{self.base}/payouts/{pid}", json={"reference": "B2", "note": "fixed typo", "amount": 99}, headers=admin_headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()["data"]
+        self.assertEqual((d["amount"], d["method"], d["reference"], d["note"]), (2.0, "PayPal", "B2", "fixed typo"))
+        self.assertEqual(self.totals()["paid"], 2.0)
+        client.post(f"{self.base}/payouts/{pid}/void", json={"reason": "wrong partner"}, headers=admin_headers())
+        self.assertEqual(client.patch(f"{self.base}/payouts/{pid}", json={"note": "late"}, headers=admin_headers()).status_code, 400)
+
+    def test_lowering_the_rate_after_paying_shows_overpaid_and_blocks_more_payments(self):
+        self.pay(4.00)
+        client.patch(self.base, json={"commission_value": 10}, headers=admin_headers())     # earned is now 2.00
+        t = self.totals()
+        self.assertEqual((t["commission"], t["paid"], t["owed"]), (2.0, 4.0, -2.0))
+        self.assertEqual(self.pay(0.50).status_code, 400)
+
+    def test_two_admins_paying_the_same_balance_at_once_only_one_wins(self):
+        import threading
+        results = []
+
+        def go():
+            results.append(self.pay(4.00).status_code)
+
+        threads = [threading.Thread(target=go) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(results), [200, 400, 400, 400])
+        self.assertEqual(self.totals()["paid"], 4.0)
+
+    def test_partner_sees_paid_owed_and_history_but_not_admin_only_fields(self):
+        pid = self.pay(1.00, method="Wire", reference="W-9", note="PRIVATE admin note").json()["data"]["payout"]["id"]
+        gone = self.pay(1.00, reference="WRONG-ONE").json()["data"]["payout"]["id"]
+        client.post(f"{self.base}/payouts/{gone}/void", json={"reason": "typed the wrong amount"}, headers=admin_headers())
+        r = client.get("/partner/overview", headers=self.hdr)
+        d = r.json()["data"]
+        self.assertEqual((d["totals"]["commission"], d["totals"]["paid"], d["totals"]["owed"]), (4.0, 1.0, 3.0))
+        self.assertEqual([x["id"] for x in d["payouts"]], [pid])                              # the voided one is not shown
+        self.assertEqual(set(d["payouts"][0]), {"id", "amount", "paid_on", "method", "reference"})
+        for hidden in ("PRIVATE", "WRONG-ONE", "typed the wrong", "qa-admin", "void_reason", "created_by", "platform_cost"):
+            self.assertNotIn(hidden, r.text, hidden)
+
+    def test_a_partner_never_sees_another_partners_payments(self):
+        self.pay(1.00, reference="MINE-1")
+        other, obody = create_partner()
+        d = client.get("/partner/overview", headers=login_headers(obody["email"])).json()["data"]
+        self.assertEqual((d["payouts"], d["totals"]["paid"]), ([], 0.0))
+
+    def test_payment_routes_are_admin_only(self):
+        pid = self.pay(1.00).json()["data"]["payout"]["id"]
+        for method, path, body in (
+            ("get", f"{self.base}/payouts", None), ("post", f"{self.base}/payouts", {"amount": 1}),
+            ("patch", f"{self.base}/payouts/{pid}", {"note": "x"}), ("post", f"{self.base}/payouts/{pid}/void", {"reason": "abcd"}),
+        ):
+            for headers in ({}, self.hdr):                                                    # nobody, and the partner themself
+                r = getattr(client, method)(path, headers=headers, **({"json": body} if body else {}))
+                self.assertIn(r.status_code, (401, 403), (method, path, r.status_code))
+        self.assertEqual(self.totals()["paid"], 1.0)
+
+    def test_list_grand_totals_include_paid_and_owed(self):
+        self.pay(1.00)
+        d = client.get("/admin/partners", headers=admin_headers()).json()["data"]
+        mine = next(x for x in d["partners"] if x["id"] == self.p["id"])
+        self.assertEqual((mine["totals"]["paid"], mine["totals"]["owed"]), (1.0, 3.0))
+        self.assertGreaterEqual(d["totals"]["paid"], 1.0)
+        self.assertAlmostEqual(d["totals"]["owed"], round(d["totals"]["commission"] - d["totals"]["paid"], 2), places=2)
+
+    def test_a_partner_with_payments_cannot_be_deleted_by_accident(self):
+        self.pay(1.00)
+        with self.assertRaises(Exception):
+            h.sql("delete from referral_partners where id=%s", (self.p["id"],))
+        self.assertEqual(h.sql("select count(*) from partner_payouts where partner_id=%s", (self.p["id"],))[0][0], 1)
+
+    def test_the_database_refuses_a_zero_or_negative_payment(self):
+        for amount in (0, -1):
+            with self.assertRaises(Exception):
+                h.sql("insert into partner_payouts (partner_id, amount) values (%s, %s)", (self.p["id"], amount))
+
+    def test_fixed_commission_payouts_follow_the_verified_count(self):
+        client.patch(self.base, json={"commission_type": "fixed", "commission_value": 5}, headers=admin_headers())   # 1 verified x $5
+        self.assertEqual(self.totals()["owed"], 5.0)
+        self.assertEqual(self.pay(5.01).status_code, 400)
+        self.assertEqual(self.pay(5.00).status_code, 200)
+        _, tok = register(self.p["code"])
+        verify(tok)                                                                            # a second verified signup earns $5 more
+        t = self.totals()
+        self.assertEqual((t["commission"], t["paid"], t["owed"]), (10.0, 5.0, 5.0))
 
 
 class Lifecycle(unittest.TestCase):
@@ -380,7 +568,8 @@ class Lifecycle(unittest.TestCase):
     def test_partner_with_no_usage_has_zero_money_not_errors(self):
         p, _ = create_partner()
         d = client.get(f"/admin/partners/{p['id']}", headers=admin_headers()).json()["data"]
-        self.assertEqual(d["totals"], {"signups": 0, "verified": 0, "calls": 0, "billed": 0.0, "platform_cost": 0.0, "profit": 0.0, "commission": 0.0, "net_profit": 0.0})
+        self.assertEqual(d["totals"], {"signups": 0, "verified": 0, "calls": 0, "billed": 0.0, "platform_cost": 0.0, "profit": 0.0,
+                                       "commission": 0.0, "net_profit": 0.0, "paid": 0.0, "owed": 0.0})
 
     def test_patch_name_and_notes_and_blank_name_rejected(self):
         p, _ = create_partner()
@@ -401,12 +590,14 @@ class Lifecycle(unittest.TestCase):
     def test_migration_upgrades_a_database_that_has_no_partner_tables_and_is_idempotent(self):
         import migrate
         import psycopg
+        h.sql("drop table if exists partner_payouts cascade")
         h.sql("drop table if exists partner_referrals cascade")
         h.sql("drop table if exists referral_partners cascade")
         for _round in range(2):  # second pass = restart of an already-migrated server
             with psycopg.connect(h.QA_URL, autocommit=True) as conn:
                 migrate._ensure_columns(conn)
-            self.assertEqual(h.sql("select to_regclass('public.referral_partners') is not null and to_regclass('public.partner_referrals') is not null")[0][0], True)
+            self.assertEqual(h.sql("select to_regclass('public.referral_partners') is not null and to_regclass('public.partner_referrals') is not null"
+                                   " and to_regclass('public.partner_payouts') is not null")[0][0], True)
         p, _ = create_partner()
         u, _ = register(p["code"])
         self.assertEqual(h.sql("select count(*) from partner_referrals where partner_id=%s", (p["id"],))[0][0], 1)

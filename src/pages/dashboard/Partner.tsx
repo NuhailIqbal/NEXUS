@@ -2,12 +2,13 @@
  * Referral partner portal (/dashboard/partner), for accounts an admin has set up as a referral partner
  * (GET /partner/overview answers 403 for everyone else, who are sent back to the dashboard). Shows the partner's
  * link and commission rule, how many people signed up through it and what they were billed, the commission earned
- * so far, every referred account with a "View as" button (the same impersonation flow admins have), and a live
- * feed of what those users do. The platform's own cost and profit are never sent to this page.
+ * so far, what has been paid to them and what is still owed with the payment history (read-only), every referred
+ * account with a "View as" button (the same impersonation flow admins have), and a live feed of what those users
+ * do. The platform's own cost and profit, and the admin's private notes on a payment, are never sent to this page.
  */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, DollarSign, Eye, Loader2, Percent, UserCheck, Users2 } from "lucide-react";
+import { Banknote, Copy, DollarSign, Eye, Loader2, Percent, UserCheck, Users2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,11 +18,11 @@ import { api } from "@/services/api";
 import { startPartnerImpersonation } from "@/lib/impersonation";
 import { moneyOrDash } from "@/lib/leadRoi";
 import {
-  commissionExplainer, referralUrl, timeAgo,
-  type PartnerInfo, type PartnerSignup, type PartnerTotals,
+  balanceStatus, commissionExplainer, payoutDate, referralUrl, timeAgo,
+  type PartnerInfo, type PartnerSignup, type PartnerTotals, type Payout,
 } from "@/lib/partners";
 
-type Overview = PartnerInfo & { totals: PartnerTotals; signups: PartnerSignup[] };
+type Overview = PartnerInfo & { totals: PartnerTotals; signups: PartnerSignup[]; payouts: Payout[] };
 
 const Stat = ({ icon: Icon, label, value, hint }: { icon: typeof Users2; label: string; value: string | number; hint?: string }) => (
   <div className="rounded-xl border border-border bg-card/40 p-5">
@@ -74,6 +75,7 @@ const Partner = () => {
 
   const link = referralUrl(window.location.origin, data.referral_path);
   const t = data.totals;
+  const balance = balanceStatus(t.owed);
 
   return (
     <div className="space-y-8">
@@ -99,15 +101,59 @@ const Partner = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
         <Stat icon={Users2} label="Signups" value={t.signups} />
         <Stat icon={UserCheck} label="Verified" value={t.verified} />
         <Stat icon={DollarSign} label="Billed to your users" value={moneyOrDash(t.billed)} hint={`${t.calls} call${t.calls === 1 ? "" : "s"}`} />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
         <Stat icon={Percent} label="You've earned" value={moneyOrDash(t.commission)} hint={data.commission_label} />
+        <Stat icon={Banknote} label="Paid to you" value={moneyOrDash(t.paid)} hint={`${data.payouts.length} payment${data.payouts.length === 1 ? "" : "s"}`} />
+        <Stat
+          icon={Wallet}
+          label={balance === "overpaid" ? "Paid ahead" : "Still owed to you"}
+          value={moneyOrDash(Math.abs(t.owed))}
+          hint={balance === "overpaid" ? "Your rate was lowered after a payment; this comes off future earnings." : balance === "settled" ? "You are paid up." : "Earned but not paid yet."}
+        />
       </div>
       <p className="-mt-4 max-w-2xl text-xs text-muted-foreground">
         Your rate: <strong className="text-foreground">{data.commission_label}</strong>. {commissionExplainer(data.commission_type)}
       </p>
+
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Payments to you</h2>
+        {data.payouts.length === 0 ? (
+          <div className="mt-4 rounded-xl border border-dashed border-border bg-card/40 py-10 text-center">
+            <h3 className="font-semibold text-foreground">No payments yet</h3>
+            <p className="mt-1 text-sm text-muted-foreground">When a payment is sent to you it appears here.</p>
+          </div>
+        ) : (
+          <div className="mt-4 overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[520px] text-sm">
+                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-3 sm:px-4">Paid on</th>
+                    <th className="px-3 py-3 text-right sm:px-4">Amount</th>
+                    <th className="px-3 py-3 sm:px-4">Method</th>
+                    <th className="px-3 py-3 sm:px-4">Reference</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.payouts.map((x) => (
+                    <tr key={x.id} className="border-t border-border bg-card/30">
+                      <td className="whitespace-nowrap px-3 py-3 sm:px-4">{payoutDate(x.paid_on)}</td>
+                      <td className="px-3 py-3 text-right font-semibold text-foreground sm:px-4">{moneyOrDash(x.amount)}</td>
+                      <td className="px-3 py-3 sm:px-4">{x.method || "—"}</td>
+                      <td className="break-all px-3 py-3 text-muted-foreground sm:px-4">{x.reference || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div>
         <h2 className="text-lg font-semibold text-foreground">Your signups</h2>

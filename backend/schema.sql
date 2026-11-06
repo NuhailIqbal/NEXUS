@@ -797,6 +797,32 @@ CREATE INDEX IF NOT EXISTS partner_referrals_partner_idx ON public.partner_refer
 
 
 --
+-- Name: partner_payouts; Type: TABLE; Schema: public; Owner: -
+-- Ledger of commission actually paid to a referral partner (commission earned is computed live; owed =
+-- earned - sum of non-void payouts). Never deleted: a mistake is voided with a reason. RESTRICT keeps a
+-- partner with a payment history from being removed by accident.
+--
+
+CREATE TABLE IF NOT EXISTS public.partner_payouts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    partner_id uuid NOT NULL REFERENCES public.referral_partners(id) ON DELETE RESTRICT,
+    amount numeric(12,2) NOT NULL CHECK (amount > 0),
+    paid_on date DEFAULT CURRENT_DATE NOT NULL,
+    method text,
+    reference text,
+    note text,
+    status text DEFAULT 'paid'::text NOT NULL,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    voided_at timestamp with time zone,
+    voided_by text,
+    void_reason text
+);
+
+CREATE INDEX IF NOT EXISTS partner_payouts_partner_idx ON public.partner_payouts (partner_id, paid_on DESC, created_at DESC);
+
+
+--
 -- Name: dnc_check_cache; Type: TABLE; Schema: public; Owner: -
 -- Caches DNC/litigation suppression lookups (WhitelistData integration). Scoped per user
 -- because each user screens against their OWN provider account and list scope, so a result

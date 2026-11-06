@@ -12,7 +12,12 @@ export type PartnerTotals = {
   verified: number;
   calls: number;
   billed: number;
+  /** Commission earned so far (computed live from usage). */
   commission: number;
+  /** What has actually been paid out (non-void payments). */
+  paid: number;
+  /** commission - paid. Negative means overpaid (the rate was lowered after paying). */
+  owed: number;
 };
 
 /** Admin totals add what the platform paid its providers and what is left after the commission. */
@@ -47,6 +52,27 @@ export type PartnerSignup = {
   /** Admin responses only. */
   platform_cost?: number;
   profit?: number;
+};
+
+/** A payment to a partner as the partner sees it (valid payments only; no admin note, no void details). */
+export type Payout = {
+  id: string;
+  amount: number;
+  /** YYYY-MM-DD */
+  paid_on: string;
+  method: string;
+  reference: string;
+};
+
+/** The admin's view of a payment: adds the private note, who recorded it and the void audit trail. */
+export type AdminPayout = Payout & {
+  note: string;
+  status: "paid" | "void";
+  created_by: string;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string;
+  void_reason: string;
 };
 
 export type ActivityKind = "signup" | "verified" | "funds" | "agent" | "call";
@@ -99,6 +125,46 @@ export function commissionExplainer(type: CommissionType): string {
   return type === "fixed"
     ? "Paid once for every referred account that verifies its email."
     : "A share of the profit on everything your referred accounts spend on calls, for as long as they use it.";
+}
+
+export const MAX_PAYOUT = 1_000_000;
+
+/** What the "still owed" figure means in words: still owed, settled, or overpaid (rate lowered after paying). */
+export function balanceStatus(owed: number): "owed" | "settled" | "overpaid" {
+  const cents = Math.round(owed * 100);
+  return cents > 0 ? "owed" : cents < 0 ? "overpaid" : "settled";
+}
+
+/**
+ * Validates the amount typed into "Record payment" against what is still owed. `value` is the amount in dollars
+ * (rounded to cents) when it is usable, `error` is the message to show otherwise (never both).
+ */
+export function checkPayoutAmount(raw: string, owed: number): { value: number | null; error: string | null } {
+  const text = raw.trim().replace(/^\$/, "").replace(/,/g, "");
+  if (text === "") return { value: null, error: "Enter the amount paid." };
+  const n = Number(text);
+  if (!Number.isFinite(n)) return { value: null, error: "Enter the amount as a number." };
+  const value = Math.round(n * 100) / 100;
+  if (value <= 0) return { value: null, error: "The amount must be more than $0.00." };
+  if (value > MAX_PAYOUT) return { value: null, error: "A single payment cannot be more than $1,000,000." };
+  if (Math.round(owed * 100) <= 0) return { value: null, error: "Nothing is owed to this partner right now." };
+  if (Math.round(value * 100) > Math.round(owed * 100)) {
+    return { value: null, error: `That is more than what is still owed ($${owed.toFixed(2)}).` };
+  }
+  return { value, error: null };
+}
+
+/** Today's date as YYYY-MM-DD in the browser's own timezone (what the "paid on" field defaults to). */
+export function todayISO(now: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/** A payment date (YYYY-MM-DD) as a short local date, without the timezone shift `new Date("2026-01-05")` would cause. */
+export function payoutDate(iso: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  if (!m) return "";
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString();
 }
 
 /** Parses the commission field of the admin form; null when it is not a usable number for that type. */
