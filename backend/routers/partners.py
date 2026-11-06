@@ -8,6 +8,8 @@ Admin (X-Admin-Auth, like the rest of /admin):
   GET    /admin/partners                list every partner with signups, billed, platform cost, profit, commission, net
   POST   /admin/partners                create a partner (+ their login, or link an existing account) and its unique code
   GET    /admin/partners/activity       live feed across all partners (?partner_id= narrows it)
+  GET    /admin/partners/reports        commission report by day/week/month/year or a date range (?group= &start= &end= &tz=
+                                        &partner_id= &format=csv); one row per period, every partner added up, plus per partner
   GET    /admin/partners/{id}           one partner: totals + every referred account with its cost/billing/profit
   PATCH  /admin/partners/{id}           edit name / notes / status (active|paused) / commission rule
   GET    /admin/partners/{id}/payouts   the payment ledger (void payments included)
@@ -19,6 +21,8 @@ Partner (a normal user login linked to a partner row; everything is scoped to TH
   GET    /partner/me                    is this account a partner? (the dashboard shows the Partner menu only if so)
   GET    /partner/overview              their stats, paid / still owed, payment history and every referred account
                                         (never the platform's cost or profit, nor the admin's notes on a payment)
+  GET    /partner/report                their own commission report by period (same query as the admin one, no partner_id;
+                                        signups, verified, calls, billed and their commission only; ?format=csv downloads it)
   GET    /partner/activity              live feed of their referred users
   POST   /partner/users/{id}/impersonate   a 2h "view as" token for one of THEIR referred accounts (same flow as admins)
 
@@ -32,11 +36,12 @@ import uuid
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from database import supabase
 from dependencies import get_admin_user, get_current_user
+from services import partner_reports as pr
 from services import partners as ps
 
 logger = logging.getLogger(__name__)
@@ -187,6 +192,36 @@ async def create_partner(body: PartnerCreate, admin=Depends(get_admin_user)):
 @admin_router.get("/activity")
 def admin_activity(partner_id: Optional[str] = None, admin=Depends(get_admin_user)):
     return _ok(ps.activity_feed(partner_id or None))
+
+
+def _report_response(partners: list[dict], *, group: str, start: Optional[date], end: Optional[date], tz: Optional[str],
+                     fmt: str, admin: bool, name: str):
+    """Runs a commission report for these partner rows and answers as JSON, or as a CSV download with format=csv."""
+    if fmt not in ("json", "csv"):
+        raise HTTPException(400, "format must be json or csv.")
+    try:
+        zone, today = pr.resolve_tz(tz)
+        first, last = pr.resolve_range(group, start, end, today)
+        report = pr.commission_report(partners, group=group, start=first, end=last, tz=zone)
+    except pr.ReportError as e:
+        raise HTTPException(400, str(e))
+    if fmt == "csv":
+        filename = f"{name}-{group}-{first.isoformat()}_to_{last.isoformat()}.csv"
+        return Response(content="\ufeff" + pr.to_csv(report, admin=admin), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    return _ok(pr.admin_view(report) if admin else pr.partner_view(report))
+
+
+@admin_router.get("/reports")
+def admin_report(group: str = "week", start: Optional[date] = None, end: Optional[date] = None, tz: Optional[str] = None,
+                 partner_id: Optional[str] = None, format: str = "json", admin=Depends(get_admin_user)):
+    if partner_id:
+        partners = [_get_partner_or_404(partner_id)]
+        name = f"commission-report-{partners[0]['code'].lower()}"
+    else:
+        partners = supabase.table("referral_partners").select("*").order("created_at", desc=True).execute().data or []
+        name = "commission-report-all-partners"
+    return _report_response(partners, group=group, start=start, end=end, tz=tz, fmt=format, admin=True, name=name)
 
 
 def _get_partner_or_404(partner_id: str) -> dict:
@@ -361,6 +396,15 @@ def partner_overview(user=Depends(get_current_user)):
     data["signups"] = signups
     data["payouts"] = [{k: x[k] for k in _PARTNER_PAYOUT_FIELDS} for x in ps.list_payouts(str(p["id"]), include_void=False)]
     return _ok(data)
+
+
+@router.get("/report")
+def partner_report(group: str = "week", start: Optional[date] = None, end: Optional[date] = None, tz: Optional[str] = None,
+                   format: str = "json", user=Depends(get_current_user)):
+    """The caller's own commission report. Scoped to their partner row like everything under /partner, and shaped by
+    partner_view()/the partner CSV, which carry no platform cost, profit or net profit."""
+    p = _my_partner(user)
+    return _report_response([p], group=group, start=start, end=end, tz=tz, fmt=format, admin=False, name="commission-report")
 
 
 @router.get("/activity")

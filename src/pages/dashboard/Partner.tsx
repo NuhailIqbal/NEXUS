@@ -2,7 +2,7 @@
  * Referral partner portal (/dashboard/partner), for accounts an admin has set up as a referral partner
  * (GET /partner/overview answers 403 for everyone else, who are sent back to the dashboard). Shows the partner's
  * link and commission rule, how many people signed up through it and what they were billed, the commission earned
- * so far, what has been paid to them and what is still owed with the payment history (read-only), every referred
+ * so far (and by week, month or year, with a CSV), what has been paid to them and what is still owed with the payment history (read-only), every referred
  * account with a "View as" button (the same impersonation flow admins have), and a live feed of what those users
  * do. The platform's own cost and profit, and the admin's private notes on a payment, are never sent to this page.
  */
@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import ActivityFeed from "@/components/partners/ActivityFeed";
+import CommissionReport from "@/components/partners/CommissionReport";
 import { api } from "@/services/api";
 import { startPartnerImpersonation } from "@/lib/impersonation";
 import { moneyOrDash } from "@/lib/leadRoi";
@@ -154,6 +155,8 @@ const Partner = () => {
           </div>
         )}
       </div>
+
+      <CommissionReport />
 
       <div>
         <h2 className="text-lg font-semibold text-foreground">Your signups</h2>

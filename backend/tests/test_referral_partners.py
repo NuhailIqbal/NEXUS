@@ -5,7 +5,8 @@ Covered: the admin creating a partner (own login, unique code, custom code, coll
 account), attribution at registration and the pending -> verified flip, a paused partner attributing nobody, the money
 (billed / platform cost / profit / percent and fixed commission / net profit, [SAMPLE] rows left out), what a partner may
 and may not see (no platform cost or profit, only their own accounts), partner impersonation (own referrals only, 2h
-tagged token, refused while paused), the live activity feed and its scoping, and the admin auth gate.
+tagged token, refused while paused), the live activity feed and its scoping, and the admin auth gate. Payouts: the ledger of payments, paid vs still owed. Reports: commission by day/week/month/year
+and custom range (time zones, period boundaries, periods adding up to the lifetime totals, what a partner may see, CSV).
 
 Run from the backend folder:  python -m unittest discover -s tests -p "test_referral_partners.py" -v
 """
@@ -500,6 +501,268 @@ class Payouts(unittest.TestCase):
         verify(tok)                                                                            # a second verified signup earns $5 more
         t = self.totals()
         self.assertEqual((t["commission"], t["paid"], t["owed"]), (10.0, 5.0, 5.0))
+
+
+def timed_call(user, billed, cost, when, contact="Sam"):
+    return h.sql(
+        "insert into conversations (user_id, channel, status, call_cost, provider_cost, contact_name, duration_seconds, direction, call_time)"
+        " values (%s,'Phone','Completed',%s,%s,%s,60,'outbound',%s) returning id", (user, billed, cost, contact, when))[0][0]
+
+
+def stamp(user, created=None, verified=None):
+    """Put a referred account's signup / verification on known instants (UTC)."""
+    if created:
+        h.sql("update partner_referrals set created_at=%s where user_id=%s", (created, user))
+    if verified:
+        h.sql("update partner_referrals set verified_at=%s where user_id=%s", (verified, user))
+
+
+class ReportPeriods(unittest.TestCase):
+    """The pure date logic: where periods start and end, clipping to the range, defaults and refusals."""
+
+    def test_weeks_run_monday_to_sunday(self):
+        from datetime import date
+        from services import partner_reports as pr
+        self.assertEqual(pr.bucket_start(date(2026, 11, 8), "week"), date(2026, 11, 2))    # a Sunday
+        self.assertEqual(pr.bucket_start(date(2026, 11, 2), "week"), date(2026, 11, 2))    # a Monday
+        self.assertEqual(pr.bucket_start(date(2026, 11, 6), "month"), date(2026, 11, 1))
+        self.assertEqual(pr.bucket_start(date(2026, 11, 6), "year"), date(2026, 1, 1))
+        self.assertEqual(pr.next_bucket(date(2026, 12, 1), "month"), date(2027, 1, 1))     # year rollover
+        self.assertEqual(pr.next_bucket(date(2026, 1, 1), "year"), date(2027, 1, 1))
+        self.assertEqual(pr.next_bucket(date(2026, 12, 28), "week"), date(2027, 1, 4))
+
+    def test_periods_are_clipped_to_the_range_and_cover_it_exactly(self):
+        from datetime import date, timedelta
+        from services import partner_reports as pr
+        per = pr.periods(date(2026, 10, 6), date(2026, 11, 3), "week")   # Tuesday .. a Tuesday four weeks on
+        self.assertEqual([(p["key"], p["start"], p["end"]) for p in per], [
+            (date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 11)),
+            (date(2026, 10, 12), date(2026, 10, 12), date(2026, 10, 18)),
+            (date(2026, 10, 19), date(2026, 10, 19), date(2026, 10, 25)),
+            (date(2026, 10, 26), date(2026, 10, 26), date(2026, 11, 1)),
+            (date(2026, 11, 2), date(2026, 11, 2), date(2026, 11, 3)),
+        ])
+        for a, b in zip(per, per[1:]):                                    # no gap and no overlap
+            self.assertEqual(b["start"], a["end"] + timedelta(days=1))
+        feb = pr.periods(date(2028, 2, 1), date(2028, 3, 31), "month")    # a leap February
+        self.assertEqual((feb[0]["end"], feb[1]["start"]), (date(2028, 2, 29), date(2028, 3, 1)))
+
+    def test_defaults_are_the_last_12_weeks_12_months_5_years_30_days_including_today(self):
+        from datetime import date
+        from services import partner_reports as pr
+        today = date(2026, 11, 6)
+        self.assertEqual(pr.default_start("week", today), date(2026, 8, 17))
+        self.assertEqual(pr.default_start("month", today), date(2025, 12, 1))
+        self.assertEqual(pr.default_start("year", today), date(2022, 1, 1))
+        self.assertEqual(pr.default_start("day", today), date(2026, 10, 8))
+        self.assertEqual(len(pr.periods(pr.default_start("week", today), today, "week")), 12)
+        self.assertEqual(len(pr.periods(pr.default_start("month", today), today, "month")), 12)
+
+    def test_refused_ranges(self):
+        from datetime import date
+        from services import partner_reports as pr
+        today = date(2026, 11, 6)
+        with self.assertRaises(pr.ReportError):
+            pr.resolve_range("hour", None, None, today)
+        with self.assertRaises(pr.ReportError):
+            pr.resolve_range("day", date(2026, 11, 7), None, today)                 # starts after today
+        with self.assertRaises(pr.ReportError):
+            pr.resolve_range("day", date(2026, 10, 2), date(2026, 10, 1), today)    # backwards
+        with self.assertRaises(pr.ReportError):
+            pr.resolve_range("day", date(2019, 12, 31), None, today)                # before reports begin
+        self.assertEqual(pr.resolve_range("day", date(2026, 11, 1), date(2099, 1, 1), today), (date(2026, 11, 1), today))
+        with self.assertRaises(pr.ReportError):
+            pr.periods(date(2020, 1, 1), today, "day")                              # ~2,500 days
+
+
+class Reports(unittest.TestCase):
+    """Weekly / monthly / yearly / custom commission reports, for the admin and for the partner."""
+
+    def setUp(self):
+        h.reset_rate_limits()
+        self.p, self.body = create_partner(name="Reports Partner", commission_type="percent", commission_value=20)
+        self.hdr = login_headers(self.body["email"])
+        self.a, ta = register(self.p["code"])
+        self.b, tb = register(self.p["code"])
+        verify(ta)
+        verify(tb)
+        stamp(self.a, "2026-09-30 10:00+00", "2026-10-01 09:00+00")     # Wed / Thu, week of Sep 28
+        stamp(self.b, "2026-10-05 12:00+00", "2026-11-02 12:00+00")     # signed up in the week of Oct 5, verified in the week of Nov 2
+        timed_call(self.a, 3.00, 1.00, "2026-09-28 12:00+00")           # Monday, week of Sep 28
+        timed_call(self.a, 6.00, 2.00, "2026-10-04 23:30+00")           # Sunday night UTC (already Monday in Karachi)
+        timed_call(self.b, 1.10, 0.30, "2026-10-20 10:00+00")           # week of Oct 19
+        timed_call(self.b, 0.55, 0.10, "2026-11-02 08:00+00")           # week of Nov 2
+        timed_call(self.a, 9.00, 0.00, "2026-10-21 10:00+00", contact="[SAMPLE] Demo")   # demo row: ignored
+        timed_call(h.make_user(), 50, 5, "2026-10-21 10:00+00")                           # someone else's usage: ignored
+
+    def report(self, hdr=None, path=None, **q):
+        q = {"start": "2026-09-28", "end": "2026-11-06", **q}
+        if path is None:
+            path, q = "/admin/partners/reports", {"partner_id": self.p["id"], **q}
+        return client.get(path, params=q, headers=admin_headers() if hdr is None else hdr)
+
+    def rows(self, r):
+        self.assertEqual(r.status_code, 200, r.text)
+        return {x["key"]: x for x in r.json()["data"]["periods"]}
+
+    def test_weekly_rows_count_each_thing_in_the_week_it_happened(self):
+        rows = self.rows(self.report(group="week"))
+        self.assertEqual(list(rows), ["2026-09-28", "2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02"])
+        w = rows["2026-09-28"]
+        self.assertEqual((w["signups"], w["verified"], w["calls"], w["billed"], w["platform_cost"], w["profit"]), (1, 1, 2, 9.0, 3.0, 6.0))
+        self.assertEqual((w["commission"], w["net_profit"]), (1.2, 4.8))
+        w = rows["2026-10-05"]
+        self.assertEqual((w["signups"], w["verified"], w["calls"], w["billed"], w["commission"]), (1, 0, 0, 0.0, 0.0))
+        w = rows["2026-10-19"]
+        self.assertEqual((w["calls"], w["billed"], w["platform_cost"], w["profit"], w["commission"]), (1, 1.1, 0.3, 0.8, 0.16))
+        w = rows["2026-11-02"]
+        self.assertEqual((w["verified"], w["calls"], w["billed"], w["commission"]), (1, 1, 0.55, 0.09))
+        self.assertEqual(rows["2026-10-12"]["calls"], 0)                      # a quiet week is still listed
+
+    def test_the_time_zone_decides_which_day_and_week_a_late_night_call_belongs_to(self):
+        utc = self.rows(self.report(group="week", tz="UTC"))
+        self.assertEqual((utc["2026-09-28"]["calls"], utc["2026-10-05"]["calls"]), (2, 0))       # 23:30 Sunday UTC
+        pk = self.rows(self.report(group="week", tz="Asia/Karachi"))                              # UTC+5: 04:30 Monday
+        self.assertEqual((pk["2026-09-28"]["calls"], pk["2026-10-05"]["calls"]), (1, 1))
+        self.assertEqual(pk["2026-10-05"]["billed"], 6.0)
+
+    def test_a_call_on_the_edge_of_a_week_flips_with_the_time_zone(self):
+        other, _ = create_partner(commission_value=10)
+        u, t = register(other["code"])
+        timed_call(u, 2.00, 1.00, "2026-11-02 07:59+00")                      # Monday in UTC, still Sunday night in Los Angeles
+        q = {"partner_id": other["id"], "start": "2026-10-26", "end": "2026-11-06", "group": "week"}
+        utc = {x["key"]: x for x in client.get("/admin/partners/reports", params={**q, "tz": "UTC"}, headers=admin_headers()).json()["data"]["periods"]}
+        la = {x["key"]: x for x in client.get("/admin/partners/reports", params={**q, "tz": "America/Los_Angeles"}, headers=admin_headers()).json()["data"]["periods"]}
+        self.assertEqual((utc["2026-10-26"]["calls"], utc["2026-11-02"]["calls"]), (0, 1))
+        self.assertEqual((la["2026-10-26"]["calls"], la["2026-11-02"]["calls"]), (1, 0))
+
+    def test_periods_add_up_to_the_lifetime_totals_for_every_grouping(self):
+        life = client.get(f"/admin/partners/{self.p['id']}", headers=admin_headers()).json()["data"]["totals"]
+        for group in ("day", "week", "month", "year"):
+            for tz in ("UTC", "Asia/Karachi", "America/Los_Angeles"):
+                d = self.report(group=group, tz=tz, start="2026-09-01").json()["data"]
+                for k in ("signups", "verified", "calls", "billed", "platform_cost", "profit", "commission", "net_profit"):
+                    self.assertEqual(round(sum(x[k] for x in d["periods"]), 2), life[k], f"{group}/{tz}/{k}")
+                    self.assertEqual(d["total"][k], life[k], f"total {group}/{tz}/{k}")
+
+    def test_rounding_never_makes_the_periods_drift_from_the_lifetime_total(self):
+        p, body = create_partner(commission_type="percent", commission_value=10)
+        u, t = register(p["code"])
+        verify(t)
+        for day in ("2026-10-01", "2026-10-02", "2026-10-03"):
+            timed_call(u, 0.3333, 0.1111, f"{day} 12:00+00")                  # each day rounds to .33 / .11, together .9999 / .3333
+        life = client.get(f"/admin/partners/{p['id']}", headers=admin_headers()).json()["data"]["totals"]
+        self.assertEqual((life["billed"], life["platform_cost"]), (1.0, 0.33))
+        d = client.get("/admin/partners/reports", params={"partner_id": p["id"], "group": "day", "start": "2026-09-30", "end": "2026-10-04"},
+                       headers=admin_headers()).json()["data"]
+        self.assertEqual((d["total"]["billed"], d["total"]["platform_cost"], d["total"]["profit"]), (1.0, 0.33, life["profit"]))
+        self.assertEqual(round(sum(x["billed"] for x in d["periods"]), 2), 1.0)
+        for x in (x for x in d["periods"] if x["calls"]):                   # a day with a call stays within a cent of its own rounding
+            self.assertLessEqual(abs(x["billed"] - 0.33), 0.011)
+
+    def test_a_losing_period_gives_back_commission_so_the_total_follows_the_lifetime_rule(self):
+        p, body = create_partner(commission_type="percent", commission_value=20)
+        u, t = register(p["code"])
+        timed_call(u, 3.00, 1.00, "2026-10-05 12:00+00")                      # +2.00 profit
+        timed_call(u, 1.00, 6.00, "2026-10-12 12:00+00")                      # -5.00 profit
+        d = client.get("/admin/partners/reports", params={"partner_id": p["id"], "group": "week", "start": "2026-10-05", "end": "2026-10-18"},
+                       headers=admin_headers()).json()["data"]
+        self.assertEqual([x["commission"] for x in d["periods"]], [0.4, -0.4])
+        self.assertEqual(d["total"]["commission"], 0.0)
+        life = client.get(f"/admin/partners/{p['id']}", headers=admin_headers()).json()["data"]["totals"]
+        self.assertEqual(life["commission"], 0.0)
+
+    def test_a_custom_range_counts_only_what_is_inside_it(self):
+        d = self.report(group="week", start="2026-10-06", end="2026-10-27").json()["data"]
+        self.assertEqual((d["start"], d["end"]), ("2026-10-06", "2026-10-27"))
+        self.assertEqual([(x["start"], x["end"]) for x in d["periods"]],
+                         [("2026-10-06", "2026-10-11"), ("2026-10-12", "2026-10-18"), ("2026-10-19", "2026-10-25"), ("2026-10-26", "2026-10-27")])
+        self.assertEqual((d["total"]["calls"], d["total"]["billed"]), (1, 1.1))                  # only the Oct 20 call
+        self.assertEqual((d["total"]["signups"], d["total"]["verified"]), (0, 0))                # b signed up on Oct 5, one day before
+        self.assertEqual(d["total"]["commission"], 0.16)                                          # earned inside the range only
+
+    def test_fixed_commission_is_earned_in_the_period_a_signup_is_verified(self):
+        client.patch(f"/admin/partners/{self.p['id']}", json={"commission_type": "fixed", "commission_value": 5}, headers=admin_headers())
+        rows = self.rows(self.report(group="week"))
+        self.assertEqual({k: v["commission"] for k, v in rows.items() if v["commission"]}, {"2026-09-28": 5.0, "2026-11-02": 5.0})
+        d = self.report(group="month").json()["data"]
+        self.assertEqual(d["total"]["commission"], 10.0)
+        self.assertEqual(d["total"]["commission"], client.get(f"/admin/partners/{self.p['id']}", headers=admin_headers()).json()["data"]["totals"]["commission"])
+
+    def test_admin_sees_cost_profit_and_net_profit_and_each_partner(self):
+        d = self.report(group="month").json()["data"]
+        self.assertTrue({"platform_cost", "profit", "net_profit"} <= set(d["periods"][0]))
+        self.assertEqual(d["total"]["net_profit"], round(d["total"]["profit"] - d["total"]["commission"], 2))
+        self.assertEqual([x["id"] for x in d["partners"]], [self.p["id"]])
+        all_ = client.get("/admin/partners/reports", params={"group": "month", "start": "2026-09-01", "end": "2026-11-06"}, headers=admin_headers()).json()["data"]
+        self.assertIn(self.p["id"], [x["id"] for x in all_["partners"]])
+        self.assertGreaterEqual(all_["total"]["billed"], d["total"]["billed"])
+        self.assertEqual(client.get("/admin/partners/reports", params={"partner_id": str(uuid.uuid4())}, headers=admin_headers()).status_code, 404)
+
+    def test_a_partner_gets_their_own_numbers_and_never_cost_profit_or_net_profit(self):
+        r = self.report(self.hdr, path="/partner/report", group="week")
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()["data"]
+        self.assertEqual(d["commission_label"], "20% of profit")
+        for row in d["periods"] + [d["total"]]:
+            self.assertEqual(set(row) - {"key", "start", "end"}, {"signups", "verified", "calls", "billed", "commission"})
+        for word in ("platform_cost", "profit", "net_profit", "partners"):
+            self.assertNotIn(f'"{word}"', r.text)
+        self.assertEqual((d["total"]["billed"], d["total"]["commission"], d["total"]["signups"], d["total"]["verified"]), (10.65, 1.45, 2, 2))
+
+    def test_a_partner_cannot_see_another_partners_report(self):
+        other, obody = create_partner(commission_value=50)
+        u, t = register(other["code"])
+        timed_call(u, 100.00, 10.00, "2026-10-21 10:00+00")
+        mine = self.report(self.hdr, path="/partner/report", group="month", partner_id=other["id"]).json()["data"]   # the id is ignored
+        self.assertEqual(mine["total"]["billed"], 10.65)
+        theirs = self.report(login_headers(obody["email"]), path="/partner/report", group="month").json()["data"]
+        self.assertEqual(theirs["total"]["billed"], 100.0)
+        self.assertEqual(self.report(auth(h.make_user()), path="/partner/report").status_code, 403)   # not a partner
+        self.assertIn(self.report({}, path="/partner/report").status_code, (401, 403))
+
+    def test_the_admin_report_is_admin_only(self):
+        self.assertIn(client.get("/admin/partners/reports").status_code, (401, 403))
+        self.assertIn(client.get("/admin/partners/reports", headers=self.hdr).status_code, (401, 403))
+
+    def test_bad_requests_are_refused_with_a_message(self):
+        for q in ({"group": "hour"}, {"tz": "Mars/Olympus"}, {"tz": "../etc"}, {"start": "2026-11-05", "end": "2026-11-01"},
+                  {"group": "day", "start": "2020-01-01"}, {"start": "2019-01-01"}, {"format": "xml"}):
+            r = self.report(**q)
+            self.assertEqual(r.status_code, 400, f"{q}: {r.text}")
+            self.assertIsInstance(r.json()["detail"], str)
+        self.assertEqual(self.report(start="2026-11-01", end="not-a-date").status_code, 422)
+
+    def test_the_end_is_never_in_the_future(self):
+        d = self.report(group="month", end="2099-12-31").json()["data"]
+        self.assertLess(d["end"], "2099-01-01")
+        self.assertEqual(d["periods"][-1]["end"], d["end"])
+
+    def test_admin_csv(self):
+        client.patch(f"/admin/partners/{self.p['id']}", json={"name": "=HYPERLINK(\"http://x\")"}, headers=admin_headers())
+        r = self.report(group="month", format="csv")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.headers["content-type"].startswith("text/csv"))
+        self.assertIn("attachment; filename=", r.headers["content-disposition"])
+        self.assertIn(".csv", r.headers["content-disposition"])
+        self.assertTrue(r.content.startswith(b"\xef\xbb\xbf"))                   # opens in Excel with the right encoding
+        text = r.content.decode("utf-8-sig")
+        lines = text.strip().split("\n")
+        self.assertEqual(lines[0], "Period,Partner,Commission rule,Signups,Verified signups,Calls,Billed,Platform cost,Profit,Commission earned,Platform net profit")
+        self.assertEqual(lines[1].split(",")[0], "2026-09-28 to 2026-09-30")
+        self.assertIn("\"'=HYPERLINK(\"\"http://x\"\")\"", lines[1])             # escaped: never a bare formula
+        self.assertTrue(lines[-1].startswith("Total,"))
+        self.assertTrue(lines[-1].endswith(",10.65,3.40,7.25,1.45,5.80"), lines[-1])
+
+    def test_partner_csv_has_no_cost_or_profit(self):
+        r = self.report(self.hdr, path="/partner/report", group="week", format="csv")
+        self.assertEqual(r.status_code, 200, r.text)
+        text = r.content.decode("utf-8-sig")
+        lines = text.strip().split("\n")
+        self.assertEqual(lines[0], "Period,Signups,Verified signups,Calls,Billed,Commission earned")
+        self.assertEqual(lines[-1], "Total,2,2,4,10.65,1.45")
+        for word in ("cost", "profit", "Platform"):
+            self.assertNotIn(word, text)
 
 
 class Lifecycle(unittest.TestCase):

@@ -98,13 +98,14 @@ function del<T = any>(path: string) {
 }
 
 /**
- * GET `path` with the user's token and save the response as a file (the browser can't attach the
- * Authorization header to a plain link). Resolves to `{ error }`: null on success, else the server's message.
+ * GET `path` with the user's token (or, when `headers` is given, those headers instead, e.g. the admin token) and save the
+ * response as a file (the browser can't attach the Authorization header to a plain link). Resolves to `{ error }`: null on
+ * success, else the server's message.
  */
-async function downloadFile(path: string, filename: string): Promise<{ error: string | null }> {
-  const token = await getToken();
+async function downloadFile(path: string, filename: string, headers?: Record<string, string>): Promise<{ error: string | null }> {
+  const token = headers ? null : await getToken();
   try {
-    const res = await fetch(`${API_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const res = await fetch(`${API_URL}${path}`, { headers: headers ?? (token ? { Authorization: `Bearer ${token}` } : {}) });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       return { error: typeof body.detail === "string" ? body.detail : `Error ${res.status}` };
@@ -460,6 +461,10 @@ export const api = {
   getPartnerMe: () => get("/partner/me"),
   getPartnerOverview: () => get("/partner/overview"),
   getPartnerActivity: () => get("/partner/activity"),
+  // Commission report by period (query: group, start, end, tz); the CSV is the same report as a download.
+  getPartnerReport: (q: Record<string, string | undefined>) => get(`/partner/report${queryString(q)}`),
+  downloadPartnerReport: (q: Record<string, string | undefined>, filename: string) =>
+    downloadFile(`/partner/report${queryString({ ...q, format: "csv" })}`, filename),
   // A 2h "view as" token for one of the partner's own referred users (lib/impersonation.ts installs it).
   partnerImpersonateUser: (id: string) => post(`/partner/users/${id}/impersonate`),
 
@@ -497,6 +502,10 @@ export const api = {
     adminPatch(`/admin/partners/${id}/payouts/${payoutId}`, data),
   voidAdminPartnerPayout: (id: string, payoutId: string, reason: string) =>
     adminPost(`/admin/partners/${id}/payouts/${payoutId}/void`, { reason }),
+  // Commission report for all partners (or one: partner_id) by period; same query as the partner's own report.
+  getAdminPartnerReport: (q: Record<string, string | undefined>) => adminGet(`/admin/partners/reports${queryString(q)}`),
+  downloadAdminPartnerReport: (q: Record<string, string | undefined>, filename: string) =>
+    downloadFile(`/admin/partners/reports${queryString({ ...q, format: "csv" })}`, filename, getAdminAuthHeader()),
   getAdminPartnerActivity: (partnerId?: string) =>
     adminGet(`/admin/partners/activity${partnerId ? `?partner_id=${encodeURIComponent(partnerId)}` : ""}`),
   getAdminPayments: () => adminGet("/admin/payments"),

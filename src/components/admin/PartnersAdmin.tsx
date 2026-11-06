@@ -4,8 +4,8 @@
  * what the platform paid (platform cost), the profit delta between the two, the commission owed and what the
  * platform keeps. A partner's detail view lists every referred account with the same three numbers, the payment
  * ledger (record a payment, edit its description, void it with a reason; paid vs still owed) and a live activity
- * feed. Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
- * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity,
+ * feed. The list page also holds the commission reports by period (components/partners/CommissionReport.tsx). Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
+ * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity, GET /admin/partners/reports,
  * POST/PATCH /admin/partners/{id}/payouts[/{pid}[/void]] (services/partners.py).
  */
 import { useCallback, useEffect, useState } from "react";
@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ActivityFeed from "@/components/partners/ActivityFeed";
+import CommissionReport from "@/components/partners/CommissionReport";
 import { api } from "@/services/api";
 import { moneyOrDash } from "@/lib/leadRoi";
 import { cn } from "@/lib/utils";
@@ -160,6 +161,7 @@ export default function PartnersAdmin({ onViewAs }: Props) {
               </table>
             </div>
           </div>
+          <CommissionReport admin partners={list.partners.map((p) => ({ id: p.id, name: p.name }))} />
           <ActivityFeed load={() => api.getAdminPartnerActivity()} showPartner />
         </>
       )}
