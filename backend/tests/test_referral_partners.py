@@ -7,18 +7,21 @@ account), attribution at registration and the pending -> verified flip, a paused
 and may not see (no platform cost or profit, only their own accounts), partner impersonation (own referrals only, 2h
 tagged token, refused while paused), the live activity feed and its scoping, and the admin auth gate. Payouts: the ledger of payments, paid vs still owed. Reports: commission by day/week/month/year
 and custom range (time zones, period boundaries, periods adding up to the lifetime totals, what a partner may see, CSV).
+Financials: the platform's summary (billed / cost / profit / commission earned, paid, owed / what it keeps) by period and partner.
 
 Run from the backend folder:  python -m unittest discover -s tests -p "test_referral_partners.py" -v
 """
 import time
 import unittest
 import uuid
+from datetime import date
 
 import qa_harness as h
 from qa_harness import client, auth
 from jose import jwt
 from config import settings
 from database import supabase
+from services import partner_financials as pf
 
 
 def setUpModule():
@@ -763,6 +766,186 @@ class Reports(unittest.TestCase):
         self.assertEqual(lines[-1], "Total,2,2,4,10.65,1.45")
         for word in ("cost", "profit", "Platform"):
             self.assertNotIn(word, text)
+
+
+class Financials(unittest.TestCase):
+    """The platform financial summary: billed / cost / profit / commission earned, paid and owed / what the platform keeps."""
+
+    MONEY = ("billed", "platform_cost", "profit", "commission", "paid", "net_kept")
+
+    def setUp(self):
+        h.reset_rate_limits()
+        # P1: 20% of profit. Profit 2.00 (Sep), 4.00 (Oct), 4.00 (Nov) -> commission 0.40 / 0.80 / 0.80.
+        self.p, self.body = create_partner(name="Finance Partner", commission_type="percent", commission_value=20)
+        self.a, ta = register(self.p["code"])
+        self.b, tb = register(self.p["code"])
+        verify(ta)
+        verify(tb)
+        timed_call(self.a, 3.00, 1.00, "2026-09-28 12:00+00")
+        timed_call(self.a, 6.00, 2.00, "2026-10-15 12:00+00")
+        timed_call(self.b, 5.00, 1.00, "2026-11-03 12:00+00")
+        timed_call(self.a, 9.00, 0.00, "2026-10-21 10:00+00", contact="[SAMPLE] Demo")        # demo row: ignored
+        timed_call(h.make_user(), 50, 5, "2026-10-21 10:00+00")                                  # someone else's usage: ignored
+        self.pay(self.p, 0.40, "2026-10-01")
+        self.pay(self.p, 1.00, "2026-11-04")
+        # P2: $5.00 per verified signup, one signup verified on 2026-10-10, $2.00 of it paid on 2026-10-11.
+        self.q, _ = create_partner(name="Fixed Partner", commission_type="fixed", commission_value=5)
+        c, tc = register(self.q["code"])
+        verify(tc)
+        stamp(c, "2026-10-09 10:00+00", "2026-10-10 09:00+00")
+        timed_call(c, 2.00, 1.00, "2026-10-12 10:00+00")
+        self.pay(self.q, 2.00, "2026-10-11")
+
+    def pay(self, partner, amount, paid_on):
+        r = client.post(f"/admin/partners/{partner['id']}/payouts", json={"amount": amount, "paid_on": paid_on}, headers=admin_headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["data"]["payout"]
+
+    def summary(self, partner, group="month", start="2026-09-01", end="2026-11-06"):
+        """The service result for one partner over fixed dates (UTC), so other tests' partners cannot be in it."""
+        row = supabase.table("referral_partners").select("*").eq("id", partner["id"]).maybe_single().execute().data
+        return pf.financial_summary([row], group=group, start=date.fromisoformat(start), end=date.fromisoformat(end), tz="UTC")
+
+    def rows(self, partner, **kw):
+        s = self.summary(partner, **kw)
+        return {per["key"].isoformat(): r for per, r in zip(s["periods"], s["partners"][0]["rows"])}
+
+    def get(self, **q):
+        return client.get("/admin/partners/financials", params={"tz": "UTC", **q}, headers=admin_headers())
+
+    def test_a_percent_partner_month_by_month(self):
+        rows = self.rows(self.p)
+        self.assertEqual(list(rows), ["2026-09-01", "2026-10-01", "2026-11-01"])
+        self.assertEqual(rows["2026-09-01"], {"billed": 3.0, "platform_cost": 1.0, "profit": 2.0, "commission": 0.4, "paid": 0.0, "owed_start": 0.0, "owed": 0.4, "net_kept": 1.6})
+        self.assertEqual(rows["2026-10-01"], {"billed": 6.0, "platform_cost": 2.0, "profit": 4.0, "commission": 0.8, "paid": 0.4, "owed_start": 0.4, "owed": 0.8, "net_kept": 3.2})
+        self.assertEqual(rows["2026-11-01"], {"billed": 5.0, "platform_cost": 1.0, "profit": 4.0, "commission": 0.8, "paid": 1.0, "owed_start": 0.8, "owed": 0.6, "net_kept": 3.2})
+        t = self.summary(self.p)["partners"][0]["total"]                                         # the demo row and the stranger's calls are not in it
+        self.assertEqual(t, {"billed": 14.0, "platform_cost": 4.0, "profit": 10.0, "commission": 2.0, "paid": 1.4, "owed_start": 0.0, "owed": 0.6, "net_kept": 8.0})
+
+    def test_a_fixed_partner_is_paid_on_the_day_it_was_paid(self):
+        rows = self.rows(self.q)
+        self.assertEqual((rows["2026-09-01"]["commission"], rows["2026-09-01"]["owed"]), (0.0, 0.0))
+        self.assertEqual((rows["2026-10-01"]["commission"], rows["2026-10-01"]["paid"], rows["2026-10-01"]["owed"]), (5.0, 2.0, 3.0))
+        self.assertEqual((rows["2026-11-01"]["commission"], rows["2026-11-01"]["owed_start"], rows["2026-11-01"]["owed"]), (0.0, 3.0, 3.0))
+
+    def test_a_range_that_starts_late_opens_with_what_was_already_owed(self):
+        s = self.summary(self.p, start="2026-11-01")["partners"][0]
+        self.assertEqual((s["total"]["owed_start"], s["total"]["commission"], s["total"]["paid"], s["total"]["owed"]), (0.8, 0.8, 1.0, 0.6))
+        s = self.summary(self.p, start="2026-10-16")["partners"][0]                              # opens after the 0.40 payment and the Oct call
+        self.assertEqual((s["total"]["owed_start"], s["total"]["owed"]), (0.8, 0.6))
+
+    def test_every_row_reconciles_and_the_balances_chain(self):
+        for partner in (self.p, self.q):
+            for group in ("day", "week", "month", "year"):
+                s = self.summary(partner, group=group, start="2026-09-20", end="2026-11-06")["partners"][0]
+                prev = s["total"]["owed_start"]
+                for r in s["rows"] + [s["total"]]:
+                    self.assertAlmostEqual(r["owed_start"] + r["commission"] - r["paid"], r["owed"], places=2)
+                for r in s["rows"]:
+                    self.assertAlmostEqual(r["owed_start"], prev, places=2)                        # one period ends where the next begins
+                    prev = r["owed"]
+                self.assertAlmostEqual(prev, s["total"]["owed"], places=2)
+                for k in self.MONEY:
+                    self.assertAlmostEqual(sum(r[k] for r in s["rows"]), s["total"][k], places=2, msg=f"{group} {k}")
+
+    def test_a_range_ending_today_ends_with_what_is_owed_now(self):
+        life = client.get(f"/admin/partners/{self.p['id']}", headers=admin_headers()).json()["data"]["totals"]
+        for start in ("2020-01-01", "2026-10-16", "2026-11-05"):
+            s = self.summary(self.p, group="year", start=start, end="2026-11-06")["partners"][0]
+            self.assertAlmostEqual(s["total"]["owed"], life["owed"], places=2, msg=start)
+
+    def test_paid_plus_owed_is_the_commission_earned_over_the_whole_history(self):
+        d = self.get(group="year", start="2020-01-01").json()["data"]
+        t = d["total"]
+        self.assertEqual(t["owed_start"], 0.0)
+        self.assertAlmostEqual(t["paid"] + t["owed"], t["commission"], places=2)
+        for p in d["partners"]:
+            self.assertAlmostEqual(p["total"]["paid"] + p["total"]["owed"], p["total"]["commission"], places=2, msg=p["name"])
+
+    def test_the_grand_total_is_the_sum_of_the_partners_and_matches_the_partner_list(self):
+        d = self.get(group="year", start="2020-01-01").json()["data"]
+        listing = client.get("/admin/partners", headers=admin_headers()).json()["data"]
+        self.assertEqual(len(d["partners"]), len(listing["partners"]))
+        for k in self.MONEY[:5] + ("owed",):
+            self.assertAlmostEqual(sum(p["total"][k] for p in d["partners"]), d["total"][k], places=2, msg=k)
+            self.assertAlmostEqual(d["total"][k], listing["totals"][k], places=2, msg=k)
+        self.assertAlmostEqual(d["total"]["net_kept"], listing["totals"]["net_profit"], places=2)
+        for p in d["partners"]:
+            lp = next(x for x in listing["partners"] if x["id"] == p["id"])
+            for k in ("billed", "platform_cost", "profit", "commission", "paid", "owed"):
+                self.assertAlmostEqual(p["total"][k], lp["totals"][k], places=2, msg=f"{p['name']} {k}")
+
+    def test_the_period_rows_add_up_to_the_total_for_any_grouping(self):
+        for group in ("day", "week", "month", "year"):
+            d = self.get(group=group, start="2026-09-20", end="2026-11-06").json()["data"]
+            for k in self.MONEY:
+                self.assertAlmostEqual(sum(r[k] for r in d["periods"]), d["total"][k], places=2, msg=f"{group} {k}")
+            self.assertAlmostEqual(d["total"]["owed_start"], d["periods"][0]["owed_start"], places=2)
+            self.assertAlmostEqual(d["total"]["owed"], d["periods"][-1]["owed"], places=2)
+            for k in self.MONEY[:5] + ("owed",):
+                self.assertAlmostEqual(sum(p["total"][k] for p in d["partners"]), d["total"][k], places=2, msg=f"{group} {k}")
+
+    def test_a_paused_partner_still_counts_for_what_it_earned(self):
+        before = next(p for p in self.get(group="year", start="2020-01-01").json()["data"]["partners"] if p["id"] == self.p["id"])
+        self.assertEqual(client.patch(f"/admin/partners/{self.p['id']}", json={"status": "paused"}, headers=admin_headers()).status_code, 200)
+        after = next(p for p in self.get(group="year", start="2020-01-01").json()["data"]["partners"] if p["id"] == self.p["id"])
+        self.assertEqual(after["status"], "paused")
+        self.assertEqual(after["total"], before["total"])
+        self.assertEqual(after["total"]["commission"], 2.0)
+
+    def test_a_voided_payment_stops_counting(self):
+        payout = self.pay(self.p, 0.10, "2026-11-05")
+        self.assertEqual(self.summary(self.p)["partners"][0]["total"]["paid"], 1.5)
+        r = client.post(f"/admin/partners/{self.p['id']}/payouts/{payout['id']}/void", json={"reason": "wrong amount"}, headers=admin_headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        t = self.summary(self.p)["partners"][0]["total"]
+        self.assertEqual((t["paid"], t["owed"]), (1.4, 0.6))
+
+    def test_a_payment_after_the_range_is_not_in_it(self):
+        s = self.summary(self.p, start="2026-09-01", end="2026-10-31")["partners"][0]["total"]  # the 1.00 of 4 Nov is later
+        self.assertEqual((s["paid"], s["commission"], s["owed"]), (0.4, 1.2, 0.8))
+
+    def test_the_endpoint_returns_the_summary_for_admins_only(self):
+        d = self.get(group="month", start="2026-09-01", end="2026-11-06")
+        self.assertEqual(d.status_code, 200, d.text)
+        data = d.json()["data"]
+        self.assertEqual((data["group"], data["tz"], data["start"], data["end"][:4]), ("month", "UTC", "2026-09-01", "2026"))
+        self.assertEqual([p["key"] for p in data["periods"]][:3], ["2026-09-01", "2026-10-01", "2026-11-01"])
+        mine = next(p for p in data["partners"] if p["id"] == self.p["id"])
+        self.assertEqual(mine["commission_label"], "20% of profit")
+        self.assertEqual(client.get("/admin/partners/financials").status_code, 401)
+        user = h.make_user()
+        self.assertEqual(client.get("/admin/partners/financials", headers={"X-Admin-Auth": h.token_for(user)}).status_code, 403)
+        self.assertEqual(client.get("/admin/partners/financials", headers=login_headers(self.body["email"])).status_code, 401)
+
+    def test_bad_requests_are_refused_with_a_message(self):
+        for q in ({"group": "hour"}, {"tz": "Mars/Olympus"}, {"start": "2026-11-05", "end": "2026-11-01"}, {"start": "2019-01-01"},
+                  {"group": "day", "start": "2020-01-01"}, {"format": "xml"}):
+            r = self.get(**q)
+            self.assertEqual(r.status_code, 400, f"{q}: {r.text}")
+            self.assertIsInstance(r.json()["detail"], str)
+        self.assertEqual(self.get(start="nope").status_code, 422)
+
+    def test_no_partners_gives_an_empty_summary(self):
+        self.assertEqual(pf.financial_summary([], group="month", start=date(2026, 10, 1), end=date(2026, 11, 6), tz="UTC")["partners"], [])
+        d = pf.view(pf.financial_summary([], group="month", start=date(2026, 10, 1), end=date(2026, 11, 6), tz="UTC"))
+        self.assertEqual(d["partners"], [])
+
+    def test_csv_for_accounting(self):
+        client.patch(f"/admin/partners/{self.p['id']}", json={"name": "=SUM(1)"}, headers=admin_headers())
+        r = self.get(group="month", start="2026-09-01", end="2026-11-06", format="csv")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.headers["content-type"].startswith("text/csv"))
+        self.assertIn("financial-summary-month-2026-09-01_to_", r.headers["content-disposition"])
+        self.assertTrue(r.content.startswith(b"\xef\xbb\xbf"))
+        lines = r.content.decode("utf-8-sig").strip().split("\n")
+        self.assertEqual(lines[0], "Period,Partner,Commission rule,Billed,Platform cost,Gross profit,Commission earned,Commission paid,Owed at start,Owed at end,Net kept by platform")
+        mine = [x for x in lines if "'=SUM(1)" in x]                                              # escaped: never a bare formula
+        self.assertEqual(len(mine), 4)
+        self.assertTrue(mine[0].startswith("2026-09-01 to 2026-09-30,"))
+        self.assertTrue(mine[1].endswith(",6.00,2.00,4.00,0.80,0.40,0.40,0.80,3.20"), mine[1])
+        self.assertTrue(mine[3].startswith("Total,") and mine[3].endswith(",14.00,4.00,10.00,2.00,1.40,0.00,0.60,8.00"), mine[3])
+        self.assertTrue(lines[-1].startswith("Total,All partners,"))
 
 
 class Lifecycle(unittest.TestCase):

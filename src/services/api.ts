@@ -506,6 +506,10 @@ export const api = {
   getAdminPartnerReport: (q: Record<string, string | undefined>) => adminGet(`/admin/partners/reports${queryString(q)}`),
   downloadAdminPartnerReport: (q: Record<string, string | undefined>, filename: string) =>
     downloadFile(`/admin/partners/reports${queryString({ ...q, format: "csv" })}`, filename, getAdminAuthHeader()),
+  // Platform financial summary (billed, cost, profit, commission earned / paid / owed, what the platform keeps) by period.
+  getAdminPartnerFinancials: (q: Record<string, string | undefined>) => adminGet(`/admin/partners/financials${queryString(q)}`),
+  downloadAdminPartnerFinancials: (q: Record<string, string | undefined>, filename: string) =>
+    downloadFile(`/admin/partners/financials${queryString({ ...q, format: "csv" })}`, filename, getAdminAuthHeader()),
   getAdminPartnerActivity: (partnerId?: string) =>
     adminGet(`/admin/partners/activity${partnerId ? `?partner_id=${encodeURIComponent(partnerId)}` : ""}`),
   getAdminPayments: () => adminGet("/admin/payments"),

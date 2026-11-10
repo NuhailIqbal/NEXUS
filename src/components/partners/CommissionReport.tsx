@@ -6,22 +6,18 @@
  * the partner version never receives those three figures (the server leaves them out).
  * Data: GET /admin/partners/reports and GET /partner/report (services/partner_reports.py).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { DateField } from "@/components/call-consumption/FilterBar";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/services/api";
 import { moneyOrDash } from "@/lib/leadRoi";
 import { cn } from "@/lib/utils";
-import { todayISO } from "@/lib/partners";
 import {
-  CUSTOM_GROUPS, PRESETS, browserTimeZone, buildReportQuery, customRangeError, periodLabel, periodSpan,
-  reportDay, reportFilename,
-  type CommissionReportData, type ReportGroup, type ReportNumbers, type ReportPreset, type ReportQuery,
+  periodLabel, periodSpan, reportDay, reportFilename, type CommissionReportData, type ReportNumbers, type ReportQuery,
 } from "@/lib/partnerReports";
+import ReportControls from "./ReportControls";
+import { useReportData, useReportSelection } from "./useReportSelection";
 
 type Props = {
   admin?: boolean;
@@ -63,38 +59,9 @@ function ColumnHeads({ admin }: { admin: boolean }) {
 }
 
 export default function CommissionReport({ admin = false, partners = [] }: Props) {
-  const tz = useMemo(browserTimeZone, []);
-  const today = todayISO();
-  const [preset, setPreset] = useState<ReportPreset>("week");
-  const [custom, setCustom] = useState<{ group: ReportGroup; start: string; end: string }>({ group: "day", start: "", end: "" });
-  const [partnerId, setPartnerId] = useState("all");
-  const [report, setReport] = useState<CommissionReportData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { tz, preset, setPreset, custom, setCustom, partnerId, setPartnerId, query } = useReportSelection("week", admin);
+  const { report, error, loading } = useReportData<CommissionReportData>(query, (q) => (admin ? api.getAdminPartnerReport(q) : api.getPartnerReport(q)));
   const [downloading, setDownloading] = useState(false);
-
-  const query = useMemo(() => buildReportQuery(preset, custom, admin ? partnerId : "all", tz, today), [preset, custom, partnerId, admin, tz, today]);
-  const rangeError = preset === "custom" ? customRangeError(custom.start, custom.end, today) : null;
-
-  const fetchReport = useCallback(async (q: ReportQuery, signal: { stale: boolean }) => {
-    setLoading(true);
-    const { data, error: err } = admin ? await api.getAdminPartnerReport(q) : await api.getPartnerReport(q);
-    if (signal.stale) return;       // a newer selection has been made since this request started
-    setLoading(false);
-    if (err || !data) {
-      setError(typeof err === "string" ? err : "Could not load the report.");
-      return;
-    }
-    setError(null);
-    setReport(data);
-  }, [admin]);
-
-  useEffect(() => {
-    if (!query) return;
-    const signal = { stale: false };
-    fetchReport(query, signal);
-    return () => { signal.stale = true; };
-  }, [query, fetchReport]);
 
   const download = async () => {
     if (!report) return;
@@ -124,52 +91,11 @@ export default function CommissionReport({ admin = false, partners = [] }: Props
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="inline-flex flex-wrap rounded-lg border border-border bg-card/40 p-1" role="group" aria-label="Report period">
-          {PRESETS.map((p) => (
-            <button
-              key={p.value} type="button" aria-pressed={preset === p.value} title={p.hint}
-              onClick={() => setPreset(p.value)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                preset === p.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+      <ReportControls
+        preset={preset} onPreset={setPreset} custom={custom} onCustom={setCustom}
+        partners={admin ? partners : []} partnerId={partnerId} onPartner={setPartnerId}
+      />
 
-        {preset === "custom" && (
-          <>
-            <DateField label="From" className="w-40 min-w-0 flex-none" value={custom.start} onChange={(v) => setCustom({ ...custom, start: v })} />
-            <DateField label="To" className="w-40 min-w-0 flex-none" value={custom.end} onChange={(v) => setCustom({ ...custom, end: v })} />
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Group by</Label>
-              <Select value={custom.group} onValueChange={(v) => setCustom({ ...custom, group: v as ReportGroup })}>
-                <SelectTrigger className="w-32" aria-label="Group by"><SelectValue /></SelectTrigger>
-                <SelectContent>{CUSTOM_GROUPS.map((g) => <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-          </>
-        )}
-
-        {admin && partners.length > 0 && (
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Partner</Label>
-            <Select value={partnerId} onValueChange={setPartnerId}>
-              <SelectTrigger className="w-56" aria-label="Partner"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All partners</SelectItem>
-                {partners.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-      </div>
-
-      {rangeError && <p className="text-sm text-destructive">{rangeError}</p>}
-      {preset === "custom" && !query && !rangeError && <p className="text-sm text-muted-foreground">Pick a start and an end date to see the report.</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {query && !report && !error && (

@@ -10,6 +10,8 @@ Admin (X-Admin-Auth, like the rest of /admin):
   GET    /admin/partners/activity       live feed across all partners (?partner_id= narrows it)
   GET    /admin/partners/reports        commission report by day/week/month/year or a date range (?group= &start= &end= &tz=
                                         &partner_id= &format=csv); one row per period, every partner added up, plus per partner
+  GET    /admin/partners/financials     platform financial summary: billed, cost, profit, commission earned / paid / owed and
+                                        what the platform keeps, by period (same ?group= &start= &end= &tz= &format=csv) and per partner
   GET    /admin/partners/{id}           one partner: totals + every referred account with its cost/billing/profit
   PATCH  /admin/partners/{id}           edit name / notes / status (active|paused) / commission rule
   GET    /admin/partners/{id}/payouts   the payment ledger (void payments included)
@@ -41,6 +43,7 @@ from pydantic import BaseModel
 
 from database import supabase
 from dependencies import get_admin_user, get_current_user
+from services import partner_financials as pf
 from services import partner_reports as pr
 from services import partners as ps
 
@@ -222,6 +225,27 @@ def admin_report(group: str = "week", start: Optional[date] = None, end: Optiona
         partners = supabase.table("referral_partners").select("*").order("created_at", desc=True).execute().data or []
         name = "commission-report-all-partners"
     return _report_response(partners, group=group, start=start, end=end, tz=tz, fmt=format, admin=True, name=name)
+
+
+@admin_router.get("/financials")
+def admin_financials(group: str = "month", start: Optional[date] = None, end: Optional[date] = None, tz: Optional[str] = None,
+                     format: str = "json", admin=Depends(get_admin_user)):
+    """The platform's financial summary over all partners (paused ones included): billed, platform cost, gross profit,
+    commission earned / paid / still owed and what the platform keeps, per period and per partner."""
+    if format not in ("json", "csv"):
+        raise HTTPException(400, "format must be json or csv.")
+    partners = supabase.table("referral_partners").select("*").order("created_at", desc=True).execute().data or []
+    try:
+        zone, today = pr.resolve_tz(tz)
+        first, last = pr.resolve_range(group, start, end, today)
+        summary = pf.financial_summary(partners, group=group, start=first, end=last, tz=zone)
+    except pr.ReportError as e:
+        raise HTTPException(400, str(e))
+    if format == "csv":
+        filename = f"financial-summary-{group}-{first.isoformat()}_to_{last.isoformat()}.csv"
+        return Response(content="﻿" + pf.to_csv(summary), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    return _ok(pf.view(summary))
 
 
 def _get_partner_or_404(partner_id: str) -> dict:

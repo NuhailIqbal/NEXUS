@@ -4,8 +4,8 @@
  * what the platform paid (platform cost), the profit delta between the two, the commission owed and what the
  * platform keeps. A partner's detail view lists every referred account with the same three numbers, the payment
  * ledger (record a payment, edit its description, void it with a reason; paid vs still owed) and a live activity
- * feed. The list page also holds the commission reports by period (components/partners/CommissionReport.tsx). Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
- * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity, GET /admin/partners/reports,
+ * feed. The list page also holds the commission reports by period (components/partners/CommissionReport.tsx) and, on its second tab, the platform's financial summary (components/partners/FinancialSummary.tsx). Rendered by pages/dashboard/Admin.tsx, which passes its own "view as user" handler.
+ * Data: GET/POST /admin/partners, GET/PATCH /admin/partners/{id}, GET /admin/partners/activity, GET /admin/partners/reports, GET /admin/partners/financials,
  * POST/PATCH /admin/partners/{id}/payouts[/{pid}[/void]] (services/partners.py).
  */
 import { useCallback, useEffect, useState } from "react";
@@ -16,9 +16,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ActivityFeed from "@/components/partners/ActivityFeed";
 import CommissionReport from "@/components/partners/CommissionReport";
+import FinancialSummary from "@/components/partners/FinancialSummary";
 import { api } from "@/services/api";
 import { moneyOrDash } from "@/lib/leadRoi";
 import { cn } from "@/lib/utils";
@@ -107,64 +109,73 @@ export default function PartnersAdmin({ onViewAs }: Props) {
         <Button className="gap-2" onClick={() => setCreating(true)}><Plus className="h-4 w-4" /> New partner</Button>
       </div>
 
-      {!list ? (
-        <div className="flex items-center justify-center py-16 text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…</div>
-      ) : (
-        <>
-          <MoneyTiles t={list.totals} />
-          <div className="overflow-hidden rounded-xl border border-border">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] text-sm">
-                <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-3">Partner</th>
-                    <th className="px-4 py-3">Commission</th>
-                    <th className="px-4 py-3 text-right">Signups</th>
-                    <th className="px-4 py-3 text-right">Billed</th>
-                    <th className="px-4 py-3 text-right">Platform cost</th>
-                    <th className="px-4 py-3 text-right">Profit</th>
-                    <th className="px-4 py-3 text-right">Earned</th>
-                    <th className="px-4 py-3 text-right">Paid</th>
-                    <th className="px-4 py-3 text-right">Still owed</th>
-                    <th className="px-4 py-3 text-right">Platform keeps</th>
-                    <th className="px-4 py-3" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.partners.length === 0 ? (
-                    <tr><td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">No partners yet. Create the first one.</td></tr>
-                  ) : list.partners.map((p) => (
-                    <tr key={p.id} className="border-t border-border bg-card/30">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground">{p.name}</span>
-                          <Badge variant={p.status === "active" ? "default" : "secondary"}>{p.status === "active" ? "Active" : "Paused"}</Badge>
-                        </div>
-                        <div className="text-xs text-muted-foreground">{p.email}</div>
-                        <button type="button" onClick={() => copyLink(p.referral_path)} className="mt-1 inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground">
-                          {p.code} <Copy className="h-3 w-3" />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-foreground">{p.commission_label}</td>
-                      <td className="px-4 py-3 text-right">{p.totals.signups} <span className="text-xs text-muted-foreground">({p.totals.verified} verified)</span></td>
-                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.billed)}</td>
-                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.platform_cost)}</td>
-                      <td className={cn("px-4 py-3 text-right font-semibold", profitClass(p.totals.profit))}>{moneyOrDash(p.totals.profit)}</td>
-                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.commission)}</td>
-                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.paid)}</td>
-                      <td className={cn("px-4 py-3 text-right", owedClass(p.totals.owed))}>{moneyOrDash(p.totals.owed)}</td>
-                      <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.net_profit)}</td>
-                      <td className="px-4 py-3 text-right"><Button size="sm" variant="outline" onClick={() => setSelected(p.id)}>Manage</Button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <CommissionReport admin partners={list.partners.map((p) => ({ id: p.id, name: p.name }))} />
-          <ActivityFeed load={() => api.getAdminPartnerActivity()} showPartner />
-        </>
-      )}
+      <Tabs defaultValue="partners" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="partners">Partners</TabsTrigger>
+          <TabsTrigger value="financials">Financial summary</TabsTrigger>
+        </TabsList>
+        <TabsContent value="partners" className="mt-0 space-y-6">
+          {!list ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…</div>
+          ) : (
+            <>
+              <MoneyTiles t={list.totals} />
+              <div className="overflow-hidden rounded-xl border border-border">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1180px] text-sm">
+                    <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-4 py-3">Partner</th>
+                        <th className="px-4 py-3">Commission</th>
+                        <th className="px-4 py-3 text-right">Signups</th>
+                        <th className="px-4 py-3 text-right">Billed</th>
+                        <th className="px-4 py-3 text-right">Platform cost</th>
+                        <th className="px-4 py-3 text-right">Profit</th>
+                        <th className="px-4 py-3 text-right">Earned</th>
+                        <th className="px-4 py-3 text-right">Paid</th>
+                        <th className="px-4 py-3 text-right">Still owed</th>
+                        <th className="px-4 py-3 text-right">Platform keeps</th>
+                        <th className="px-4 py-3" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.partners.length === 0 ? (
+                        <tr><td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">No partners yet. Create the first one.</td></tr>
+                      ) : list.partners.map((p) => (
+                        <tr key={p.id} className="border-t border-border bg-card/30">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{p.name}</span>
+                              <Badge variant={p.status === "active" ? "default" : "secondary"}>{p.status === "active" ? "Active" : "Paused"}</Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">{p.email}</div>
+                            <button type="button" onClick={() => copyLink(p.referral_path)} className="mt-1 inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground">
+                              {p.code} <Copy className="h-3 w-3" />
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-foreground">{p.commission_label}</td>
+                          <td className="px-4 py-3 text-right">{p.totals.signups} <span className="text-xs text-muted-foreground">({p.totals.verified} verified)</span></td>
+                          <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.billed)}</td>
+                          <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.platform_cost)}</td>
+                          <td className={cn("px-4 py-3 text-right font-semibold", profitClass(p.totals.profit))}>{moneyOrDash(p.totals.profit)}</td>
+                          <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.commission)}</td>
+                          <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.paid)}</td>
+                          <td className={cn("px-4 py-3 text-right", owedClass(p.totals.owed))}>{moneyOrDash(p.totals.owed)}</td>
+                          <td className="px-4 py-3 text-right">{moneyOrDash(p.totals.net_profit)}</td>
+                          <td className="px-4 py-3 text-right"><Button size="sm" variant="outline" onClick={() => setSelected(p.id)}>Manage</Button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <CommissionReport admin partners={list.partners.map((p) => ({ id: p.id, name: p.name }))} />
+              <ActivityFeed load={() => api.getAdminPartnerActivity()} showPartner />
+            </>
+          )}
+        </TabsContent>
+        <TabsContent value="financials" className="mt-0"><FinancialSummary /></TabsContent>
+      </Tabs>
 
       <CreatePartnerDialog open={creating} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); load(); setSelected(id); }} />
     </div>
