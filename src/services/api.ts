@@ -124,10 +124,13 @@ async function downloadFile(path: string, filename: string, headers?: Record<str
   }
 }
 
-/** `?a=1&b=2` for a params object (values are URL-encoded; empty values are skipped). */
-function queryString(params: Record<string, string | undefined>): string {
+/** `?a=1&b=2` for a params object (values are URL-encoded; empty values are skipped; an array repeats its key: `kind=a&kind=b`). */
+function queryString(params: Record<string, string | string[] | undefined>): string {
   const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+  for (const [k, v] of Object.entries(params)) {
+    if (Array.isArray(v)) v.forEach((x) => { if (x) qs.append(k, x); });
+    else if (v) qs.set(k, v);
+  }
   const s = qs.toString();
   return s ? `?${s}` : "";
 }
@@ -466,6 +469,13 @@ export const api = {
   downloadPartnerReport: (q: Record<string, string | undefined>, filename: string) =>
     downloadFile(`/partner/report${queryString({ ...q, format: "csv" })}`, filename),
   // A 2h "view as" token for one of the partner's own referred users (lib/impersonation.ts installs it).
+  // The partner's user management: referred users (search / filters / sort / paging; the CSV is every match), one user, and that user's activity history.
+  getPartnerUsers: (q: Record<string, string | undefined>) => get(`/partner/users${queryString(q)}`),
+  downloadPartnerUsers: (q: Record<string, string | undefined>, filename: string) =>
+    downloadFile(`/partner/users${queryString({ ...q, format: "csv" })}`, filename),
+  getPartnerUser: (id: string) => get(`/partner/users/${encodeURIComponent(id)}`),
+  getPartnerUserActivity: (id: string, q: Record<string, string | string[] | undefined>) =>
+    get(`/partner/users/${encodeURIComponent(id)}/activity${queryString(q)}`),
   partnerImpersonateUser: (id: string) => post(`/partner/users/${id}/impersonate`),
 
   // Notifications

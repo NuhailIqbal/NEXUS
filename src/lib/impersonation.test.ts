@@ -44,7 +44,7 @@ describe("partner impersonation", () => {
     expect(localStorage.getItem("nexus_token")).toBe("PARTNER");
     expect(localStorage.getItem("nexus_partner_return_token")).toBeNull();
     expect(isImpersonating()).toBe(false);
-    expect(navigatedTo).toBe("/dashboard/partner");
+    expect(navigatedTo).toBe("/partner");
   });
 
   it("a second View as never parks an impersonation token as the partner's own", () => {

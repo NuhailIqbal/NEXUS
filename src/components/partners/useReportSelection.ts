@@ -1,5 +1,5 @@
 /**
- * What the two admin/partner period reports (CommissionReport, FinancialSummary) share: the period the user picked and the
+ * What the partner report screens (CommissionReport, FinancialSummary, the partner's user list) share: the period the user picked and the
  * server request it turns into (useReportSelection), and loading that request with the usual guard against a slow
  * answer to an older selection overwriting a newer one (useReportData).
  */
@@ -22,7 +22,7 @@ export function useReportSelection(initial: ReportPreset, admin = false) {
 
 /** Loads `load(query)` whenever the query changes (nothing while it is null). Keeps the last report on screen while the
  *  next one loads; a failure shows its message. */
-export function useReportData<T>(query: ReportQuery | null, load: (q: ReportQuery) => Promise<{ data?: T | null; error?: unknown }>) {
+export function useReportData<T, Q = ReportQuery>(query: Q | null, load: (q: Q) => Promise<{ data?: T | null; error?: unknown }>) {
   const [report, setReport] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

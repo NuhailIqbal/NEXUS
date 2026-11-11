@@ -23,6 +23,7 @@ import SupportChatBubble from "@/components/SupportChatBubble";
 import Logo from "@/components/Logo";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
 import GlobalSearch from "@/components/dashboard/GlobalSearch";
+import { PARTNER_HOME } from "@/lib/partnerPortal";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -104,8 +105,9 @@ const NAV: NavItem[] = [
   { label: "Support", to: "/dashboard/support", icon: LifeBuoy },
 ];
 
-/** Extra entry shown only to accounts an admin has set up as referral partners (GET /partner/me), right after Referrals. */
-const PARTNER_NAV: NavItem = { label: "Partner Portal", to: "/dashboard/partner", icon: Handshake };
+/** Extra link shown only to accounts an admin has set up as referral partners (GET /partner/me), right after Referrals.
+ *  It leaves the customer dashboard for the partner's own console (its own layout and sign-in; see pages/partner). */
+const PARTNER_NAV: NavItem = { label: "Partner Portal", to: PARTNER_HOME, icon: Handshake };
 
 /**
  * Layout route component for /dashboard. Waits for AuthContext to resolve, then redirects to

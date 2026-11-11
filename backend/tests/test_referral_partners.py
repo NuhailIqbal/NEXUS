@@ -8,6 +8,7 @@ and may not see (no platform cost or profit, only their own accounts), partner i
 tagged token, refused while paused), the live activity feed and its scoping, and the admin auth gate. Payouts: the ledger of payments, paid vs still owed. Reports: commission by day/week/month/year
 and custom range (time zones, period boundaries, periods adding up to the lifetime totals, what a partner may see, CSV).
 Financials: the platform's summary (billed / cost / profit / commission earned, paid, owed / what it keeps) by period and partner.
+Partner users: the partner's own user management (search, filters, sorting, paging, CSV, one user's detail and activity, scoping).
 
 Run from the backend folder:  python -m unittest discover -s tests -p "test_referral_partners.py" -v
 """
@@ -946,6 +947,246 @@ class Financials(unittest.TestCase):
         self.assertTrue(mine[1].endswith(",6.00,2.00,4.00,0.80,0.40,0.40,0.80,3.20"), mine[1])
         self.assertTrue(mine[3].startswith("Total,") and mine[3].endswith(",14.00,4.00,10.00,2.00,1.40,0.00,0.60,8.00"), mine[3])
         self.assertTrue(lines[-1].startswith("Total,All partners,"))
+
+
+FORBIDDEN_KEYS = {"platform_cost", "profit", "net_profit", "cost", "provider_cost"}
+
+
+def keys_in(value):
+    """Every dict key anywhere inside a JSON value."""
+    if isinstance(value, dict):
+        return set(value) | set().union(*(keys_in(v) for v in value.values()), set())
+    if isinstance(value, list):
+        return set().union(*(keys_in(v) for v in value), set())
+    return set()
+
+
+class PartnerUsers(unittest.TestCase):
+    """The partner's user management: searchable, filterable, sortable, paged users, one user's detail and activity history."""
+
+    def setUp(self):
+        h.reset_rate_limits()
+        tag = self.tag = uuid.uuid4().hex[:8]                  # the tests share one database: every address is unique to this test
+        self.alice, self.bob, self.carol, self.xavier = (f"alice.users.{tag}@qa.test", f"bob.users.{tag}@qa.test",
+                                                         f"carol_users.{tag}@qa.test", f"xavier.other.{tag}@qa.test")
+        self.p, self.body = create_partner(name="Users Partner", commission_type="percent", commission_value=20)
+        self.hdr = login_headers(self.body["email"])
+        # u1: verified, 2 agents, 2 top-ups ($25.00 + $10.50), 2 calls (billed 9.00) and a demo call that must not count.
+        self.u1, t1 = register(self.p["code"], self.alice)
+        verify(t1)
+        stamp(self.u1, "2026-09-30 10:00+00", "2026-10-01 09:00+00")
+        h.sql("update profiles set full_name=%s where id=%s", ("Alice Anderson", self.u1))
+        for name, when in (("Sales Bot", "2026-10-02 10:00+00"), ("Support Bot", "2026-10-03 10:00+00")):
+            h.sql("insert into ai_agents (user_id, name, created_at) values (%s,%s,%s)", (self.u1, name, when))
+        for amount, when in ((25.00, "2026-10-04 10:00+00"), (10.50, "2026-10-06 10:00+00")):
+            h.sql("insert into wallet_transactions (user_id, kind, amount, created_at) values (%s,'topup',%s,%s)", (self.u1, amount, when))
+        timed_call(self.u1, 3.00, 1.00, "2026-10-05 10:00+00")
+        timed_call(self.u1, 6.00, 2.00, "2026-10-20 10:00+00")
+        timed_call(self.u1, 9.00, 0.00, "2026-10-21 10:00+00", contact="[SAMPLE] Demo")
+        # u2: pending (never verified), one small call.
+        self.u2, _ = register(self.p["code"], self.bob)
+        stamp(self.u2, "2026-10-10 12:00+00")
+        timed_call(self.u2, 0.50, 0.10, "2026-10-12 10:00+00")
+        # u3: verified, newest, no usage.
+        self.u3, t3 = register(self.p["code"], self.carol)
+        verify(t3)
+        stamp(self.u3, "2026-11-02 08:00+00", "2026-11-02 09:00+00")
+        # Another partner with a user, and an account nobody referred.
+        self.q, self.qbody = create_partner(name="Other Partner")
+        self.qhdr = login_headers(self.qbody["email"])
+        self.x, tx = register(self.q["code"], self.xavier)
+        verify(tx)
+        timed_call(self.x, 4.00, 1.00, "2026-10-08 10:00+00")
+        self.stranger = h.make_user()
+
+    def users(self, hdr=None, **q):
+        return client.get("/partner/users", params=q, headers=self.hdr if hdr is None else hdr)
+
+    def emails(self, r):
+        self.assertEqual(r.status_code, 200, r.text)
+        return [x["email"] for x in r.json()["data"]["items"]]
+
+    def test_a_partner_lists_only_their_own_users_newest_signup_first(self):
+        r = self.users()
+        self.assertEqual(self.emails(r), [self.carol, self.bob, self.alice])
+        d = r.json()["data"]
+        self.assertEqual((d["total"], d["page"], d["per_page"], d["pages"]), (3, 1, 25, 1))
+        self.assertNotIn(self.xavier, self.emails(r))
+        self.assertEqual(self.emails(self.users(hdr=self.qhdr)), [self.xavier])
+
+    def test_each_user_carries_their_activity_figures(self):
+        a = next(x for x in self.users().json()["data"]["items"] if x["user_id"] == self.u1)
+        self.assertEqual((a["email"], a["full_name"], a["status"]), (self.alice, "Alice Anderson", "verified"))
+        self.assertEqual((a["agents"], a["topups"], a["topup_total"]), (2, 2, 35.5))
+        self.assertEqual((a["calls"], a["minutes"], a["billed"]), (2, 2.0, 9.0))           # the [SAMPLE] call is not counted
+        self.assertTrue(a["created_at"].startswith("2026-09-30"))
+        self.assertTrue(a["verified_at"].startswith("2026-10-01"))
+        self.assertTrue(a["last_call"].startswith("2026-10-20"))
+        self.assertTrue(a["last_active"].startswith("2026-10-20"))                          # the latest of everything it did
+        c = next(x for x in self.users().json()["data"]["items"] if x["user_id"] == self.u3)
+        self.assertEqual((c["calls"], c["agents"], c["topups"], c["billed"], c["last_call"]), (0, 0, 0, 0.0, None))
+        self.assertTrue(c["last_active"].startswith("2026-11-02"))                          # no usage: when it verified
+
+    def test_no_platform_cost_or_profit_anywhere(self):
+        for r in (self.users(), self.client_get(f"/partner/users/{self.u1}"), self.client_get(f"/partner/users/{self.u1}/activity")):
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertFalse(keys_in(r.json()) & FORBIDDEN_KEYS, keys_in(r.json()))
+        text = self.users(format="csv").content.decode("utf-8-sig").lower()
+        for word in ("cost", "profit"):
+            self.assertNotIn(word, text)
+
+    def client_get(self, path, hdr=None, **q):
+        return client.get(path, params=q, headers=self.hdr if hdr is None else hdr)
+
+    def test_search_finds_by_email_or_name_and_treats_wildcards_as_plain_text(self):
+        self.assertEqual(self.emails(self.users(q="alice")), [self.alice])
+        self.assertEqual(self.emails(self.users(q="ANDERSON")), [self.alice])               # name, any case
+        self.assertEqual(sorted(self.emails(self.users(q=self.tag))), [self.alice, self.bob, self.carol])
+        self.assertEqual(self.emails(self.users(q="carol_")), [self.carol])
+        self.assertEqual(self.emails(self.users(q="_arol")), [])                                        # an underscore is not "any character" (it would match the c)
+        self.assertEqual(self.emails(self.users(q="a_ice")), [])
+        self.assertEqual(self.emails(self.users(q="%")), [])
+        self.assertEqual(self.emails(self.users(q="xavier")), [])                                       # someone else's user is never found
+        self.assertEqual(self.users(q="alice").json()["data"]["total"], 1)
+
+    def test_filter_by_status(self):
+        self.assertEqual(sorted(self.emails(self.users(status="pending"))), [self.bob])
+        self.assertEqual(sorted(self.emails(self.users(status="verified"))), [self.alice, self.carol])
+        self.assertEqual(self.users(status="banned").status_code, 400)
+
+    def test_filter_by_signup_dates_in_the_callers_time_zone(self):
+        self.assertEqual(self.emails(self.users(signed_from="2026-10-10", signed_to="2026-10-10", tz="UTC")), [self.bob])
+        self.assertEqual(self.emails(self.users(signed_from="2026-10-01", tz="UTC")), [self.carol, self.bob])
+        self.assertEqual(self.emails(self.users(signed_to="2026-10-09", tz="UTC")), [self.alice])
+        # Bob signed up 12:00 UTC on the 10th: that is already the 11th at 02:00 in Kiritimati (UTC+14).
+        self.assertEqual(self.emails(self.users(signed_from="2026-10-10", signed_to="2026-10-10", tz="Pacific/Kiritimati")), [])
+        self.assertEqual(self.emails(self.users(signed_from="2026-10-11", signed_to="2026-10-11", tz="Pacific/Kiritimati")), [self.bob])
+        self.assertEqual(self.users(signed_from="2026-10-11", signed_to="2026-10-01").status_code, 400)
+        self.assertEqual(self.users(tz="Mars/Olympus").status_code, 400)
+
+    def test_filters_combine(self):
+        self.assertEqual(self.emails(self.users(status="verified", q="users", signed_from="2026-10-01")), [self.carol])
+        self.assertEqual(self.emails(self.users(status="pending", q="alice")), [])
+
+    def test_sorting(self):
+        self.assertEqual(self.emails(self.users(sort="signup", order="asc")), [self.alice, self.bob, self.carol])
+        self.assertEqual(self.emails(self.users(sort="calls"))[:2], [self.alice, self.bob])
+        self.assertEqual(self.emails(self.users(sort="calls", order="asc"))[-1], self.alice)
+        self.assertEqual(self.emails(self.users(sort="billed")), [self.alice, self.bob, self.carol])
+        self.assertEqual(self.emails(self.users(sort="activity")), [self.carol, self.alice, self.bob])
+        self.assertEqual(self.emails(self.users(sort="activity", order="asc")), [self.bob, self.alice, self.carol])
+        for q in ({"sort": "cost"}, {"sort": "profit"}, {"order": "sideways"}):
+            r = self.users(**q)
+            self.assertEqual(r.status_code, 400, q)
+            self.assertIsInstance(r.json()["detail"], str)
+
+    def test_pages_cover_every_user_once_and_report_the_total(self):
+        seen = []
+        for page in (1, 2):
+            d = self.users(per_page=2, page=page).json()["data"]
+            self.assertEqual((d["total"], d["pages"], d["page"], d["per_page"]), (3, 2, page, 2))
+            seen += [x["email"] for x in d["items"]]
+        self.assertEqual(seen, self.emails(self.users()))
+        self.assertEqual(len(self.users(per_page=2, page=2).json()["data"]["items"]), 1)
+        past = self.users(per_page=2, page=3).json()["data"]
+        self.assertEqual((past["items"], past["total"], past["pages"]), ([], 3, 2))               # past the end: no rows, the real total
+        self.assertEqual(self.users(per_page=2, page=2, status="verified").json()["data"]["total"], 2)
+        for q in ({"page": 0}, {"per_page": 0}, {"per_page": 101}):
+            self.assertEqual(self.users(**q).status_code, 422, q)
+
+    def test_a_partner_with_no_users_gets_an_empty_list(self):
+        p, body = create_partner()
+        d = self.users(hdr=login_headers(body["email"])).json()["data"]
+        self.assertEqual((d["items"], d["total"], d["pages"]), ([], 0, 1))
+
+    def test_csv_export_is_the_filtered_list(self):
+        h.sql("update profiles set full_name=%s where id=%s", ("=cmd|' /C calc'!A0", self.u2))
+        r = self.users(format="csv", status="pending")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.headers["content-type"].startswith("text/csv"))
+        self.assertIn('filename="referred-users.csv"', r.headers["content-disposition"])
+        self.assertTrue(r.content.startswith(b"\xef\xbb\xbf"))
+        lines = r.content.decode("utf-8-sig").strip().split("\n")
+        self.assertEqual(lines[0], "Email,Name,Status,Signed up,Verified on,Agents created,Top-ups,Top-up total,Calls,Minutes,Billed,Last active")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[1].startswith(f"{self.bob},'=cmd"), lines[1])                  # escaped: never a bare formula
+        everyone = self.users(format="csv").content.decode("utf-8-sig").strip().split("\n")
+        self.assertEqual(len(everyone), 4)                                                           # header + all three, not just a page
+        alice = next(x for x in everyone if x.startswith("alice.users."))
+        self.assertIn(",2,2,35.50,2,2.0,9.00,", alice)
+        self.assertEqual(self.users(format="xml").status_code, 400)
+
+    def test_one_user_in_detail(self):
+        d = self.client_get(f"/partner/users/{self.u1}").json()["data"]
+        self.assertEqual((d["user_id"], d["email"], d["status"], d["agents"], d["topups"], d["calls"], d["billed"]),
+                         (self.u1, self.alice, "verified", 2, 2, 2, 9.0))
+
+    def test_a_partner_cannot_read_another_partners_user(self):
+        for path in (f"/partner/users/{self.x}", f"/partner/users/{self.x}/activity", f"/partner/users/{self.stranger}",
+                     f"/partner/users/{self.stranger}/activity", "/partner/users/not-a-uuid", "/partner/users/not-a-uuid/activity",
+                     f"/partner/users/{uuid.uuid4()}"):
+            r = self.client_get(path)
+            self.assertEqual(r.status_code, 404, f"{path}: {r.text}")
+        r = self.client_get(f"/partner/users/{self.u1}", hdr=self.qhdr)                              # and the reverse
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}/activity", hdr=self.qhdr).status_code, 404)
+
+    def test_only_partners_get_in(self):
+        self.assertIn(client.get("/partner/users").status_code, (401, 403))                            # no login at all
+        plain = auth(h.make_user())
+        for path in ("/partner/users", f"/partner/users/{self.u1}", f"/partner/users/{self.u1}/activity"):
+            self.assertEqual(client.get(path, headers=plain).status_code, 403, path)
+
+    def test_activity_history_newest_first_without_demo_calls(self):
+        d = self.client_get(f"/partner/users/{self.u1}/activity").json()["data"]
+        kinds = [x["kind"] for x in d["items"]]
+        self.assertEqual(d["total"], 8)
+        self.assertEqual(sorted(kinds), ["agent", "agent", "call", "call", "funds", "funds", "signup", "verified"])
+        self.assertEqual(kinds[0], "call")
+        ats = [x["at"] for x in d["items"]]
+        self.assertEqual(ats, sorted(ats, reverse=True))
+        details = {x["kind"]: x["detail"] for x in d["items"] if x["kind"] in ("call", "agent")}
+        self.assertEqual(details["call"], "Outbound call · Completed · 60s")                       # no phone number, no contact name
+        self.assertEqual(set(d["items"][0]), {"id", "kind", "at", "detail"})
+        self.assertEqual(len({x["id"] for x in d["items"]}), 8)
+
+    def test_activity_filters_by_kind_and_dates(self):
+        def act(**q):
+            r = self.client_get(f"/partner/users/{self.u1}/activity", **q)
+            self.assertEqual(r.status_code, 200, r.text)
+            return r.json()["data"]
+        self.assertEqual({x["kind"] for x in act(kind="call")["items"]}, {"call"})
+        self.assertEqual(act(kind="call")["total"], 2)
+        self.assertEqual(act(kind=["funds", "agent"])["total"], 4)
+        self.assertEqual([x["detail"] for x in act(kind="funds")["items"]], ["10.50", "25.00"])
+        self.assertEqual(act(start="2026-10-05", end="2026-10-20", tz="UTC")["total"], 3)           # call, top-up, call (5th..20th)
+        self.assertEqual(act(start="2026-10-21", tz="UTC")["total"], 0)                              # the demo call on the 21st is not there
+        self.assertEqual(act(end="2026-09-30", tz="UTC")["total"], 1)                                # the signup
+        self.assertEqual(act(kind="signup", start="2026-10-01", tz="UTC")["items"], [])
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}/activity", kind="teleport").status_code, 400)
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}/activity", start="2026-10-05", end="2026-10-01").status_code, 400)
+
+    def test_activity_is_paged(self):
+        first = self.client_get(f"/partner/users/{self.u1}/activity", per_page=3, page=1).json()["data"]
+        last = self.client_get(f"/partner/users/{self.u1}/activity", per_page=3, page=3).json()["data"]
+        self.assertEqual((first["total"], first["pages"], len(first["items"]), len(last["items"])), (8, 3, 3, 2))
+        every = [x["id"] for p in (1, 2, 3) for x in self.client_get(f"/partner/users/{self.u1}/activity", per_page=3, page=p).json()["data"]["items"]]
+        self.assertEqual(len(set(every)), 8)
+        past = self.client_get(f"/partner/users/{self.u1}/activity", per_page=3, page=4).json()["data"]
+        self.assertEqual((past["items"], past["total"]), ([], 8))
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}/activity", per_page=500).status_code, 422)
+
+    def test_a_paused_partner_still_sees_their_users_and_history_but_cannot_view_as(self):
+        r = client.patch(f"/admin/partners/{self.p['id']}", json={"status": "paused"}, headers=admin_headers())
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(len(self.emails(self.users())), 3)
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}").status_code, 200)
+        self.assertEqual(self.client_get(f"/partner/users/{self.u1}/activity").json()["data"]["total"], 8)
+        self.assertEqual(client.post(f"/partner/users/{self.u1}/impersonate", headers=self.hdr).status_code, 403)
+
+    def test_view_as_still_works_for_an_active_partner_and_only_for_their_user(self):
+        self.assertEqual(client.post(f"/partner/users/{self.u1}/impersonate", headers=self.hdr).status_code, 200)
+        self.assertEqual(client.post(f"/partner/users/{self.x}/impersonate", headers=self.hdr).status_code, 404)
 
 
 class Lifecycle(unittest.TestCase):

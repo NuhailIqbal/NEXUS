@@ -1,13 +1,13 @@
 /**
- * Referral partner portal (/dashboard/partner), for accounts an admin has set up as a referral partner
+ * Referral partner portal (/partner, with its own sign-in at /partner/login), for accounts an admin has set up as a referral partner
  * (GET /partner/overview answers 403 for everyone else, who are sent back to the dashboard). Shows the partner's
  * link and commission rule, how many people signed up through it and what they were billed, the commission earned
  * so far (and by week, month or year, with a CSV), what has been paid to them and what is still owed with the payment history (read-only), every referred
  * account with a "View as" button (the same impersonation flow admins have), and a live feed of what those users
- * do. The platform's own cost and profit, and the admin's private notes on a payment, are never sent to this page.
+ * do (My users, in the menu below Partner Portal, is the searchable version of that list with a page per user). The platform's own cost and profit, and the admin's private notes on a payment, are never sent to this page.
  */
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Banknote, Copy, DollarSign, Eye, Loader2, Percent, UserCheck, Users2, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -159,7 +159,10 @@ const Partner = () => {
       <CommissionReport />
 
       <div>
-        <h2 className="text-lg font-semibold text-foreground">Your signups</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-foreground">Your signups</h2>
+          <Link to="/partner/users" className="text-sm font-medium text-primary hover:underline">Search, filter and open each user in My users →</Link>
+        </div>
         {data.signups.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-border bg-card/40 py-14 text-center">
             <h3 className="font-semibold text-foreground">No signups yet</h3>

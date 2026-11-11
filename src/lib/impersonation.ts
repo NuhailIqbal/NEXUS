@@ -87,14 +87,14 @@ export function startPartnerImpersonation(token: string, email: string) {
 }
 
 /** End impersonation. An admin's session is dropped and the browser returns to the admin portal (whose own
- *  session was never disturbed). A partner's own token is restored and they land back on their Partner page. */
+ *  session was never disturbed). A partner's own token is restored and they land back on their partner console (/partner). */
 export function stopImpersonation() {
   const partnerToken = localStorage.getItem(PARTNER_RETURN_KEY);
   localStorage.removeItem(FLAG_KEY);
   localStorage.removeItem(PARTNER_RETURN_KEY);
   if (partnerToken) {
     localStorage.setItem(TOKEN_KEY, partnerToken);
-    window.location.href = "/dashboard/partner";
+    window.location.href = "/partner";
     return;
   }
   localStorage.removeItem(TOKEN_KEY);

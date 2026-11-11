@@ -6,7 +6,8 @@
  * Rendered by main.tsx.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { PARTNER_HOME, legacyPartnerPath } from "./lib/partnerPortal";
 import { ThemeProvider } from "next-themes";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
@@ -40,6 +41,10 @@ import Profile from "./pages/dashboard/Profile.tsx";
 import Support from "./pages/dashboard/Support.tsx";
 import Referrals from "./pages/dashboard/Referrals.tsx";
 import Partner from "./pages/dashboard/Partner.tsx";
+import PartnerUsers from "./pages/dashboard/PartnerUsers.tsx";
+import PartnerUserDetail from "./pages/dashboard/PartnerUserDetail.tsx";
+import PartnerLogin from "./pages/partner/PartnerLogin.tsx";
+import PartnerLayout from "./pages/partner/PartnerLayout.tsx";
 import Conversations from "./pages/dashboard/Conversations.tsx";
 import Integrations from "./pages/dashboard/Integrations.tsx";
 import Contacts from "./pages/dashboard/database/Contacts.tsx";
@@ -82,6 +87,12 @@ import { AutomationFlowEditor } from "./pages/dashboard/automation/FlowEditor.ts
  * through services/api.ts directly.
  */
 const queryClient = new QueryClient();
+
+/** The partner console used to live at /dashboard/partner...; old links and bookmarks land on its /partner... address. */
+const LegacyPartnerRedirect = () => {
+  const { pathname, search } = useLocation();
+  return <Navigate to={(legacyPartnerPath(pathname) ?? PARTNER_HOME) + search} replace />;
+};
 
 /**
  * Root component. ThemeProvider is outermost (dark by default, persisted under the
@@ -144,7 +155,8 @@ const App = () => {
                   <Route path="integrations" element={<Integrations />} />
                   <Route path="profile" element={<Profile />} />
                   <Route path="referrals" element={<Referrals />} />
-                  <Route path="partner" element={<Partner />} />
+                  {/* The partner console moved to /partner; the old addresses keep working. */}
+                  <Route path="partner/*" element={<LegacyPartnerRedirect />} />
                   <Route path="support" element={<Support />} />
                   <Route path="database/contacts" element={<Contacts />} />
                   <Route path="database/lists" element={<Lists />} />
@@ -184,6 +196,14 @@ const App = () => {
                     <Route path="promotions" element={<Promotions />} />
                   </Route>
 
+                </Route>
+
+                {/* Referral partners' own console: dedicated sign-in, then a layout of its own (not the customer dashboard). */}
+                <Route path="/partner/login" element={<PartnerLogin />} />
+                <Route path="/partner" element={<PartnerLayout />}>
+                  <Route index element={<Partner />} />
+                  <Route path="users" element={<PartnerUsers />} />
+                  <Route path="users/:userId" element={<PartnerUserDetail />} />
                 </Route>
 
                 <Route path="*" element={<NotFound />} />

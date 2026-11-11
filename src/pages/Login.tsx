@@ -193,6 +193,12 @@ const Login = () => {
                   Create Account
                 </Link>
               </p>
+              <p className="text-sm text-muted-foreground">
+                Referral partner?{" "}
+                <Link to="/partner/login" className="text-primary hover:underline font-medium">
+                  Partner sign in
+                </Link>
+              </p>
             </div>
           </div>
         </div>

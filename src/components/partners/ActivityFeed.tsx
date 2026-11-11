@@ -4,13 +4,10 @@
  * Re-polls every few seconds while the browser tab is visible; no websocket is involved.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Bot, CheckCircle2, DollarSign, Loader2, Phone, UserPlus } from "lucide-react";
+import { Activity, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { activityText, timeAgo, type ActivityItem, type ActivityKind } from "@/lib/partners";
-
-const ICONS: Record<ActivityKind, typeof Activity> = {
-  signup: UserPlus, verified: CheckCircle2, funds: DollarSign, agent: Bot, call: Phone,
-};
+import { activityText, timeAgo, type ActivityItem } from "@/lib/partners";
+import { ACTIVITY_ICONS } from "./activityIcons";
 
 type Props = {
   /** Fetches the newest items, newest first (api.getPartnerActivity / api.getAdminPartnerActivity). */
@@ -71,7 +68,7 @@ export default function ActivityFeed({ load, showPartner = false, intervalMs = 5
       ) : (
         <ul className="max-h-[28rem] divide-y divide-border overflow-y-auto">
           {items.map((i) => {
-            const Icon = ICONS[i.kind] ?? Activity;
+            const Icon = ACTIVITY_ICONS[i.kind] ?? Activity;
             return (
               <li key={i.id} className="flex items-start gap-3 px-4 py-3 text-sm">
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />

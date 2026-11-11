@@ -26,6 +26,10 @@ Partner (a normal user login linked to a partner row; everything is scoped to TH
   GET    /partner/report                their own commission report by period (same query as the admin one, no partner_id;
                                         signups, verified, calls, billed and their commission only; ?format=csv downloads it)
   GET    /partner/activity              live feed of their referred users
+  GET    /partner/users                 their referred users, searchable / filterable / sortable / paged (?q= &status= &signed_from=
+                                        &signed_to= &sort= &order= &page= &per_page= &tz= &format=csv); no platform cost or profit
+  GET    /partner/users/{id}            one referred user: signup, verified, agents, top-ups, calls, billed, last active (404 if not theirs)
+  GET    /partner/users/{id}/activity   that user's activity history, paged (?kind= repeated, &start= &end= &page= &per_page= &tz=)
   POST   /partner/users/{id}/impersonate   a 2h "view as" token for one of THEIR referred accounts (same flow as admins)
 
 Plain `def` endpoints (blocking SQL runs in FastAPI's threadpool); `create_partner` is async because it awaits the admin
@@ -38,13 +42,14 @@ import uuid
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from database import supabase
 from dependencies import get_admin_user, get_current_user
 from services import partner_financials as pf
 from services import partner_reports as pr
+from services import partner_users as pu
 from services import partners as ps
 
 logger = logging.getLogger(__name__)
@@ -243,7 +248,7 @@ def admin_financials(group: str = "month", start: Optional[date] = None, end: Op
         raise HTTPException(400, str(e))
     if format == "csv":
         filename = f"financial-summary-{group}-{first.isoformat()}_to_{last.isoformat()}.csv"
-        return Response(content="﻿" + pf.to_csv(summary), media_type="text/csv; charset=utf-8",
+        return Response(content="\ufeff" + pf.to_csv(summary), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     return _ok(pf.view(summary))
 
@@ -435,6 +440,50 @@ def partner_report(group: str = "week", start: Optional[date] = None, end: Optio
 def partner_activity(user=Depends(get_current_user)):
     p = _my_partner(user)
     return _ok(ps.activity_feed(str(p["id"])))
+
+
+def _users_call(fn, *args, **kw):
+    """Runs a partner_users query: a bad request is a 400 with its message, an account that is not theirs a 404."""
+    try:
+        return fn(*args, **kw)
+    except (pu.UserQueryError, pr.ReportError) as e:
+        raise HTTPException(400, str(e))
+    except pu.UserNotFound as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get("/users")
+def partner_users(q: Optional[str] = None, status: Optional[str] = None, signed_from: Optional[date] = None,
+                  signed_to: Optional[date] = None, sort: str = "signup", order: str = "desc", page: int = Query(1, ge=1),
+                  per_page: int = Query(pu.DEFAULT_PER_PAGE, ge=1, le=pu.MAX_PER_PAGE), tz: Optional[str] = None,
+                  format: str = "json", user=Depends(get_current_user)):
+    """The caller's referred users (never anyone else's), filtered, sorted and paged. format=csv downloads every match.
+    A paused partner still reads their users: a pause only turns off "View as"."""
+    if format not in ("json", "csv"):
+        raise HTTPException(400, "format must be json or csv.")
+    p = _my_partner(user)
+    filters = dict(q=q, status=status, signed_from=signed_from, signed_to=signed_to, sort=sort, order=order, tz=tz)
+    if format == "csv":
+        users = _users_call(pu.list_users, str(p["id"]), per_page=None, **filters)["items"]
+        return Response(content="\ufeff" + pu.to_csv(users), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="referred-users.csv"'})
+    return _ok(_users_call(pu.list_users, str(p["id"]), page=page, per_page=per_page, **filters))
+
+
+@router.get("/users/{user_id}")
+def partner_user(user_id: str, user=Depends(get_current_user)):
+    p = _my_partner(user)
+    return _ok(_users_call(pu.get_user, str(p["id"]), user_id))
+
+
+@router.get("/users/{user_id}/activity")
+def partner_user_activity(user_id: str, kind: Optional[list[str]] = Query(None), start: Optional[date] = None,
+                          end: Optional[date] = None, page: int = Query(1, ge=1),
+                          per_page: int = Query(pu.DEFAULT_PER_PAGE, ge=1, le=pu.MAX_PER_PAGE), tz: Optional[str] = None,
+                          user=Depends(get_current_user)):
+    p = _my_partner(user)
+    return _ok(_users_call(pu.user_activity, str(p["id"]), user_id, kinds=kind, start=start, end=end, page=page,
+                           per_page=per_page, tz=tz))
 
 
 @router.post("/users/{user_id}/impersonate")
