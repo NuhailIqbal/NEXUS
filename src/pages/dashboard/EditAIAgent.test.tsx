@@ -127,6 +127,44 @@ describe("Edit agent: saving keeps the language", () => {
   });
 });
 
+describe("Edit agent: call timeout", () => {
+  const field = () => screen.getByLabelText("Call timeout in minutes") as HTMLInputElement;
+
+  it("shows the stored timeout", async () => {
+    await open({ call_timeout_minutes: 30 });
+    expect(field().value).toBe("30");
+  });
+
+  it("shows the 10-minute default for an agent saved before the setting existed", async () => {
+    await open({ call_timeout_minutes: null });
+    expect(field().value).toBe("10");
+  });
+
+  it("saves a changed timeout", async () => {
+    await open({ call_timeout_minutes: 30 });
+    fireEvent.change(field(), { target: { value: "45" } });
+    expect(await save()).toMatchObject({ call_timeout_minutes: 45 });
+  });
+
+  it("saves an untouched timeout as it was", async () => {
+    await open({ call_timeout_minutes: 20 });
+    expect(await save()).toMatchObject({ call_timeout_minutes: 20 });
+  });
+
+  it("saves the default for an agent that had none", async () => {
+    await open({ call_timeout_minutes: null });
+    expect(await save()).toMatchObject({ call_timeout_minutes: 10 });
+  });
+
+  it("refuses to leave the Setup step with an out-of-range timeout", async () => {
+    await open({ call_timeout_minutes: 30 });
+    fireEvent.change(field(), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    expect(field()).toBeInTheDocument();
+    expect(api.updateAgent).not.toHaveBeenCalled();
+  });
+});
+
 describe("Edit agent: the existing languages save exactly what they did before", () => {
   it.each([
     ["English", "Elliot", "English", "Elliot"],

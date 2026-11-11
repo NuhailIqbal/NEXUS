@@ -255,6 +255,8 @@ class AgentCreate(BaseModel):
     selected_tool_keys: Optional[list[str]] = None
     # E.164 number (e.g. +15551234567) the agent can transfer calls to; blank means no transfer.
     transfer_number: Optional[str] = None
+    # Longest a call may last, in minutes (1-60, validated in the router); blank = the default, 10.
+    call_timeout_minutes: Optional[int] = None
     # Events the AI can raise mid-call, as library event ids (or the older label form).
     call_events: Optional[list[CallEventIn]] = None
 
@@ -315,6 +317,8 @@ class AgentUpdate(BaseModel):
     selected_tool_keys: Optional[list[str]] = None
     # E.164, validated in the router; an empty string removes the existing transfer tool.
     transfer_number: Optional[str] = None
+    # Longest a call may last, in minutes (1-60, validated in the router); pushed to the assistant.
+    call_timeout_minutes: Optional[int] = None
     # The agent's complete event list: it replaces the current one, and [] clears it.
     call_events: Optional[list[CallEventIn]] = None
 

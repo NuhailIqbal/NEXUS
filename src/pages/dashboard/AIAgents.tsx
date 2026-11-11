@@ -11,6 +11,7 @@ import EditAgentModal from "./EditAIAgent";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { toCallEventsPayload } from "@/components/agents/callEventTypes";
+import { phoneText, phoneTitle, type AgentPhone } from "@/lib/agentPhones";
 import { PageHeader } from "@/components/dashboard/PageHeader";
 import { SmartFilters, STATUS_DEFAULT, CATEGORY_DEFAULT, DATE_DEFAULT } from "@/components/dashboard/SmartFilters";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
@@ -39,6 +40,9 @@ type Agent = {
   system_prompt?: string | null;
   first_message?: string | null;
   transfer_number?: string | null;
+  call_timeout_minutes?: number | null;
+  /** The account's phone numbers connected to this agent (GET /agents adds them). */
+  phone_numbers?: AgentPhone[];
   user_id?: string | null;
 };
 
@@ -155,6 +159,8 @@ const AIAgents = () => {
       status: a.status,
       system_prompt: a.system_prompt,
       first_message: a.first_message,
+      // The copy keeps the original's call timeout (a missing one stays the default).
+      call_timeout_minutes: a.call_timeout_minutes ?? null,
     });
     setPendingDuplicate(null);
     if (error) return toast.error(error);
@@ -241,6 +247,10 @@ const AIAgents = () => {
               <dl className="mb-5 mt-5 space-y-1.5 text-sm">
                 <Row label="Voice" value={a.voice ?? " "} />
                 <Row label="Language" value={a.language ?? " "} />
+                <Row
+                  label="Phone" value={phoneText(a.phone_numbers)} title={phoneTitle(a.phone_numbers)}
+                  muted={!a.phone_numbers?.length}
+                />
                 <Row label="Created" value={new Date(a.created_at).toLocaleDateString()} />
               </dl>
 
@@ -338,11 +348,13 @@ const AIAgents = () => {
 };
 
 /** One label/value line inside an agent card's details list. */
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, title, muted }: { label: string; value: string; title?: string; muted?: boolean }) {
   return (
-    <div className="flex justify-between">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-medium text-foreground">{value}</dd>
+    <div className="flex justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className={muted ? "min-w-0 break-words text-right text-muted-foreground" : "min-w-0 break-words text-right font-medium text-foreground"} title={title || undefined}>
+        {value}
+      </dd>
     </div>
   );
 }

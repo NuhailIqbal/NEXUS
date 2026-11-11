@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn, isE164 } from "@/lib/utils";
 import { normalizeLanguage } from "@/lib/languages";
+import { DEFAULT_CALL_TIMEOUT_TEXT, callTimeoutError, callTimeoutMinutes, callTimeoutText } from "@/lib/callTimeout";
 import { api } from "@/services/api";
 import {
   STEPS,
@@ -38,12 +39,13 @@ type Agent = {
   main_goal: string | null;
   website: string | null;
   transfer_number: string | null;
+  call_timeout_minutes?: number | null;
   selected_tool_keys?: string[] | null;
 };
 
 /** Blank form shown until an agent has loaded; the load effect replaces it with the agent's values. */
 const EMPTY_FORM: FormState = {
-  agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "",
+  agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", callTimeout: DEFAULT_CALL_TIMEOUT_TEXT,
   industry: "", language: "English", voice: "Elliot",
   knowledgeText: "",
   systemPrompt: "", greeting: "",
@@ -112,6 +114,7 @@ export default function EditAgentModal({
         voice: a.voice ?? "Elliot",
         transferEnabled: !!a.transfer_number,
         transferNumber: a.transfer_number ?? "",
+        callTimeout: callTimeoutText(a.call_timeout_minutes),
         // Existing knowledge is not loaded: these start empty and only hold what the user adds now.
         knowledgeText: "",
         systemPrompt: a.system_prompt ?? "",
@@ -146,6 +149,8 @@ export default function EditAgentModal({
       if (!form.mainGoal.trim()) { toast.error("Main goal is required"); return false; }
       if (form.transferEnabled && !form.transferNumber.trim()) { toast.error("Enter a transfer number or turn off call transfer"); return false; }
       if (form.transferEnabled && !isE164(form.transferNumber)) { toast.error("Transfer number must be in international format, e.g. +15551234567"); return false; }
+      const timeoutProblem = callTimeoutError(form.callTimeout);
+      if (timeoutProblem) { toast.error(timeoutProblem); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
     // Knowledge is optional when editing — the agent's existing knowledge is already
@@ -193,6 +198,7 @@ export default function EditAgentModal({
       main_goal: form.mainGoal || null,
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
+      call_timeout_minutes: callTimeoutMinutes(form.callTimeout),
       call_events: toCallEventsPayload(form.callEvents),
       selected_tool_keys: form.toolKeys,
     });

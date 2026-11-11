@@ -212,7 +212,10 @@ CREATE TABLE IF NOT EXISTS public.ai_agents (
     website text,
     selected_tool_keys text[] DEFAULT '{}'::text[] NOT NULL,
     transfer_number text,
-    transfer_tool_id text
+    transfer_tool_id text,
+    -- Longest a call with this agent may last, in minutes (NULL = the platform default of 10).
+    -- Sent to the voice service as maxDurationSeconds (services/vapi_client.py).
+    call_timeout_minutes integer
 );
 
 

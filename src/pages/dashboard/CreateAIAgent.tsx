@@ -18,6 +18,9 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn, isE164 } from "@/lib/utils";
 import { ALL_VOICE_NAMES } from "@/lib/voices";
+import {
+  DEFAULT_CALL_TIMEOUT_MINUTES, DEFAULT_CALL_TIMEOUT_TEXT, MAX_CALL_TIMEOUT_MINUTES, MIN_CALL_TIMEOUT_MINUTES, callTimeoutError, callTimeoutMinutes,
+} from "@/lib/callTimeout";
 import { AGENT_LANGUAGES, greetingNote, greetingPlaceholder, voiceAfterLanguageChange, voiceLanguageNote } from "@/lib/languages";
 import { api } from "@/services/api";
 import { AgentCreatedSuccessModal } from "@/components/dashboard/AgentCreatedSuccessModal";
@@ -56,6 +59,7 @@ export type FormState = {
   voice: string;
   transferEnabled: boolean;
   transferNumber: string;
+  callTimeout: string; // longest a call may last, in minutes, as typed (see lib/callTimeout.ts)
   knowledgeText: string;
   systemPrompt: string;
   greeting: string;
@@ -85,7 +89,7 @@ const CreateAIAgent = () => {
     setup: false, knowledge: false, prompt: false, events: false, testing: false,
   });
   const [form, setForm] = useState<FormState>({
-    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", industry: "", language: "English", voice: "Elliot",
+    agentName: "", website: "", mainGoal: "", transferEnabled: false, transferNumber: "", callTimeout: DEFAULT_CALL_TIMEOUT_TEXT, industry: "", language: "English", voice: "Elliot",
     knowledgeText: "",
     systemPrompt: "", greeting: "",
     callEvents: [],
@@ -117,6 +121,8 @@ const CreateAIAgent = () => {
       // Same E.164 rule the backend applies, so a malformed number is caught here instead of
       // surfacing later as a voice-service error.
       if (form.transferEnabled && !isE164(form.transferNumber)) { toast.error("Transfer number must be in international format, e.g. +15551234567"); return false; }
+      const timeoutProblem = callTimeoutError(form.callTimeout);
+      if (timeoutProblem) { toast.error(timeoutProblem); return false; }
       if (!form.industry) { toast.error("Please select an industry"); return false; }
     }
     if (currentStep.key === "knowledge") {
@@ -159,6 +165,7 @@ const CreateAIAgent = () => {
       main_goal: form.mainGoal || null,
       website: form.website || null,
       transfer_number: form.transferEnabled ? (form.transferNumber.trim() || null) : null,
+      call_timeout_minutes: callTimeoutMinutes(form.callTimeout),
       knowledge_text: form.knowledgeText || null,
       call_events: toCallEventsPayload(form.callEvents),
       selected_tool_keys: form.toolKeys,
@@ -464,6 +471,20 @@ export function StepSetup({
             </Field>
           )}
         </div>
+        <Field label="Call timeout (minutes)" className="mt-4">
+          <input
+            type="number" inputMode="numeric" min={MIN_CALL_TIMEOUT_MINUTES} max={MAX_CALL_TIMEOUT_MINUTES} step={1}
+            value={form.callTimeout}
+            onChange={(e) => update("callTimeout", e.target.value)}
+            aria-label="Call timeout in minutes" aria-invalid={!!callTimeoutError(form.callTimeout)}
+            placeholder={String(DEFAULT_CALL_TIMEOUT_MINUTES)}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 sm:w-40"
+          />
+          <p className={cn("mt-1 text-xs", callTimeoutError(form.callTimeout) ? "text-destructive" : "text-muted-foreground")}>
+            {callTimeoutError(form.callTimeout)
+              ?? `The longest a call can last before the agent hangs up. ${MIN_CALL_TIMEOUT_MINUTES}–${MAX_CALL_TIMEOUT_MINUTES} minutes, ${DEFAULT_CALL_TIMEOUT_MINUTES} by default.`}
+          </p>
+        </Field>
         {onStatusChange && (
           <Field label="Status" className="mt-4">
             <Select value={statusValue ?? "Active"} onValueChange={onStatusChange}>

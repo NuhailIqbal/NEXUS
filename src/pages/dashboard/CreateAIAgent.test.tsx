@@ -36,7 +36,7 @@ window.HTMLElement.prototype.scrollTo = vi.fn();
 
 const BASE: FormState = {
   agentName: "", website: "", mainGoal: "", industry: "", language: "English", voice: "Elliot",
-  transferEnabled: false, transferNumber: "", knowledgeText: "", systemPrompt: "", greeting: "",
+  transferEnabled: false, transferNumber: "", callTimeout: "10", knowledgeText: "", systemPrompt: "", greeting: "",
   callEvents: [], toolKeys: [], testMessage: "",
 };
 
@@ -258,6 +258,53 @@ describe("Create agent page: what is saved", () => {
   it("a new English agent is saved exactly as before", async () => {
     const body = await createAgentWith("English", "Thanks for calling.", "Hi! How can I help you today?");
     expect(body).toMatchObject({ language: "English", voice: "Elliot", first_message: "Thanks for calling." });
+  });
+});
+
+describe("Setup step: call timeout", () => {
+  const field = () => screen.getByLabelText("Call timeout in minutes") as HTMLInputElement;
+
+  it("starts at the 10-minute default and shows the allowed range", () => {
+    render(<Harness step={StepSetup} />);
+    expect(field().value).toBe("10");
+    expect(screen.getByText(/1–60 minutes, 10 by default/)).toBeInTheDocument();
+  });
+
+  it("can be edited, and says so when the value is out of range", () => {
+    render(<Harness step={StepSetup} />);
+    fireEvent.change(field(), { target: { value: "25" } });
+    expect(field().value).toBe("25");
+    expect(field()).toHaveAttribute("aria-invalid", "false");
+    fireEvent.change(field(), { target: { value: "99" } });
+    expect(field()).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/between 1 and 60 minutes/)).toBeInTheDocument();
+  });
+
+  it("a new agent is created with the typed timeout, and with the default when it is left alone", async () => {
+    fn(api.createAgent).mockResolvedValue({ data: { id: "new-1" }, error: null });
+    fn(api.getCallEvents).mockResolvedValue({ data: [], error: null });
+    render(<MemoryRouter><CreateAIAgent /></MemoryRouter>);
+    fireEvent.change(screen.getByPlaceholderText("Enter your agent's name…"), { target: { value: "Sofia" } });
+    fireEvent.change(screen.getByPlaceholderText("Describe what you want your agent to accomplish…"), { target: { value: "Book visits" } });
+    fireEvent.click(screen.getByText("Select an industry…"));
+    fireEvent.click(await screen.findByRole("option", { name: /Healthcare/ }));
+    fireEvent.change(field(), { target: { value: "99" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    // Out of range: the wizard stays on the Setup step and tells the user.
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/between 1 and 60 minutes/));
+    expect(field()).toBeInTheDocument();
+    fireEvent.change(field(), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    fireEvent.change(await screen.findByPlaceholderText("Paste FAQs, product info, policies, scripts…"), { target: { value: "Open 9 to 5." } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    fireEvent.change(await screen.findByPlaceholderText("You are a friendly assistant who helps users with…"), { target: { value: "You are Sofia." } });
+    fireEvent.change(screen.getByPlaceholderText("Hi! How can I help you today?"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    await waitFor(() => expect(api.getCallEvents).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Agent" }));
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalledTimes(1));
+    expect(fn(api.createAgent).mock.calls[0][0]).toMatchObject({ call_timeout_minutes: 25 });
   });
 });
 

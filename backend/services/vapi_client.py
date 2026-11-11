@@ -587,9 +587,22 @@ def build_fallback_assistant_payload() -> dict:
     }
 
 
+# How long a call may last, in minutes: what an agent gets when none is chosen, and the range
+# the Agent page lets an account pick from. Sent to VAPI as maxDurationSeconds.
+DEFAULT_CALL_TIMEOUT_MINUTES = 10
+MIN_CALL_TIMEOUT_MINUTES = 1
+MAX_CALL_TIMEOUT_MINUTES = 60
+
+
+def max_duration_seconds(minutes: int | None) -> int:
+    """maxDurationSeconds for an agent's call timeout in minutes (None = the default)."""
+    return (minutes or DEFAULT_CALL_TIMEOUT_MINUTES) * 60
+
+
 def build_assistant_payload(name: str, voice: str = None, language: str = "en",
                              system_prompt: str = None, first_message: str = None,
-                             tool_ids: list[str] | None = None) -> dict:
+                             tool_ids: list[str] | None = None,
+                             call_timeout_minutes: int | None = None) -> dict:
     """Build the POST /assistant body for one NEXUS agent.
 
     Args:
@@ -600,6 +613,8 @@ def build_assistant_payload(name: str, voice: str = None, language: str = "en",
         system_prompt: the system message; defaults to a generic "You are {name}" prompt.
         first_message: what the assistant says first; the key is omitted when empty.
         tool_ids: VAPI tool ids to attach through model.toolIds.
+        call_timeout_minutes: the longest a call may last (None = DEFAULT_CALL_TIMEOUT_MINUTES);
+            always sent as maxDurationSeconds so a changed default never silently moves old agents.
 
     Always uses OpenAI gpt-4o-mini, a Deepgram transcriber, and call recording plus
     transcripts. Adds the webhook "server" block only when settings.public_api_url is set.
@@ -622,6 +637,7 @@ def build_assistant_payload(name: str, voice: str = None, language: str = "en",
         "transcriber": _resolve_transcriber(language),
         "model": model,
         "voice": _resolve_voice(voice, language),
+        "maxDurationSeconds": max_duration_seconds(call_timeout_minutes),
         # Record every call and keep the structured transcript so the dashboard can
         # play the recording and render a speaker-attributed transcript.
         "artifactPlan": {

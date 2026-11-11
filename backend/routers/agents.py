@@ -49,17 +49,50 @@ def _validate_transfer_number(number: str | None) -> None:
         )
 
 
+def _validate_call_timeout(minutes: int | None) -> None:
+    """The call timeout must be a whole number of minutes inside the range the Agent page offers.
+    None means "not sent / use the default" and is always valid."""
+    if minutes is None:
+        return
+    lo, hi = vapi_client.MIN_CALL_TIMEOUT_MINUTES, vapi_client.MAX_CALL_TIMEOUT_MINUTES
+    if not lo <= minutes <= hi:
+        raise HTTPException(status_code=400, detail=f"Call timeout must be between {lo} and {hi} minutes")
+
+
 @router.get("")
 async def list_agents(user=Depends(get_current_user)):
-    """List all agents of the caller's account, newest first. Team sub-users see their owner's agents."""
+    """List all agents of the caller's account, newest first. Team sub-users see their owner's agents.
+
+    Each agent also carries `phone_numbers`: the account's numbers that are connected to it
+    (phone_numbers.agent_id), as [{id, number, label}] in number order, empty when none, so the
+    Agents page can show them on the card.
+    """
+    owner_id = resolve_owner_id(user["user_id"])
     result = (
         supabase.table("ai_agents")
         .select("*")
-        .eq("user_id", resolve_owner_id(user["user_id"]))
+        .eq("user_id", owner_id)
         .order("created_at", desc=True)
         .execute()
     )
-    return {"data": result.data, "error": None}
+    agents = result.data or []
+    by_agent: dict[str, list[dict]] = {}
+    if agents:
+        numbers = (
+            supabase.table("phone_numbers")
+            .select("id, number, label, agent_id")
+            .eq("user_id", owner_id)
+            .order("number")
+            .execute()
+        ).data or []
+        for n in numbers:
+            if n.get("agent_id"):
+                by_agent.setdefault(str(n["agent_id"]), []).append(
+                    {"id": n["id"], "number": n["number"], "label": n.get("label")}
+                )
+    for a in agents:
+        a["phone_numbers"] = by_agent.get(str(a["id"]), [])
+    return {"data": agents, "error": None}
 
 
 @router.get("/tool-presets")
@@ -112,6 +145,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
     if block_reason:
         raise HTTPException(status_code=403, detail=block_reason)
     _validate_transfer_number(body.transfer_number)
+    _validate_call_timeout(body.call_timeout_minutes)
 
     composed_prompt = _compose_system_prompt(body.name, body.system_prompt, body.main_goal, body.knowledge_text)
 
@@ -131,6 +165,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
         "website": body.website,
         "selected_tool_keys": body.selected_tool_keys or [],
         "transfer_number": body.transfer_number,
+        "call_timeout_minutes": body.call_timeout_minutes,
     }
 
     # Resolved before any VAPI call so an unknown library event fails (with the
@@ -176,6 +211,7 @@ async def create_agent(body: AgentCreate, user=Depends(get_current_user)):
                 system_prompt=composed_prompt + (prompt_directive(events) if row.get("events_tool_id") else ""),
                 first_message=body.first_message,
                 tool_ids=tool_ids or None,
+                call_timeout_minutes=body.call_timeout_minutes,
             )
             vapi_agent = await vapi_client.create_assistant(payload)
             row["vapi_assistant_id"] = vapi_agent.get("id")
@@ -366,6 +402,7 @@ async def sync_agent_vapi(agent_id: str, user=Depends(get_current_user)):
             system_prompt=(agent.get("system_prompt") or "") + (prompt_directive(events) if events_tool_id else ""),
             first_message=agent.get("first_message"),
             tool_ids=tool_ids or None,
+            call_timeout_minutes=agent.get("call_timeout_minutes"),
         )
         vapi_agent = await vapi_client.create_assistant(payload)
         vapi_assistant_id = vapi_agent.get("id")
@@ -424,7 +461,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
     Only fields present in the body change (null/omitted fields are ignored; send "" or []
     to clear a value). An empty body returns data=null with error "No fields to update".
     When the agent has a VAPI assistant, the matching name, first message, prompt, tools,
-    voice, language and transcriber are patched there first; a VAPI failure returns 502 and
+    voice, language, transcriber and call timeout (maxDurationSeconds) are patched there first; a VAPI failure returns 502 and
     leaves the ai_agents row unchanged. call_events, if present, is the agent's complete
     event list and replaces the stored one. 404 if the agent is not in the caller's account.
     """
@@ -435,6 +472,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
         return {"data": None, "error": "No fields to update"}
     if "transfer_number" in updates:
         _validate_transfer_number(updates["transfer_number"])
+    _validate_call_timeout(updates.get("call_timeout_minutes"))
     # Call events arrive as the agent's full list; [] clears them.
     new_events = None
     if "call_events" in updates:
@@ -462,7 +500,7 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
     db_updates = {k: v for k, v in updates.items() if k in (
         "name", "voice", "language", "category", "status",
         "system_prompt", "first_message", "main_goal", "website", "selected_tool_keys",
-        "transfer_number",
+        "transfer_number", "call_timeout_minutes",
     )}
 
     # If system_prompt is explicitly provided, use it as-is — the UI shows and edits
@@ -602,6 +640,8 @@ async def update_agent(agent_id: str, body: AgentUpdate, user=Depends(get_curren
                 )
             if "language" in updates:
                 vapi_payload["transcriber"] = vapi_client._resolve_transcriber(updates["language"])
+            if "call_timeout_minutes" in updates:
+                vapi_payload["maxDurationSeconds"] = vapi_client.max_duration_seconds(updates["call_timeout_minutes"])
             # Skip the VAPI call when nothing VAPI-relevant changed (e.g. only category or status).
             if vapi_payload:
                 await vapi_client.update_assistant(agent["vapi_assistant_id"], vapi_payload)
